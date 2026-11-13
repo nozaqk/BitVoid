@@ -27,13 +27,15 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        SharedFileStore.refresh(applicationContext)
+        val initialFiles = SharedFileStore.refresh(applicationContext)
+        BitVoidMediaManager.initialize(applicationContext, initialFiles)
 
         setContent {
             BitVoidTheme {
                 val nodeState by BitVoidForegroundService.nodeState.collectAsStateWithLifecycle()
                 val clientState by clientManager.state.collectAsStateWithLifecycle()
-                val sharedFiles by SharedFileStore.files.collectAsStateWithLifecycle()
+                val mediaItems by BitVoidMediaManager.videos.collectAsStateWithLifecycle()
+                val rooms by BitVoidRoomManager.rooms.collectAsStateWithLifecycle()
                 var permissionRefresh by remember { mutableIntStateOf(0) }
                 var browserUrl by rememberSaveable { androidx.compose.runtime.mutableStateOf<String?>(null) }
 
@@ -59,7 +61,7 @@ class MainActivity : ComponentActivity() {
                             result.onSuccess { count ->
                                 Toast.makeText(
                                     this@MainActivity,
-                                    "$count file${if (count == 1) "" else "s"} added to the local portal",
+                                    "$count video${if (count == 1) "" else "s"} imported as Private",
                                     Toast.LENGTH_SHORT,
                                 ).show()
                                 if (BitVoidForegroundService.nodeState.value.isActive) {
@@ -106,14 +108,29 @@ class MainActivity : ComponentActivity() {
                     BitVoidDashboard(
                         nodeState = nodeState,
                         clientState = clientState,
-                        sharedFileCount = sharedFiles.size,
+                        mediaItems = mediaItems,
+                        rooms = rooms,
                         criticalPermissionsGranted = permissionsGranted,
                         onRequestPermissions = {
                             permissionLauncher.launch(permissions.toTypedArray())
                         },
                         onHostPowerChanged = ::setHostEnabled,
                         onPickFiles = {
-                            filePicker.launch(arrayOf("*/*"))
+                            filePicker.launch(arrayOf("video/*"))
+                        },
+                        onVideoVisibilityChanged = { id, isPublic ->
+                            BitVoidMediaManager.setVideoPublic(id, isPublic)
+                        },
+                        onCreateRoom = { roomId, passkey, videoIds ->
+                            val privateVideoIds = BitVoidMediaManager.videos.value
+                                .filterNot { it.isPublic }
+                                .mapTo(HashSet()) { it.id }
+                            val selectedPrivateVideos = videoIds.intersect(privateVideoIds)
+                            selectedPrivateVideos.isNotEmpty() && BitVoidRoomManager.createRoom(
+                                roomId,
+                                passkey,
+                                selectedPrivateVideos,
+                            )
                         },
                         onScan = clientManager::scan,
                         onConnect = clientManager::connect,
