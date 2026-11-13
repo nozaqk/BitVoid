@@ -1,6 +1,8 @@
 package com.bitvoid.network
 
 import android.annotation.SuppressLint
+import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.net.http.SslError
@@ -423,12 +425,12 @@ private fun HostDashboard(
     }
     Text(
         text = when (state.status) {
-            NodeStatus.RUNNING -> if (state.networkMode == NodeNetworkMode.SYSTEM_NETWORK) {
-                "Public server is bound to all system Wi-Fi and hotspot interfaces."
+            NodeStatus.RUNNING -> if (state.securityMode == HotspotSecurityMode.OPEN) {
+                "Open hotspot and local portal are accepting nearby peers with zero Wi-Fi authentication."
             } else {
-                "Local-only hotspot and public portal are accepting nearby peers."
+                "Public server is bound to system Wi-Fi interfaces. Confirm the system hotspot is configured Open."
             }
-            NodeStatus.STARTING -> "Negotiating local-only or system hotspot broadcast…"
+            NodeStatus.STARTING -> "Requesting BitVoid_Net as an open local-only hotspot…"
             NodeStatus.ERROR -> state.errorMessage ?: "The node could not start."
             NodeStatus.STOPPED -> "Starts a local broadcast with no cloud or internet dependency."
         },
@@ -445,13 +447,19 @@ private fun HostDashboard(
     Spacer(Modifier.height(12.dp))
     CredentialCard("LOCAL SSID", state.ssid, state.status == NodeStatus.RUNNING)
     Spacer(Modifier.height(8.dp))
-    CredentialCard(
-        if (state.networkMode == NodeNetworkMode.SYSTEM_NETWORK) "NETWORK ACCESS" else "WPA2 PASSPHRASE",
-        state.passphrase,
-        state.status == NodeStatus.RUNNING,
-    )
+    SecurityStatusCard(state)
+    if (state.securityMode != HotspotSecurityMode.OPEN) {
+        Spacer(Modifier.height(8.dp))
+        CredentialCard(
+            "NETWORK ACCESS",
+            state.passphrase,
+            state.status == NodeStatus.RUNNING,
+        )
+    }
     Spacer(Modifier.height(8.dp))
     CredentialCard("LOCAL PORTAL", state.portalUrl, state.serverOnline)
+    Spacer(Modifier.height(10.dp))
+    NetworkShareCard(state)
     state.networkNotice?.let { notice ->
         Spacer(Modifier.height(8.dp))
         Text(
@@ -788,6 +796,129 @@ private fun formatMediaSize(bytes: Long): String {
     } while (value >= 1_024 && unit < units.lastIndex)
     return String.format(Locale.US, "%.1f %s", value, units[unit])
 }
+
+@Composable
+private fun SecurityStatusCard(state: BitVoidNodeState) {
+    val (label, color) = when (state.securityMode) {
+        HotspotSecurityMode.OPEN -> "SECURITY: OPEN (NO PASSWORD REQUIRED)" to VoidGreen
+        HotspotSecurityMode.SECURED -> "SECURITY: SECURED (OPEN REQUEST REJECTED)" to VoidRed
+        HotspotSecurityMode.SYSTEM_MANAGED -> "SECURITY: SYSTEM MANAGED · VERIFY OPEN MODE" to VoidAmber
+        HotspotSecurityMode.UNKNOWN -> if (state.status == NodeStatus.STARTING) {
+            "SECURITY: REQUESTING OPEN NETWORK" to VoidMuted
+        } else {
+            "SECURITY: OPEN NETWORK NOT STARTED" to VoidMuted
+        }
+    }
+    Text(
+        text = label,
+        color = color,
+        fontFamily = FontFamily.Monospace,
+        fontWeight = FontWeight.Black,
+        fontSize = 13.sp,
+        letterSpacing = 0.7.sp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, color.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+            .background(color.copy(alpha = 0.08f), RoundedCornerShape(8.dp))
+            .padding(horizontal = 16.dp, vertical = 17.dp),
+    )
+}
+
+@Composable
+private fun NetworkShareCard(state: BitVoidNodeState) {
+    val context = LocalContext.current
+    val open = state.securityMode == HotspotSecurityMode.OPEN
+    Column(
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(
+                1.dp,
+                if (open) VoidGreen.copy(alpha = 0.55f) else VoidLine,
+                RoundedCornerShape(8.dp),
+            )
+            .background(if (open) VoidGreen.copy(alpha = 0.06f) else VoidPanel, RoundedCornerShape(8.dp))
+            .padding(16.dp),
+    ) {
+        Text(
+            if (open) "ZERO-AUTH JOIN" else "SHARE LOCAL PORTAL",
+            color = if (open) VoidGreen else VoidMuted,
+            style = MaterialTheme.typography.labelLarge,
+        )
+        Text(
+            if (open) {
+                "Share ${state.ssid} and the local portal. Friends join without a Wi-Fi password; Open Wi-Fi traffic is not link-encrypted."
+            } else {
+                "BitVoid cannot verify that a system-managed hotspot is open. Share the portal after configuring the system hotspot."
+            },
+            color = VoidMuted,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Button(
+            onClick = { shareNetworkDetails(context, state) },
+            enabled = state.status == NodeStatus.RUNNING,
+            shape = RoundedCornerShape(7.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = VoidGreen,
+                contentColor = Color(0xFF00291D),
+                disabledContainerColor = VoidGreenDark,
+                disabledContentColor = VoidMuted,
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp),
+        ) {
+            Text(
+                if (open) "SHARE OPEN SSID + PORTAL" else "SHARE PORTAL DETAILS",
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+    }
+}
+
+private fun shareNetworkDetails(context: Context, state: BitVoidNodeState) {
+    val wifiPayload = if (state.securityMode == HotspotSecurityMode.OPEN) {
+        "WIFI:T:nopass;S:${escapeWifiPayload(state.ssid)};H:false;;"
+    } else {
+        null
+    }
+    val text = buildString {
+        appendLine("Join BitVoid nearby")
+        appendLine("SSID: ${state.ssid}")
+        appendLine(
+            if (state.securityMode == HotspotSecurityMode.OPEN) {
+                "Security: Open — no password required"
+            } else {
+                "Security: Configure the system hotspot as Open"
+            },
+        )
+        appendLine("Portal: ${state.portalUrl}")
+        wifiPayload?.let {
+            appendLine()
+            append("Wi-Fi QR payload: $it")
+        }
+    }.trim()
+    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, "Join ${state.ssid}")
+        putExtra(Intent.EXTRA_TEXT, text)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    runCatching {
+        context.startActivity(
+            Intent.createChooser(shareIntent, "Share BitVoid network")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    }.onFailure {
+        Toast.makeText(context, "No compatible sharing app is available", Toast.LENGTH_SHORT).show()
+    }
+}
+
+private fun escapeWifiPayload(value: String): String = value
+    .replace("\\", "\\\\")
+    .replace(";", "\\;")
+    .replace(",", "\\,")
+    .replace(":", "\\:")
 
 @Composable
 private fun CredentialCard(label: String, value: String, available: Boolean) {

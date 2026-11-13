@@ -169,9 +169,17 @@ class BitVoidLocalServer(
     private val context: Context,
     bindAddress: String? = WILDCARD_ADDRESS,
     port: Int = DEFAULT_PORT,
+    initialPortalUrl: String = DEFAULT_PORTAL_URL,
 ) : NanoWSD(bindAddress, port) {
     private val random = SecureRandom()
     private val chatSockets = ConcurrentHashMap<String, MutableSet<RoomChatSocket>>()
+
+    @Volatile
+    private var portalUrl = initialPortalUrl.trimEnd('/')
+
+    fun updatePortalUrl(url: String) {
+        portalUrl = url.trimEnd('/')
+    }
 
     fun startServer() {
         val sharedFiles = SharedFileStore.refresh(context)
@@ -205,7 +213,7 @@ class BitVoidLocalServer(
                 session.method != Method.GET && session.method != Method.HEAD ->
                     textResponse(Response.Status.METHOD_NOT_ALLOWED, "Method not allowed")
 
-                session.uri in CAPTIVE_PORTAL_PATHS -> captivePortalRedirect()
+                isCaptivePortalProbe(session) -> captivePortalRedirect()
                 session.uri == "/" -> roomPortalResponse(session.method == Method.HEAD)
                 session.uri == "/public" -> publicPortalResponse(session.method == Method.HEAD)
                 session.uri == "/api/videos" -> apiVideosResponse(session.method == Method.HEAD)
@@ -225,14 +233,26 @@ class BitVoidLocalServer(
         return applyPrivacyHeaders(response)
     }
 
+    private fun isCaptivePortalProbe(session: IHTTPSession): Boolean {
+        if (session.uri in CAPTIVE_PORTAL_PATHS) return true
+        val host = session.headers["host"]
+            ?.substringBefore(':')
+            ?.lowercase(Locale.US)
+            ?: return false
+        return CAPTIVE_PORTAL_HOSTS.any { captiveHost ->
+            host == captiveHost || host.endsWith(".$captiveHost")
+        }
+    }
+
+    @Suppress("DEPRECATION")
     private fun captivePortalRedirect(): Response =
         newFixedLengthResponse(
-            Response.Status.REDIRECT,
+            Response.Status.FOUND,
             "text/html; charset=utf-8",
             "",
         ).apply {
-            // Relative redirection works even when a captive probe used an external Host header.
-            addHeader("Location", "/")
+            // Use an absolute local URL because probe clients preserve their external Host header.
+            addHeader("Location", "$portalUrl/")
             addHeader("X-BitVoid-Captive", "1")
         }
 
@@ -1029,6 +1049,7 @@ class BitVoidLocalServer(
     companion object {
         const val DEFAULT_PORT = 8080
         const val WILDCARD_ADDRESS = "0.0.0.0"
+        const val DEFAULT_PORTAL_URL = "http://192.168.43.1:8080"
         private const val ROOM_AUTH_PATH = "/api/rooms/auth"
         private const val WEBSOCKET_CHAT_PREFIX = "/ws/chat/"
         private const val WEBSOCKET_TOKEN_PROTOCOL_PREFIX = "bitvoid-token."
@@ -1038,6 +1059,7 @@ class BitVoidLocalServer(
         private const val PORTAL_BLOCK_BYTES = 4 * 1024
         private val CAPTIVE_PORTAL_PATHS = setOf(
             "/generate_204",
+            "/generate204",
             "/gen_204",
             "/hotspot-detect.html",
             "/library/test/success.html",
@@ -1045,7 +1067,22 @@ class BitVoidLocalServer(
             "/ncsi.txt",
             "/canonical.html",
             "/success.txt",
+            "/check_network_status.txt",
+            "/mobile/status.php",
+            "/kindle-wifi/wifistub.html",
+            "/fwlink",
             "/redirect",
+        )
+        private val CAPTIVE_PORTAL_HOSTS = setOf(
+            "captiveportal.recaptcha.net",
+            "connectivitycheck.android.com",
+            "connectivitycheck.gstatic.com",
+            "clients3.google.com",
+            "captive.apple.com",
+            "www.apple.com",
+            "www.msftconnecttest.com",
+            "www.msftncsi.com",
+            "dns.msftncsi.com",
         )
     }
 }
