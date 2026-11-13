@@ -38,6 +38,11 @@ enum class NodeStatus {
     ERROR,
 }
 
+enum class NodeNetworkMode {
+    LOCAL_ONLY_HOTSPOT,
+    SYSTEM_NETWORK,
+}
+
 data class BitVoidNodeState(
     val status: NodeStatus = NodeStatus.STOPPED,
     val ssid: String = "—",
@@ -46,6 +51,8 @@ data class BitVoidNodeState(
     val portalUrl: String = "http://$DEFAULT_GATEWAY_IP:${BitVoidLocalServer.DEFAULT_PORT}",
     val serverOnline: Boolean = false,
     val sharedFileCount: Int = 0,
+    val networkMode: NodeNetworkMode = NodeNetworkMode.LOCAL_ONLY_HOTSPOT,
+    val networkNotice: String? = null,
     val errorMessage: String? = null,
 ) {
     val isActive: Boolean get() = status == NodeStatus.STARTING || status == NodeStatus.RUNNING
@@ -56,8 +63,8 @@ data class BitVoidNodeState(
 }
 
 /**
- * Keeps the local-only hotspot reservation and HTTP server alive as one foreground
- * lifecycle. Closing either resource immediately removes access to the node.
+ * Keeps the hotspot reservation and wildcard HTTP server alive as one foreground
+ * lifecycle. If LocalOnlyHotspot is unavailable, serving continues on system Wi-Fi.
  */
 class BitVoidForegroundService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -65,7 +72,9 @@ class BitVoidForegroundService : Service() {
     private var hotspotReservation: WifiManager.LocalOnlyHotspotReservation? = null
     private var localServer: BitVoidLocalServer? = null
     private var startupJob: Job? = null
+    private var interfaceMonitorJob: Job? = null
     private var nodeRequested = false
+    private var hotspotRequestInFlight = false
     private var generation = 0L
     private var foregroundStarted = false
 
@@ -84,8 +93,9 @@ class BitVoidForegroundService : Service() {
             }
 
             ACTION_REFRESH_FILES -> {
-                val count = SharedFileStore.refresh(applicationContext).size
-                updateState { it.copy(sharedFileCount = count) }
+                val files = SharedFileStore.refresh(applicationContext)
+                val videos = BitVoidMediaManager.synchronize(applicationContext, files)
+                updateState { it.copy(sharedFileCount = videos.size) }
                 if (foregroundStarted) updateNotification()
             }
 
@@ -110,77 +120,100 @@ class BitVoidForegroundService : Service() {
     }
 
     private fun startNodeIfNeeded() {
-        if (hotspotReservation != null || nodeState.value.status == NodeStatus.STARTING) return
+        if (hotspotReservation != null || hotspotRequestInFlight || localServer != null ||
+            nodeState.value.status == NodeStatus.STARTING) {
+            return
+        }
 
         generation += 1
+        val currentGeneration = generation
+        val files = SharedFileStore.refresh(applicationContext)
+        val videos = BitVoidMediaManager.synchronize(applicationContext, files)
         updateState {
             BitVoidNodeState(
                 status = NodeStatus.STARTING,
-                sharedFileCount = SharedFileStore.refresh(applicationContext).size,
+                sharedFileCount = videos.size,
             )
         }
         updateNotification()
+        hotspotRequestInFlight = true
 
         try {
             wifiManager.startLocalOnlyHotspot(
                 object : WifiManager.LocalOnlyHotspotCallback() {
                     override fun onStarted(reservation: WifiManager.LocalOnlyHotspotReservation) {
-                        if (!nodeRequested) {
+                        hotspotRequestInFlight = false
+                        if (!nodeRequested || currentGeneration != generation) {
                             reservation.close()
                             return
                         }
                         hotspotReservation = reservation
                         val credentials = readHotspotCredentials(reservation)
-                        beginServerStartup(credentials.first, credentials.second, generation)
+                        beginServerStartup(
+                            ssid = credentials.first,
+                            passphrase = credentials.second,
+                            startupGeneration = currentGeneration,
+                            networkMode = NodeNetworkMode.LOCAL_ONLY_HOTSPOT,
+                            notice = null,
+                        )
                     }
 
                     override fun onStopped() {
+                        hotspotRequestInFlight = false
                         hotspotReservation = null
-                        stopServerOnly()
-                        if (nodeRequested) {
-                            nodeRequested = false
-                            updateState {
-                                it.copy(
-                                    status = NodeStatus.ERROR,
-                                    serverOnline = false,
-                                    errorMessage = "The system stopped the local-only hotspot.",
-                                )
-                            }
-                            updateNotification()
-                            if (foregroundStarted) {
-                                stopForeground(STOP_FOREGROUND_REMOVE)
-                                foregroundStarted = false
-                            }
-                            stopSelf()
+                        if (nodeRequested && currentGeneration == generation) {
+                            beginSystemNetworkStartup(
+                                startupGeneration = currentGeneration,
+                                notice = "Local-only hotspot ended; broadcasting on available system Wi-Fi interfaces.",
+                            )
                         }
                     }
 
                     override fun onFailed(reason: Int) {
+                        hotspotRequestInFlight = false
                         hotspotReservation = null
-                        nodeRequested = false
-                        updateState {
-                            it.copy(
-                                status = NodeStatus.ERROR,
-                                serverOnline = false,
-                                errorMessage = hotspotFailureMessage(reason),
+                        if (nodeRequested && currentGeneration == generation) {
+                            beginSystemNetworkStartup(
+                                startupGeneration = currentGeneration,
+                                notice = "${hotspotFailureMessage(reason)} Using the existing system network instead.",
                             )
                         }
-                        updateNotification()
-                        stopForeground(STOP_FOREGROUND_REMOVE)
-                        foregroundStarted = false
-                        stopSelf()
                     }
                 },
                 Handler(Looper.getMainLooper()),
             )
-        } catch (error: SecurityException) {
-            failStartup("Wi-Fi permission was denied. Grant Nearby devices and Location access.")
+        } catch (_: SecurityException) {
+            hotspotRequestInFlight = false
+            beginSystemNetworkStartup(
+                startupGeneration = currentGeneration,
+                notice = "Hotspot permission is unavailable; broadcasting on existing system Wi-Fi interfaces.",
+            )
         } catch (error: IllegalStateException) {
-            failStartup(error.message ?: "The Wi-Fi hotspot could not be started.")
+            hotspotRequestInFlight = false
+            beginSystemNetworkStartup(
+                startupGeneration = currentGeneration,
+                notice = "${error.message ?: "Local-only hotspot is unavailable."} Using the existing system network.",
+            )
         }
     }
 
-    private fun beginServerStartup(ssid: String, passphrase: String, startupGeneration: Long) {
+    private fun beginSystemNetworkStartup(startupGeneration: Long, notice: String) {
+        beginServerStartup(
+            ssid = "SYSTEM WI-FI / OPEN HOTSPOT",
+            passphrase = "OPEN / SYSTEM MANAGED",
+            startupGeneration = startupGeneration,
+            networkMode = NodeNetworkMode.SYSTEM_NETWORK,
+            notice = notice,
+        )
+    }
+
+    private fun beginServerStartup(
+        ssid: String,
+        passphrase: String,
+        startupGeneration: Long,
+        networkMode: NodeNetworkMode,
+        notice: String?,
+    ) {
         startupJob?.cancel()
         startupJob = serviceScope.launch {
             val gatewayIp = resolveHotspotAddress()
@@ -192,28 +225,35 @@ class BitVoidForegroundService : Service() {
                     passphrase = passphrase.ifBlank { "Open network" },
                     gatewayIp = gatewayIp,
                     portalUrl = "http://$gatewayIp:${BitVoidLocalServer.DEFAULT_PORT}",
+                    networkMode = networkMode,
+                    networkNotice = notice,
                 )
             }
 
             try {
-                val server = BitVoidLocalServer(
+                val existingServer = localServer
+                val server = existingServer ?: BitVoidLocalServer(
                     context = applicationContext,
-                    bindAddress = gatewayIp,
-                )
-                server.startServer()
+                    bindAddress = BitVoidLocalServer.WILDCARD_ADDRESS,
+                ).also { it.startServer() }
                 if (!nodeRequested || startupGeneration != generation) {
-                    server.stop()
+                    if (existingServer == null) server.stop()
                     return@launch
                 }
                 localServer = server
+                val files = SharedFileStore.refresh(applicationContext)
+                val videos = BitVoidMediaManager.synchronize(applicationContext, files)
                 updateState {
                     it.copy(
                         status = NodeStatus.RUNNING,
                         serverOnline = true,
-                        sharedFileCount = SharedFileStore.refresh(applicationContext).size,
+                        sharedFileCount = videos.size,
+                        networkMode = networkMode,
+                        networkNotice = notice,
                         errorMessage = null,
                     )
                 }
+                startInterfaceMonitor(startupGeneration)
                 updateNotification()
             } catch (error: Exception) {
                 failStartup(
@@ -227,18 +267,44 @@ class BitVoidForegroundService : Service() {
         }
     }
 
+    private fun startInterfaceMonitor(startupGeneration: Long) {
+        interfaceMonitorJob?.cancel()
+        interfaceMonitorJob = serviceScope.launch {
+            while (nodeRequested && startupGeneration == generation) {
+                findBestLocalAddress()?.let { address ->
+                    if (nodeState.value.gatewayIp != address) {
+                        updateState { current ->
+                            current.copy(
+                                gatewayIp = address,
+                                portalUrl = "http://$address:${BitVoidLocalServer.DEFAULT_PORT}",
+                            )
+                        }
+                        updateNotification()
+                    }
+                }
+                delay(INTERFACE_REFRESH_MS)
+            }
+        }
+    }
+
     private fun stopNode(updateStoppedState: Boolean) {
         generation += 1
+        hotspotRequestInFlight = false
         startupJob?.cancel()
         startupJob = null
+        interfaceMonitorJob?.cancel()
+        interfaceMonitorJob = null
         stopServerOnly()
+        BitVoidRoomManager.clearAll()
         val reservation = hotspotReservation
         hotspotReservation = null
         runCatching { reservation?.close() }
         if (updateStoppedState) {
+            val files = SharedFileStore.refresh(applicationContext)
+            val videos = BitVoidMediaManager.synchronize(applicationContext, files)
             _nodeState.value = BitVoidNodeState(
                 status = NodeStatus.STOPPED,
-                sharedFileCount = SharedFileStore.refresh(applicationContext).size,
+                sharedFileCount = videos.size,
             )
         }
     }
@@ -252,6 +318,9 @@ class BitVoidForegroundService : Service() {
 
     private fun failStartup(message: String) {
         nodeRequested = false
+        hotspotRequestInFlight = false
+        interfaceMonitorJob?.cancel()
+        interfaceMonitorJob = null
         stopServerOnly()
         val reservation = hotspotReservation
         hotspotReservation = null
@@ -420,6 +489,7 @@ class BitVoidForegroundService : Service() {
 
         private const val NOTIFICATION_CHANNEL_ID = "bitvoid_node"
         private const val NOTIFICATION_ID = 8080
+        private const val INTERFACE_REFRESH_MS = 2_000L
 
         private val _nodeState = MutableStateFlow(BitVoidNodeState())
         val nodeState: StateFlow<BitVoidNodeState> = _nodeState.asStateFlow()

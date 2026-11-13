@@ -41,6 +41,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.HorizontalDivider
@@ -49,6 +51,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Typography
@@ -78,6 +82,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import java.io.ByteArrayInputStream
 import java.io.FilterInputStream
 import java.io.InputStream
@@ -96,6 +102,18 @@ private val VoidMuted = Color(0xFF83919B)
 private val VoidLine = Color(0xFF26333D)
 private val VoidRed = Color(0xFFFF5D73)
 private val VoidAmber = Color(0xFFFFCC66)
+private val WEBRTC_BLOCK_SCRIPT =
+    """
+    (() => {
+      const disable = name => {
+        try { Object.defineProperty(globalThis, name, {value: undefined, configurable: false}); } catch (_) {}
+      };
+      disable('RTCPeerConnection');
+      disable('webkitRTCPeerConnection');
+      disable('RTCDataChannel');
+      try { Object.defineProperty(navigator, 'mediaDevices', {value: undefined, configurable: false}); } catch (_) {}
+    })();
+    """.trimIndent()
 
 @Composable
 fun BitVoidTheme(content: @Composable () -> Unit) {
@@ -154,11 +172,14 @@ private enum class DashboardMode { HOST, CLIENT }
 fun BitVoidDashboard(
     nodeState: BitVoidNodeState,
     clientState: BitVoidClientState,
-    sharedFileCount: Int,
+    mediaItems: List<BitVoidMediaItem>,
+    rooms: List<BitVoidRoom>,
     criticalPermissionsGranted: Boolean,
     onRequestPermissions: () -> Unit,
     onHostPowerChanged: (Boolean) -> Unit,
     onPickFiles: () -> Unit,
+    onVideoVisibilityChanged: (String, Boolean) -> Unit,
+    onCreateRoom: (String, String?, Set<String>) -> Boolean,
     onScan: () -> Unit,
     onConnect: (String, String) -> Unit,
     onDisconnect: () -> Unit,
@@ -196,9 +217,12 @@ fun BitVoidDashboard(
                 when (mode) {
                     DashboardMode.HOST -> HostDashboard(
                         state = nodeState,
-                        sharedFileCount = sharedFileCount,
+                        mediaItems = mediaItems,
+                        rooms = rooms,
                         onPowerChanged = onHostPowerChanged,
                         onPickFiles = onPickFiles,
+                        onVideoVisibilityChanged = onVideoVisibilityChanged,
+                        onCreateRoom = onCreateRoom,
                     )
 
                     DashboardMode.CLIENT -> ClientDashboard(
@@ -336,11 +360,20 @@ private fun PermissionCard(onRequestPermissions: () -> Unit) {
 @Composable
 private fun HostDashboard(
     state: BitVoidNodeState,
-    sharedFileCount: Int,
+    mediaItems: List<BitVoidMediaItem>,
+    rooms: List<BitVoidRoom>,
     onPowerChanged: (Boolean) -> Unit,
     onPickFiles: () -> Unit,
+    onVideoVisibilityChanged: (String, Boolean) -> Unit,
+    onCreateRoom: (String, String?, Set<String>) -> Boolean,
 ) {
     val active = state.isActive
+    val publicVideoCount = mediaItems.count { it.isPublic }
+    var showRoomCreator by rememberSaveable { mutableStateOf(false) }
+    var roomIdInput by rememberSaveable { mutableStateOf("") }
+    var roomPasskeyInput by rememberSaveable { mutableStateOf("") }
+    var selectedRoomVideos by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var roomCreatorMessage by remember { mutableStateOf<String?>(null) }
     val powerColor by animateColorAsState(
         targetValue = if (active) VoidGreen else VoidMuted,
         label = "powerColor",
@@ -390,10 +423,14 @@ private fun HostDashboard(
     }
     Text(
         text = when (state.status) {
-            NodeStatus.RUNNING -> "Isolated hotspot and portal are accepting local peers."
-            NodeStatus.STARTING -> "Negotiating a local-only Wi-Fi channel…"
+            NodeStatus.RUNNING -> if (state.networkMode == NodeNetworkMode.SYSTEM_NETWORK) {
+                "Public server is bound to all system Wi-Fi and hotspot interfaces."
+            } else {
+                "Local-only hotspot and public portal are accepting nearby peers."
+            }
+            NodeStatus.STARTING -> "Negotiating local-only or system hotspot broadcast…"
             NodeStatus.ERROR -> state.errorMessage ?: "The node could not start."
-            NodeStatus.STOPPED -> "Creates a private hotspot with no upstream internet route."
+            NodeStatus.STOPPED -> "Starts a local broadcast with no cloud or internet dependency."
         },
         color = if (state.status == NodeStatus.ERROR) VoidRed else VoidMuted,
         textAlign = TextAlign.Center,
@@ -408,42 +445,348 @@ private fun HostDashboard(
     Spacer(Modifier.height(12.dp))
     CredentialCard("LOCAL SSID", state.ssid, state.status == NodeStatus.RUNNING)
     Spacer(Modifier.height(8.dp))
-    CredentialCard("WPA2 PASSPHRASE", state.passphrase, state.status == NodeStatus.RUNNING)
+    CredentialCard(
+        if (state.networkMode == NodeNetworkMode.SYSTEM_NETWORK) "NETWORK ACCESS" else "WPA2 PASSPHRASE",
+        state.passphrase,
+        state.status == NodeStatus.RUNNING,
+    )
     Spacer(Modifier.height(8.dp))
     CredentialCard("LOCAL PORTAL", state.portalUrl, state.serverOnline)
+    state.networkNotice?.let { notice ->
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = notice,
+            color = VoidAmber,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, VoidAmber.copy(alpha = 0.35f), RoundedCornerShape(7.dp))
+                .background(VoidAmber.copy(alpha = 0.05f), RoundedCornerShape(7.dp))
+                .padding(12.dp),
+        )
+    }
 
     Spacer(Modifier.height(28.dp))
-    SectionLabel("03 / SHARED PAYLOADS")
+    SectionLabel("03 / PUBLIC BROADCAST")
     Spacer(Modifier.height(12.dp))
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, VoidLine, RoundedCornerShape(8.dp))
-            .background(VoidPanel, RoundedCornerShape(8.dp))
+            .border(1.dp, VoidGreen.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+            .background(VoidGreen.copy(alpha = 0.07f), RoundedCornerShape(8.dp))
             .padding(16.dp),
     ) {
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier
-                .size(52.dp)
-                .border(1.dp, VoidGreen.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
-                .background(VoidGreen.copy(alpha = 0.05f), RoundedCornerShape(6.dp)),
+                .size(58.dp)
+                .border(1.dp, VoidGreen, RoundedCornerShape(6.dp))
+                .background(VoidGreenDark, RoundedCornerShape(6.dp)),
         ) {
-            Text("$sharedFileCount", color = VoidGreen, fontWeight = FontWeight.Bold)
+            Text("$publicVideoCount", color = VoidGreen, fontWeight = FontWeight.Black, fontSize = 20.sp)
         }
         Spacer(Modifier.width(14.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text("BITVOID_SHARED", color = VoidText, style = MaterialTheme.typography.titleMedium)
+            Text("LIVE PUBLIC VIDEOS", color = VoidGreen, style = MaterialTheme.typography.titleMedium)
             Text(
-                "$sharedFileCount file${if (sharedFileCount == 1) "" else "s"} indexed by the local portal",
+                "$publicVideoCount of ${mediaItems.size} video${if (mediaItems.size == 1) "" else "s"} visible to connected viewers",
                 color = VoidMuted,
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
+        Box(
+            Modifier
+                .size(9.dp)
+                .background(if (publicVideoCount > 0 && state.serverOnline) VoidGreen else VoidMuted, CircleShape),
+        )
     }
     Spacer(Modifier.height(10.dp))
-    PrimaryActionButton(text = "+  ADD FILES OR MEDIA", onClick = onPickFiles)
+    PrimaryActionButton(text = "+  ADD VIDEOS", onClick = onPickFiles)
+    Spacer(Modifier.height(14.dp))
+    if (mediaItems.isEmpty()) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, VoidLine, RoundedCornerShape(8.dp))
+                .background(VoidPanel, RoundedCornerShape(8.dp))
+                .padding(28.dp),
+        ) {
+            Text(
+                "NO VIDEOS IMPORTED · NEW VIDEOS START PRIVATE",
+                color = VoidMuted,
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+    } else {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            mediaItems.forEach { item ->
+                VideoVisibilityRow(
+                    item = item,
+                    onVisibilityChanged = { isPublic ->
+                        onVideoVisibilityChanged(item.id, isPublic)
+                    },
+                )
+            }
+        }
+    }
+
+    Spacer(Modifier.height(30.dp))
+    SectionLabel("04 / PRIVATE ROOMS")
+    Spacer(Modifier.height(12.dp))
+    OutlinedButton(
+        onClick = {
+            showRoomCreator = !showRoomCreator
+            roomCreatorMessage = null
+        },
+        shape = RoundedCornerShape(7.dp),
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidGreen),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(
+            if (showRoomCreator) "CANCEL ROOM CREATION" else "+  CREATE PRIVATE ROOM",
+            style = MaterialTheme.typography.labelLarge,
+        )
+    }
+
+    if (showRoomCreator) {
+        Spacer(Modifier.height(10.dp))
+        Column(
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, VoidGreen.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+                .background(VoidPanel, RoundedCornerShape(8.dp))
+                .padding(14.dp),
+        ) {
+            TacticalTextField(
+                value = roomIdInput,
+                onValueChange = { roomIdInput = it; roomCreatorMessage = null },
+                label = "PRIVATE ROOM ID",
+                placeholder = "room-alpha",
+            )
+            TacticalTextField(
+                value = roomPasskeyInput,
+                onValueChange = { roomPasskeyInput = it; roomCreatorMessage = null },
+                label = "OPTIONAL PASSKEY",
+                placeholder = "Leave blank to use Room ID only",
+                isPassword = true,
+            )
+            Text(
+                "SELECT PRIVATE VIDEOS",
+                color = VoidMuted,
+                fontSize = 9.sp,
+                letterSpacing = 1.2.sp,
+            )
+            val privateVideos = mediaItems.filterNot { it.isPublic }
+            if (privateVideos.isEmpty()) {
+                Text(
+                    "Mark at least one imported video Private before creating a room.",
+                    color = VoidAmber,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            } else {
+                privateVideos.forEach { video ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, VoidLine, RoundedCornerShape(6.dp))
+                            .clickable {
+                                selectedRoomVideos = if (video.id in selectedRoomVideos) {
+                                    selectedRoomVideos - video.id
+                                } else {
+                                    selectedRoomVideos + video.id
+                                }
+                            }
+                            .padding(horizontal = 10.dp, vertical = 5.dp),
+                    ) {
+                        Checkbox(
+                            checked = video.id in selectedRoomVideos,
+                            onCheckedChange = { checked ->
+                                selectedRoomVideos = if (checked) {
+                                    selectedRoomVideos + video.id
+                                } else {
+                                    selectedRoomVideos - video.id
+                                }
+                            },
+                            colors = CheckboxDefaults.colors(
+                                checkedColor = VoidGreen,
+                                uncheckedColor = VoidMuted,
+                                checkmarkColor = VoidBackground,
+                            ),
+                        )
+                        Text(
+                            video.title,
+                            color = VoidText,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+            PrimaryActionButton(
+                text = "CREATE SECURE ROOM",
+                enabled = roomIdInput.isNotBlank() && selectedRoomVideos.isNotEmpty(),
+                onClick = {
+                    val created = onCreateRoom(
+                        roomIdInput.trim(),
+                        roomPasskeyInput.takeIf { it.isNotBlank() },
+                        selectedRoomVideos,
+                    )
+                    if (created) {
+                        roomCreatorMessage = "ROOM ${roomIdInput.trim()} CREATED"
+                        roomIdInput = ""
+                        roomPasskeyInput = ""
+                        selectedRoomVideos = emptySet()
+                        showRoomCreator = false
+                    } else {
+                        roomCreatorMessage = "Room ID must be 3–32 letters, numbers, _ or -, and must be unique."
+                    }
+                },
+            )
+        }
+    }
+
+    roomCreatorMessage?.let { message ->
+        Text(
+            message,
+            color = if (message.startsWith("ROOM ")) VoidGreen else VoidRed,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(top = 9.dp),
+        )
+    }
+
+    if (rooms.isEmpty()) {
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "NO ACTIVE PRIVATE ROOMS · ROOM DATA IS EPHEMERAL",
+            color = VoidMuted,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, VoidLine, RoundedCornerShape(8.dp))
+                .padding(18.dp),
+        )
+    } else {
+        Spacer(Modifier.height(10.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            rooms.forEach { room ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, VoidLine, RoundedCornerShape(8.dp))
+                        .background(VoidPanel, RoundedCornerShape(8.dp))
+                        .padding(14.dp),
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("ROOM ${room.roomId}", color = VoidText, style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "${room.videoIds.size} PRIVATE VIDEO${if (room.videoIds.size == 1) "" else "S"} · ${if (room.hasPasskey) "PASSKEY ON" else "ROOM ID ONLY"}",
+                            color = VoidMuted,
+                            fontSize = 9.sp,
+                        )
+                        Text(
+                            if (room.activeParticipantNames.isEmpty()) {
+                                "ACTIVE: NONE"
+                            } else {
+                                "ACTIVE: ${room.activeParticipantNames.joinToString(", ")}"
+                            },
+                            color = if (room.activeParticipants > 0) VoidGreen else VoidMuted,
+                            fontSize = 9.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            room.activeParticipants.toString(),
+                            color = if (room.activeParticipants > 0) VoidGreen else VoidMuted,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Black,
+                        )
+                        Text("IN CHAT", color = VoidMuted, fontSize = 8.sp, letterSpacing = 1.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VideoVisibilityRow(
+    item: BitVoidMediaItem,
+    onVisibilityChanged: (Boolean) -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(
+                1.dp,
+                if (item.isPublic) VoidGreen.copy(alpha = 0.5f) else VoidLine,
+                RoundedCornerShape(8.dp),
+            )
+            .background(
+                if (item.isPublic) VoidGreen.copy(alpha = 0.05f) else VoidPanel,
+                RoundedCornerShape(8.dp),
+            )
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = item.title,
+                color = VoidText,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(5.dp))
+            Text(
+                text = "${formatMediaSize(item.size)} · ${if (item.isPublic) "BROADCASTING NOW" else "HOST ONLY"}",
+                color = if (item.isPublic) VoidGreen else VoidMuted,
+                fontSize = 9.sp,
+                letterSpacing = 0.6.sp,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(horizontalAlignment = Alignment.End) {
+            Text(
+                text = if (item.isPublic) "PUBLIC" else "PRIVATE",
+                color = if (item.isPublic) VoidGreen else VoidAmber,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = 1.sp,
+            )
+            Switch(
+                checked = item.isPublic,
+                onCheckedChange = onVisibilityChanged,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = VoidBackground,
+                    checkedTrackColor = VoidGreen,
+                    uncheckedThumbColor = VoidMuted,
+                    uncheckedTrackColor = VoidPanelBright,
+                    uncheckedBorderColor = VoidLine,
+                ),
+            )
+        }
+    }
+}
+
+private fun formatMediaSize(bytes: Long): String {
+    if (bytes < 1_024) return "$bytes B"
+    val units = arrayOf("KB", "MB", "GB", "TB")
+    var value = bytes.toDouble()
+    var unit = -1
+    do {
+        value /= 1_024.0
+        unit += 1
+    } while (value >= 1_024 && unit < units.lastIndex)
+    return String.format(Locale.US, "%.1f %s", value, units[unit])
 }
 
 @Composable
@@ -636,7 +979,7 @@ private fun ClientDashboard(
     }
     Spacer(Modifier.height(12.dp))
     Text(
-        "JavaScript, WebRTC, cookies, persistent cache, external hosts, camera, microphone, and geolocation are blocked.",
+        "Local portal JavaScript is enabled for rooms and chat. WebRTC, cookies, persistent cache, external hosts, camera, microphone, and geolocation remain blocked.",
         color = VoidMuted,
         style = MaterialTheme.typography.bodyMedium,
     )
@@ -744,7 +1087,7 @@ fun SanitizedLocalBrowser(url: String, onClose: () -> Unit) {
             setBackgroundColor(android.graphics.Color.rgb(13, 17, 23))
             WebView.setWebContentsDebuggingEnabled(false)
             settings.apply {
-                javaScriptEnabled = false
+                javaScriptEnabled = true
                 javaScriptCanOpenWindowsAutomatically = false
                 setSupportMultipleWindows(false)
                 domStorageEnabled = false
@@ -761,6 +1104,13 @@ fun SanitizedLocalBrowser(url: String, onClose: () -> Unit) {
                 safeBrowsingEnabled = true
             }
             val localWebView = this
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                WebViewCompat.addDocumentStartJavaScript(
+                    localWebView,
+                    WEBRTC_BLOCK_SCRIPT,
+                    setOf("*"),
+                )
+            }
             CookieManager.getInstance().apply {
                 setAcceptCookie(false)
                 setAcceptThirdPartyCookies(localWebView, false)
@@ -885,11 +1235,17 @@ private class SanitizedWebViewClient : WebViewClient() {
     ): WebResourceResponse? {
         val requestValue = request ?: return blockedResponse()
         if (!isAllowedLocalPortalUri(requestValue.url)) return blockedResponse()
+        // WebResourceRequest does not expose a POST body. Let WebView send local
+        // room-authentication POSTs directly; cookies and device permissions remain disabled.
+        if (requestValue.method != "GET" && requestValue.method != "HEAD") return null
         return fetchSanitized(requestValue)
     }
 
     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
         view?.clearCache(false)
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            view?.evaluateJavascript(WEBRTC_BLOCK_SCRIPT, null)
+        }
         super.onPageStarted(view, url, favicon)
     }
 
@@ -905,11 +1261,17 @@ private class SanitizedWebViewClient : WebViewClient() {
                 useCaches = false
                 connectTimeout = 8_000
                 readTimeout = 30_000
-                requestMethod = request.method.takeIf { it == "GET" || it == "HEAD" } ?: "GET"
+                requestMethod = request.method
                 setRequestProperty("User-Agent", "BitVoid")
                 setRequestProperty("Accept", "*/*")
-                request.requestHeaders["Range"]?.let { setRequestProperty("Range", it) }
-                request.requestHeaders["range"]?.let { setRequestProperty("Range", it) }
+                request.requestHeaders.entries
+                    .firstOrNull { (name, _) -> name.equals("Range", ignoreCase = true) }
+                    ?.value
+                    ?.let { setRequestProperty("Range", it) }
+                request.requestHeaders.entries
+                    .firstOrNull { (name, _) -> name.equals("X-Room-Token", ignoreCase = true) }
+                    ?.value
+                    ?.let { setRequestProperty("X-Room-Token", it) }
                 setRequestProperty("Cache-Control", "no-store")
                 connect()
             }
