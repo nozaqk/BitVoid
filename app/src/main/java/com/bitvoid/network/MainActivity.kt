@@ -29,6 +29,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         val initialFiles = SharedFileStore.refresh(applicationContext)
         BitVoidMediaManager.initialize(applicationContext, initialFiles)
+        BitVoidNetworkConfig.initialize(applicationContext)
 
         setContent {
             BitVoidTheme {
@@ -36,6 +37,7 @@ class MainActivity : ComponentActivity() {
                 val clientState by clientManager.state.collectAsStateWithLifecycle()
                 val mediaItems by BitVoidMediaManager.videos.collectAsStateWithLifecycle()
                 val rooms by BitVoidRoomManager.rooms.collectAsStateWithLifecycle()
+                val networkConfig by BitVoidNetworkConfig.state.collectAsStateWithLifecycle()
                 var permissionRefresh by remember { mutableIntStateOf(0) }
                 var browserUrl by rememberSaveable { androidx.compose.runtime.mutableStateOf<String?>(null) }
 
@@ -110,11 +112,13 @@ class MainActivity : ComponentActivity() {
                         clientState = clientState,
                         mediaItems = mediaItems,
                         rooms = rooms,
+                        networkConfig = networkConfig,
                         criticalPermissionsGranted = permissionsGranted,
                         onRequestPermissions = {
                             permissionLauncher.launch(permissions.toTypedArray())
                         },
                         onHostPowerChanged = ::setHostEnabled,
+                        onSecurityModeChanged = BitVoidNetworkConfig::setSecurityMode,
                         onPickFiles = {
                             filePicker.launch(arrayOf("video/*"))
                         },

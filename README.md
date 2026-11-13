@@ -6,11 +6,13 @@ BitVoid is an offline-first Android local video node. A host phone creates an An
 
 - Kotlin, Jetpack Compose, Material 3, coroutines, minSdk 26, target/compile SDK 35
 - Persistent connected-device foreground service and low-importance notification
-- Open `BitVoid_Net` Local Only Hotspot request using `SoftApConfiguration.SECURITY_TYPE_OPEN` on configurable Android releases
-- No generated WPA fallback: unsupported/rejecting devices serve an already configured system hotspot instead
-- HTTP/WebSocket server bound to `0.0.0.0:8080` for LocalOnlyHotspot and system-managed hotspot interfaces
+- Persisted pre-launch selector for **Open Visible** or **WPA2 Visible** hosting; hidden SSIDs are never supported
+- WPA2 mode uses Android `startLocalOnlyHotspot()`, verifies the generated AP is visible, and displays its generated SSID/passphrase
+- Open mode waits for a user-enabled system hotspot configured with Security None/Open and Hidden Network Off
+- Active `ap0`/`wlan0`-style hotspot interface and private `.1` gateway detection
+- HTTP/WebSocket server bound to `0.0.0.0:8080` on LocalOnlyHotspot or system Open-hotspot interfaces
 - Dynamically resolved interface address, absolute captive-probe redirects, and portal URL
-- Prominent live security state plus one-tap sharing of the open SSID, portal, and standard Wi-Fi QR payload
+- Prominent live security state plus one-tap sharing of SSID, credentials when applicable, portal, and standard Wi-Fi QR payload
 - Thread-safe `StateFlow` media catalog with persisted Public/Private visibility
 - Every newly imported video defaults to **Private**
 - Host-side visibility switch for every video and a live public-broadcast count
@@ -39,6 +41,7 @@ app/src/main/java/com/bitvoid/network/
 ├── BitVoidForegroundService.kt
 ├── BitVoidLocalServer.kt
 ├── BitVoidMediaManager.kt
+├── BitVoidNetworkConfig.kt
 ├── BitVoidRoomManager.kt
 └── MainActivity.kt
 ```
@@ -61,10 +64,11 @@ The APK is produced at `app/build/outputs/apk/debug/app-debug.apk`.
 2. In **HOST NODE**, add videos. Chosen content is copied into app-scoped `BitVoid_Shared` storage and starts **Private**.
 3. For public broadcasting, switch intended videos to **Public**.
 4. For restricted sharing, select **Create Private Room**, choose a Room ID, optional passkey, and one or more Private videos.
-5. Press **POWER NODE**. On supported Android releases BitVoid requests `BitVoid_Net` with Open security and no passphrase. If the configurable API is unavailable or rejected, BitVoid does not create a password-protected fallback; enable an Open system hotspot and the server will use that interface.
-6. Confirm the Host card reads **SECURITY: OPEN (NO PASSWORD REQUIRED)**, then use **SHARE OPEN SSID + PORTAL** to send friends the SSID, portal URL, and Wi-Fi QR payload.
-7. Nearby viewers join the displayed network and open `http://<gateway>:8080`. Captive-probe requests that reach BitVoid are redirected to the portal. The first screen asks for a Private Room ID, optional passkey, and chat alias; the public broadcast remains at `/public`.
-8. Authenticated room members receive an in-memory token, can stream only videos assigned to that room, and can exchange real-time local chat messages. The host dashboard displays the live participant count.
+5. Before starting, choose **Open Network (Visible, No Password)** or **WPA2 Network (Visible, Password Protected)**. The selector locks while the Host engine is active.
+6. Press **START BITVOID HOST ENGINE**. WPA2 mode creates Android's visible Local Only Hotspot and displays its generated credentials. Open mode waits for a system hotspot; use **OPEN ANDROID HOTSPOT SETTINGS**, set the name to `BitVoid_Net`, Security to None/Open, and Hidden Network to Off, then return to BitVoid.
+7. Confirm the security card and use the join-share button to send friends the SSID, passphrase when applicable, portal URL, and Wi-Fi QR payload.
+8. Nearby viewers join the displayed network and open `http://<gateway>:8080`. Captive-probe requests that reach BitVoid are redirected to the portal. The first screen asks for a Private Room ID, optional passkey, and chat alias; the public broadcast remains at `/public`.
+9. Authenticated room members receive an in-memory token, can stream only videos assigned to that room, and can exchange real-time local chat messages. The host dashboard displays the live participant count.
 
 ## Room security model
 
@@ -77,7 +81,8 @@ The APK is produced at `app/build/outputs/apk/debug/app-debug.apk`.
 
 ## Platform notes
 
-- Android 16/API 36 exposes `startLocalOnlyHotspotWithConfiguration` publicly. Android 13–15 contains a permission-checked configurable overload that BitVoid invokes through an isolated compatibility bridge; an OEM may block it. Android 12 and earlier do not provide a third-party API for a custom Open Local Only Hotspot. BitVoid never falls back to a generated WPA network: on unsupported/rejecting devices, configure an Open system hotspot manually.
+- Android's public API can create a generated secured Local Only Hotspot, but normal third-party apps cannot reliably toggle or reconfigure the device-wide system hotspot as Open across OEMs. Open mode therefore launches Android hotspot settings and waits for a live AP interface rather than silently creating a different network.
+- Android does not always expose system-hotspot SSID/security metadata to third-party apps. BitVoid validates Open/visible settings when metadata is available; otherwise the Host banner requires the user to keep Security None/Open and Hidden Network Off.
 - BitVoid returns an absolute `302` portal redirect for common Android, Apple, Windows, Firefox, and Kindle probe paths and known probe Host headers. Those responses only work when the probe reaches BitVoid on port 8080. A normal app cannot replace hotspot DNS, transparently intercept connectivity-check domains on ports 80/443, install a trusted TLS certificate, or force every OEM captive-portal assistant to appear. The displayed/shareable portal URL remains the reliable fallback.
 - Local Only Hotspot availability is device- and policy-dependent. Some managed devices or vendor Wi-Fi implementations can reject the request.
 - Android may throttle Wi-Fi scans. BitVoid falls back to the most recent permitted scan results.
