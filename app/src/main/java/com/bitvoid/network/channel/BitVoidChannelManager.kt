@@ -167,7 +167,7 @@ object BitVoidChannelManager {
             rawPrivateKey?.trim()?.takeIf { it.isNotEmpty() }
         }
 
-        val internal = InternalChannel(
+        val storedChannel = InternalChannel(
             channelId = resolvedId,
             name = cleanName,
             isPublic = effectivePublic,
@@ -176,11 +176,11 @@ object BitVoidChannelManager {
             mediaIds = ConcurrentHashMap.newKeySet<String>().apply { addAll(mediaIds) },
             createdTimestamp = System.currentTimeMillis()
         )
-        channels[resolvedId] = internal
+        channels[resolvedId] = storedChannel
         chatHistory.putIfAbsent(resolvedId, CopyOnWriteArrayList())
         socketListeners.putIfAbsent(resolvedId, CopyOnWriteArrayList())
         publishChannelsSnapshot()
-        return Result.success(toPublicChannel(internal))
+        return Result.success(toPublicChannel(storedChannel))
     }
 
     fun setChannelVisibility(
@@ -189,16 +189,16 @@ object BitVoidChannelManager {
         rawPrivateKey: String? = null,
         isHidden: Boolean = false
     ): Result<BitVoidChannel> {
-        val internal = channels[channelId]
+        val storedChannel = channels[channelId]
             ?: return Result.failure(IllegalArgumentException("Channel '$channelId' not found."))
-        val wasPublic = internal.isPublic
+        val wasPublic = storedChannel.isPublic
         val effectivePublic = isPublic && !isHidden
-        internal.isPublic = effectivePublic
-        internal.isHidden = isHidden
-        internal.privateKey = if (effectivePublic) {
+        storedChannel.isPublic = effectivePublic
+        storedChannel.isHidden = isHidden
+        storedChannel.privateKey = if (effectivePublic) {
             null
         } else {
-            rawPrivateKey?.trim()?.takeIf { it.isNotEmpty() } ?: internal.privateKey
+            rawPrivateKey?.trim()?.takeIf { it.isNotEmpty() } ?: storedChannel.privateKey
         }
 
         if (wasPublic && !effectivePublic) {
@@ -210,7 +210,7 @@ object BitVoidChannelManager {
             channelId,
             if (effectivePublic) "Channel switched to PUBLIC broadcast." else "Channel locked to PRIVATE mode."
         )
-        return Result.success(toPublicChannel(internal))
+        return Result.success(toPublicChannel(storedChannel))
     }
 
     fun assignMediaToChannel(channelId: String, mediaIds: Set<String>) {
@@ -330,8 +330,8 @@ object BitVoidChannelManager {
     }
 
     fun getChannel(channelId: String): BitVoidChannel? {
-        val internal = channels[channelId] ?: return null
-        return toPublicChannel(internal)
+        val storedChannel = channels[channelId] ?: return null
+        return toPublicChannel(storedChannel)
     }
 
     fun getPublicChannels(): List<BitVoidChannel> {
@@ -589,20 +589,20 @@ object BitVoidChannelManager {
     }
 
     private fun toPublicChannel(
-        internal: InternalChannel,
+        storedChannel: InternalChannel,
         mediaCatalog: List<BitVoidMediaItem> = BitVoidMediaManager.mediaItems.value
     ): BitVoidChannel {
-        val assignedMedia = mediaCatalog.filter { it.id in internal.mediaIds }
+        val assignedMedia = mediaCatalog.filter { it.id in storedChannel.mediaIds }
         return BitVoidChannel(
-            channelId = internal.channelId,
-            name = internal.name,
-            isPublic = internal.isPublic,
-            isHidden = internal.isHidden,
-            privateKey = internal.privateKey,
+            channelId = storedChannel.channelId,
+            name = storedChannel.name,
+            isPublic = storedChannel.isPublic,
+            isHidden = storedChannel.isHidden,
+            privateKey = storedChannel.privateKey,
             mediaList = assignedMedia,
-            activeParticipants = getParticipants(internal.channelId),
-            messageCount = chatHistory[internal.channelId]?.size ?: 0,
-            createdTimestamp = internal.createdTimestamp
+            activeParticipants = getParticipants(storedChannel.channelId),
+            messageCount = chatHistory[storedChannel.channelId]?.size ?: 0,
+            createdTimestamp = storedChannel.createdTimestamp
         )
     }
 

@@ -527,7 +527,7 @@ private fun BitVoidHeaderBar(
                 Spacer(modifier = Modifier.width(12.dp))
                 Column {
                     Text(
-                        text = "BITVOID // v1.0",
+                        text = "BITVOID // v1.4",
                         style = MaterialTheme.typography.titleLarge,
                         color = VoidTextPrimary
                     )
@@ -546,6 +546,7 @@ private fun BitVoidHeaderBar(
 
             StatusChip(
                 label = when {
+                    hostState.needsOpenHotspotSetupBanner -> "OPEN SETUP REQUIRED"
                     hostStatus == HotspotStatus.ACTIVE -> "HOST LIVE (${hostState.publicCount} PUB)"
                     hostState.isOpenBroadcastMode && hostState.isServerRunning -> "OPEN BROADCAST (${hostState.publicCount} PUB)"
                     hostStatus == HotspotStatus.SERVER_ONLY || hostState.isServerRunning -> "VAULT LIVE (${hostState.publicCount} PUB)"
@@ -553,7 +554,11 @@ private fun BitVoidHeaderBar(
                     clientStatus == ClientConnectionStatus.CONNECTED -> "PEER LINKED"
                     else -> "AIR-GAPPED"
                 },
-                accentColor = if (isOnline) VoidMint else VoidTextSecondary
+                accentColor = when {
+                    hostState.needsOpenHotspotSetupBanner -> VoidAmber
+                    isOnline -> VoidMint
+                    else -> VoidTextSecondary
+                }
             )
         }
 
@@ -704,7 +709,8 @@ private fun CompactDashboardContent(
                                 hostState = hostState,
                                 onToggleHost = onToggleHost,
                                 onOpenProtocolDialog = onOpenProtocolDialog,
-                                onOpenQrDialog = onOpenQrDialog
+                                onOpenQrDialog = onOpenQrDialog,
+                                onOpenHotspotSettings = onOpenHotspotSettings
                             )
                         }
                     }
@@ -863,7 +869,8 @@ private fun WideDashboardContent(
                             hostState = hostState,
                             onToggleHost = onToggleHost,
                             onOpenProtocolDialog = onOpenProtocolDialog,
-                            onOpenQrDialog = onOpenQrDialog
+                            onOpenQrDialog = onOpenQrDialog,
+                            onOpenHotspotSettings = onOpenHotspotSettings
                         )
                     }
                 }
@@ -977,7 +984,8 @@ private fun HostPowerControlCard(
     hostState: HostState,
     onToggleHost: () -> Unit,
     onOpenProtocolDialog: () -> Unit,
-    onOpenQrDialog: () -> Unit
+    onOpenQrDialog: () -> Unit,
+    onOpenHotspotSettings: () -> Unit
 ) {
     val isActive = hostState.status == HotspotStatus.ACTIVE ||
         hostState.status == HotspotStatus.SERVER_ONLY
@@ -1183,6 +1191,8 @@ private fun HostPowerControlCard(
 
                 Text(
                     text = when {
+                        hostState.needsOpenHotspotSetupBanner ->
+                            "OPEN HOTSPOT SETUP REQUIRED"
                         hostState.status == HotspotStatus.ACTIVE && hostState.isOpenSecurity ->
                             "OPEN ENGINE & PORTAL LIVE"
                         hostState.status == HotspotStatus.ACTIVE ->
@@ -1196,10 +1206,14 @@ private fun HostPowerControlCard(
                         else -> "READY TO START BITVOID HOST ENGINE"
                     },
                     style = MaterialTheme.typography.titleMedium,
-                    color = when (hostState.status) {
-                        HotspotStatus.ACTIVE, HotspotStatus.SERVER_ONLY -> VoidMint
-                        HotspotStatus.ERROR -> VoidCrimson
-                        else -> VoidTextPrimary
+                    color = if (hostState.needsOpenHotspotSetupBanner) {
+                        VoidAmber
+                    } else {
+                        when (hostState.status) {
+                            HotspotStatus.ACTIVE, HotspotStatus.SERVER_ONLY -> VoidMint
+                            HotspotStatus.ERROR -> VoidCrimson
+                            else -> VoidTextPrimary
+                        }
                     }
                 )
 
@@ -1251,8 +1265,40 @@ private fun HostPowerControlCard(
                     Text(
                         text = err,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = VoidCrimson
+                        color = if (hostState.needsOpenHotspotSetupBanner) VoidAmber else VoidCrimson
                     )
+                }
+
+                if (hostState.needsOpenHotspotSetupBanner) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(VoidAmber.copy(alpha = 0.08f))
+                            .border(1.dp, VoidAmber.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            text = "Set Security to None/Open and keep Hidden Network off. Return to BitVoid; detection continues automatically.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = VoidTextPrimary
+                        )
+                        OutlinedButton(
+                            onClick = onOpenHotspotSettings,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidAmber)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Settings,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("OPEN ANDROID HOTSPOT SETTINGS")
+                        }
+                    }
                 }
             }
         }

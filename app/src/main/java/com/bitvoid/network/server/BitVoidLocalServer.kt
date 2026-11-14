@@ -35,9 +35,10 @@ import org.json.JSONObject
 class BitVoidLocalServer(
     private val context: Context,
     port: Int = DEFAULT_PORT
-) : NanoWSD(port) {
+) : NanoWSD(WILDCARD_ADDRESS, port) {
 
     companion object {
+        const val WILDCARD_ADDRESS = "0.0.0.0"
         const val DEFAULT_PORT = 8080
         private const val CONSTANT_BLOCK_SIZE = 4096
         private const val STREAM_CHUNK_SIZE = 65536
