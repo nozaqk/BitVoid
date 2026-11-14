@@ -73,6 +73,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -97,16 +98,17 @@ import java.net.URI
 import java.net.URL
 import java.util.Locale
 
-private val VoidBackground = Color(0xFF0D1117)
-private val VoidPanel = Color(0xFF111820)
-private val VoidPanelBright = Color(0xFF17212B)
-private val VoidGreen = Color(0xFF00FF9C)
-private val VoidGreenDark = Color(0xFF063E2C)
-private val VoidText = Color(0xFFE6EEE9)
-private val VoidMuted = Color(0xFF83919B)
-private val VoidLine = Color(0xFF26333D)
-private val VoidRed = Color(0xFFFF5D73)
-private val VoidAmber = Color(0xFFFFCC66)
+private val VoidBackground = Color(0xFF080D12)
+private val VoidPanel = Color(0xFF101820)
+private val VoidPanelBright = Color(0xFF16222C)
+private val VoidGreen = Color(0xFF3CE5A4)
+private val VoidGreenDark = Color(0xFF123A2E)
+private val VoidBlue = Color(0xFF75C7FF)
+private val VoidText = Color(0xFFF2F7F5)
+private val VoidMuted = Color(0xFF98A7B2)
+private val VoidLine = Color(0xFF283741)
+private val VoidRed = Color(0xFFFF7085)
+private val VoidAmber = Color(0xFFFFC76B)
 private val WEBRTC_BLOCK_SCRIPT =
     """
     (() => {
@@ -126,29 +128,38 @@ fun BitVoidTheme(content: @Composable () -> Unit) {
         colorScheme = bitVoidColorScheme(),
         typography = Typography(
             displayLarge = TextStyle(
-                fontFamily = FontFamily.Monospace,
+                fontFamily = FontFamily.SansSerif,
                 fontWeight = FontWeight.Black,
-                fontSize = 48.sp,
-                letterSpacing = (-2).sp,
+                fontSize = 46.sp,
+                letterSpacing = (-1.5).sp,
             ),
             headlineSmall = TextStyle(
-                fontFamily = FontFamily.Monospace,
+                fontFamily = FontFamily.SansSerif,
                 fontWeight = FontWeight.Bold,
-                fontSize = 20.sp,
+                fontSize = 21.sp,
+                lineHeight = 27.sp,
             ),
             titleMedium = TextStyle(
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold,
-                fontSize = 14.sp,
-                letterSpacing = 0.5.sp,
+                fontFamily = FontFamily.SansSerif,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 15.sp,
+                lineHeight = 21.sp,
             ),
-            bodyLarge = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 14.sp),
-            bodyMedium = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp),
+            bodyLarge = TextStyle(
+                fontFamily = FontFamily.SansSerif,
+                fontSize = 15.sp,
+                lineHeight = 22.sp,
+            ),
+            bodyMedium = TextStyle(
+                fontFamily = FontFamily.SansSerif,
+                fontSize = 13.sp,
+                lineHeight = 19.sp,
+            ),
             labelLarge = TextStyle(
-                fontFamily = FontFamily.Monospace,
+                fontFamily = FontFamily.SansSerif,
                 fontWeight = FontWeight.Bold,
-                fontSize = 12.sp,
-                letterSpacing = 0.7.sp,
+                fontSize = 13.sp,
+                letterSpacing = 0.2.sp,
             ),
         ),
         content = content,
@@ -157,10 +168,10 @@ fun BitVoidTheme(content: @Composable () -> Unit) {
 
 private fun bitVoidColorScheme(): ColorScheme = darkColorScheme(
     primary = VoidGreen,
-    onPrimary = Color(0xFF00291D),
+    onPrimary = Color(0xFF06251B),
     primaryContainer = VoidGreenDark,
     onPrimaryContainer = VoidGreen,
-    secondary = Color(0xFF81E6C1),
+    secondary = VoidBlue,
     background = VoidBackground,
     onBackground = VoidText,
     surface = VoidPanel,
@@ -205,8 +216,17 @@ fun BitVoidDashboard(
             Column(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .fillMaxWidth()
                     .widthIn(max = 760.dp)
+                    .fillMaxWidth()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                VoidGreen.copy(alpha = 0.055f),
+                                Color.Transparent,
+                                Color.Transparent,
+                            ),
+                        ),
+                    )
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 20.dp, vertical = 24.dp),
             ) {
@@ -245,7 +265,7 @@ fun BitVoidDashboard(
                 Spacer(Modifier.height(32.dp))
                 HorizontalDivider(color = VoidLine)
                 Text(
-                    text = "ZERO INTERNET  /  ZERO CLOUD  /  EPHEMERAL SESSIONS",
+                    text = "Private by design  •  Local by default  •  No cloud required",
                     color = VoidMuted,
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(top = 18.dp, bottom = 12.dp),
@@ -257,39 +277,59 @@ fun BitVoidDashboard(
 
 @Composable
 private fun DashboardHeader(status: NodeStatus) {
+    val statusColor = when (status) {
+        NodeStatus.RUNNING -> VoidGreen
+        NodeStatus.STARTING, NodeStatus.WAITING_FOR_HOTSPOT -> VoidAmber
+        NodeStatus.ERROR -> VoidRed
+        NodeStatus.STOPPED -> VoidMuted
+    }
+    val statusLabel = when (status) {
+        NodeStatus.RUNNING -> "Online"
+        NodeStatus.STARTING -> "Starting"
+        NodeStatus.WAITING_FOR_HOTSPOT -> "Setup needed"
+        NodeStatus.ERROR -> "Needs attention"
+        NodeStatus.STOPPED -> "Offline"
+    }
+
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(modifier = Modifier.weight(1f)) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(48.dp)
+                .background(VoidGreen, RoundedCornerShape(14.dp)),
+        ) {
             Text(
-                text = "BITVOID",
-                color = VoidText,
+                "BV",
+                color = Color(0xFF06251B),
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Black,
-                fontSize = 30.sp,
-                letterSpacing = (-1).sp,
-            )
-            Text(
-                text = "OFF-GRID LOCAL NETWORK",
-                color = VoidGreen,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 10.sp,
-                letterSpacing = 2.sp,
+                fontSize = 17.sp,
             )
         }
-        val statusColor = when (status) {
-            NodeStatus.RUNNING -> VoidGreen
-            NodeStatus.STARTING, NodeStatus.WAITING_FOR_HOTSPOT -> VoidAmber
-            NodeStatus.ERROR -> VoidRed
-            NodeStatus.STOPPED -> VoidMuted
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "BitVoid",
+                color = VoidText,
+                fontWeight = FontWeight.Black,
+                fontSize = 25.sp,
+                letterSpacing = (-0.6).sp,
+            )
+            Text(
+                text = "Private local sharing",
+                color = VoidMuted,
+                style = MaterialTheme.typography.bodyMedium,
+            )
         }
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
-                .border(1.dp, statusColor.copy(alpha = 0.45f), RoundedCornerShape(4.dp))
-                .background(statusColor.copy(alpha = 0.08f), RoundedCornerShape(4.dp))
-                .padding(horizontal = 10.dp, vertical = 7.dp),
+                .border(1.dp, statusColor.copy(alpha = 0.35f), RoundedCornerShape(50.dp))
+                .background(statusColor.copy(alpha = 0.09f), RoundedCornerShape(50.dp))
+                .padding(horizontal = 11.dp, vertical = 8.dp),
         ) {
             Box(
                 Modifier
@@ -299,11 +339,10 @@ private fun DashboardHeader(status: NodeStatus) {
             )
             Spacer(Modifier.width(7.dp))
             Text(
-                text = status.name,
+                text = statusLabel,
                 color = statusColor,
-                fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
-                fontSize = 10.sp,
+                fontSize = 11.sp,
             )
         }
     }
@@ -314,9 +353,9 @@ private fun ModeSwitcher(mode: DashboardMode, onModeChanged: (DashboardMode) -> 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, VoidLine, RoundedCornerShape(8.dp))
-            .background(VoidPanel, RoundedCornerShape(8.dp))
-            .padding(4.dp),
+            .border(1.dp, VoidLine, RoundedCornerShape(14.dp))
+            .background(VoidPanel, RoundedCornerShape(14.dp))
+            .padding(5.dp),
     ) {
         DashboardMode.entries.forEach { item ->
             val selected = mode == item
@@ -326,13 +365,13 @@ private fun ModeSwitcher(mode: DashboardMode, onModeChanged: (DashboardMode) -> 
                     .weight(1f)
                     .background(
                         if (selected) VoidGreenDark else Color.Transparent,
-                        RoundedCornerShape(5.dp),
+                        RoundedCornerShape(10.dp),
                     )
                     .clickable { onModeChanged(item) }
                     .padding(vertical = 13.dp),
             ) {
                 Text(
-                    text = if (item == DashboardMode.HOST) "HOST NODE" else "CLIENT NODE",
+                    text = if (item == DashboardMode.HOST) "Host & share" else "Join & watch",
                     color = if (selected) VoidGreen else VoidMuted,
                     style = MaterialTheme.typography.labelLarge,
                 )
@@ -347,12 +386,12 @@ private fun PermissionCard(onRequestPermissions: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, VoidAmber.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
-            .background(VoidAmber.copy(alpha = 0.06f), RoundedCornerShape(8.dp))
+            .border(1.dp, VoidAmber.copy(alpha = 0.42f), RoundedCornerShape(14.dp))
+            .background(VoidAmber.copy(alpha = 0.06f), RoundedCornerShape(14.dp))
             .padding(14.dp),
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text("PERMISSIONS REQUIRED", color = VoidAmber, style = MaterialTheme.typography.labelLarge)
+            Text("Permissions required", color = VoidAmber, style = MaterialTheme.typography.labelLarge)
             Spacer(Modifier.height(4.dp))
             Text(
                 "Nearby Wi-Fi and Location access let Android create and discover local nodes.",
@@ -361,7 +400,7 @@ private fun PermissionCard(onRequestPermissions: () -> Unit) {
             )
         }
         TextButton(onClick = onRequestPermissions) {
-            Text("GRANT", color = VoidAmber, style = MaterialTheme.typography.labelLarge)
+            Text("Grant", color = VoidAmber, style = MaterialTheme.typography.labelLarge)
         }
     }
 }
@@ -389,12 +428,13 @@ private fun HostDashboard(
         targetValue = when (state.status) {
             NodeStatus.RUNNING -> VoidGreen
             NodeStatus.STARTING, NodeStatus.WAITING_FOR_HOTSPOT -> VoidAmber
-            else -> VoidMuted
+            NodeStatus.ERROR -> VoidRed
+            NodeStatus.STOPPED -> VoidMuted
         },
         label = "powerColor",
     )
 
-    SectionLabel("00 / PRE-LAUNCH NETWORK SECURITY")
+    SectionLabel("00 / Network security")
     Spacer(Modifier.height(12.dp))
     NetworkSecuritySelector(
         selectedMode = networkConfig.securityMode,
@@ -403,90 +443,32 @@ private fun HostDashboard(
     )
     Spacer(Modifier.height(28.dp))
 
-    SectionLabel("01 / GATEWAY CONTROL")
+    SectionLabel("01 / Host engine")
     Spacer(Modifier.height(20.dp))
-    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxWidth()) {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .size(178.dp)
-                .border(1.dp, powerColor.copy(alpha = 0.45f), CircleShape)
-                .padding(12.dp)
-                .border(2.dp, powerColor, CircleShape)
-                .background(
-                    if (active) VoidGreen.copy(alpha = 0.09f) else VoidPanel,
-                    CircleShape,
-                )
-                .clickable(enabled = state.status != NodeStatus.STARTING) {
-                    onPowerChanged(!active)
-                },
-        ) {
-            if (state.status == NodeStatus.STARTING) {
-                CircularProgressIndicator(
-                    color = VoidGreen,
-                    strokeWidth = 2.dp,
-                    modifier = Modifier.size(48.dp),
-                )
-            } else {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = if (active) "■" else "○",
-                        color = powerColor,
-                        fontSize = 36.sp,
-                        fontFamily = FontFamily.Monospace,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = if (active) "STOP BITVOID HOST" else "START BITVOID HOST ENGINE",
-                        color = powerColor,
-                        textAlign = TextAlign.Center,
-                        maxLines = 2,
-                        style = MaterialTheme.typography.labelLarge,
-                    )
-                }
-            }
-        }
-    }
-    Text(
-        text = when (state.status) {
-            NodeStatus.RUNNING -> if (state.securityMode == HotspotSecurityMode.OPEN_VISIBLE) {
-                "Open system hotspot and local portal are accepting nearby peers with zero Wi-Fi authentication."
-            } else {
-                "Visible WPA2 Local Only Hotspot and local portal are accepting nearby peers."
-            }
-            NodeStatus.STARTING -> "Starting the selected visible network mode…"
-            NodeStatus.WAITING_FOR_HOTSPOT -> "Open mode is waiting for a visible system hotspot interface."
-            NodeStatus.ERROR -> state.errorMessage ?: "The node could not start."
-            NodeStatus.STOPPED -> "Starts a local broadcast with no cloud or internet dependency."
-        },
-        color = when (state.status) {
-            NodeStatus.ERROR -> VoidRed
-            NodeStatus.WAITING_FOR_HOTSPOT -> VoidAmber
-            else -> VoidMuted
-        },
-        textAlign = TextAlign.Center,
-        style = MaterialTheme.typography.bodyMedium,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 16.dp, start = 24.dp, end = 24.dp),
+    HostEngineCard(
+        state = state,
+        selectedMode = networkConfig.securityMode,
+        active = active,
+        accentColor = powerColor,
+        onPowerChanged = onPowerChanged,
     )
 
     Spacer(Modifier.height(32.dp))
-    SectionLabel("02 / LIVE CREDENTIALS")
+    SectionLabel("02 / Connection details")
     Spacer(Modifier.height(12.dp))
-    CredentialCard("LOCAL SSID", state.ssid, state.status == NodeStatus.RUNNING)
+    CredentialCard("Network name (SSID)", state.ssid, state.status == NodeStatus.RUNNING)
     Spacer(Modifier.height(8.dp))
     SecurityStatusCard(state)
     if (state.securityMode == HotspotSecurityMode.WPA2_VISIBLE) {
         Spacer(Modifier.height(8.dp))
         CredentialCard(
-            "NETWORK ACCESS",
+            "WPA2 passphrase",
             state.passphrase,
             state.status == NodeStatus.RUNNING,
         )
     }
     Spacer(Modifier.height(8.dp))
-    CredentialCard("LOCAL PORTAL", state.portalUrl, state.serverOnline)
+    CredentialCard("Local portal", state.portalUrl, state.serverOnline)
     Spacer(Modifier.height(10.dp))
     NetworkShareCard(state)
     if (state.status == NodeStatus.WAITING_FOR_HOTSPOT) {
@@ -508,28 +490,28 @@ private fun HostDashboard(
     }
 
     Spacer(Modifier.height(28.dp))
-    SectionLabel("03 / PUBLIC BROADCAST")
+    SectionLabel("03 / Public library")
     Spacer(Modifier.height(12.dp))
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, VoidGreen.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-            .background(VoidGreen.copy(alpha = 0.07f), RoundedCornerShape(8.dp))
+            .border(1.dp, VoidGreen.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
+            .background(VoidGreen.copy(alpha = 0.055f), RoundedCornerShape(16.dp))
             .padding(16.dp),
     ) {
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier
                 .size(58.dp)
-                .border(1.dp, VoidGreen, RoundedCornerShape(6.dp))
-                .background(VoidGreenDark, RoundedCornerShape(6.dp)),
+                .border(1.dp, VoidGreen.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+                .background(VoidGreenDark, RoundedCornerShape(14.dp)),
         ) {
             Text("$publicVideoCount", color = VoidGreen, fontWeight = FontWeight.Black, fontSize = 20.sp)
         }
         Spacer(Modifier.width(14.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text("LIVE PUBLIC VIDEOS", color = VoidGreen, style = MaterialTheme.typography.titleMedium)
+            Text("Public videos", color = VoidGreen, style = MaterialTheme.typography.titleMedium)
             Text(
                 "$publicVideoCount of ${mediaItems.size} video${if (mediaItems.size == 1) "" else "s"} visible to connected viewers",
                 color = VoidMuted,
@@ -543,7 +525,7 @@ private fun HostDashboard(
         )
     }
     Spacer(Modifier.height(10.dp))
-    PrimaryActionButton(text = "+  ADD VIDEOS", onClick = onPickFiles)
+    PrimaryActionButton(text = "Add videos", onClick = onPickFiles)
     Spacer(Modifier.height(14.dp))
     if (mediaItems.isEmpty()) {
         Box(
@@ -555,7 +537,7 @@ private fun HostDashboard(
                 .padding(28.dp),
         ) {
             Text(
-                "NO VIDEOS IMPORTED · NEW VIDEOS START PRIVATE",
+                "No videos yet. New imports are private by default.",
                 color = VoidMuted,
                 textAlign = TextAlign.Center,
                 style = MaterialTheme.typography.bodyMedium,
@@ -575,19 +557,19 @@ private fun HostDashboard(
     }
 
     Spacer(Modifier.height(30.dp))
-    SectionLabel("04 / PRIVATE ROOMS")
+    SectionLabel("04 / Private rooms")
     Spacer(Modifier.height(12.dp))
     OutlinedButton(
         onClick = {
             showRoomCreator = !showRoomCreator
             roomCreatorMessage = null
         },
-        shape = RoundedCornerShape(7.dp),
+        shape = RoundedCornerShape(12.dp),
         colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidGreen),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text(
-            if (showRoomCreator) "CANCEL ROOM CREATION" else "+  CREATE PRIVATE ROOM",
+            if (showRoomCreator) "Cancel" else "Create private room",
             style = MaterialTheme.typography.labelLarge,
         )
     }
@@ -605,18 +587,18 @@ private fun HostDashboard(
             TacticalTextField(
                 value = roomIdInput,
                 onValueChange = { roomIdInput = it; roomCreatorMessage = null },
-                label = "PRIVATE ROOM ID",
+                label = "Private room ID",
                 placeholder = "room-alpha",
             )
             TacticalTextField(
                 value = roomPasskeyInput,
                 onValueChange = { roomPasskeyInput = it; roomCreatorMessage = null },
-                label = "OPTIONAL PASSKEY",
+                label = "Optional passkey",
                 placeholder = "Leave blank to use Room ID only",
                 isPassword = true,
             )
             Text(
-                "SELECT PRIVATE VIDEOS",
+                "Select private videos",
                 color = VoidMuted,
                 fontSize = 9.sp,
                 letterSpacing = 1.2.sp,
@@ -670,7 +652,7 @@ private fun HostDashboard(
                 }
             }
             PrimaryActionButton(
-                text = "CREATE SECURE ROOM",
+                text = "Create secure room",
                 enabled = roomIdInput.isNotBlank() && selectedRoomVideos.isNotEmpty(),
                 onClick = {
                     val created = onCreateRoom(
@@ -704,7 +686,7 @@ private fun HostDashboard(
     if (rooms.isEmpty()) {
         Spacer(Modifier.height(10.dp))
         Text(
-            "NO ACTIVE PRIVATE ROOMS · ROOM DATA IS EPHEMERAL",
+            "No active private rooms. Room data is kept only for this session.",
             color = VoidMuted,
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier
@@ -754,6 +736,125 @@ private fun HostDashboard(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun HostEngineCard(
+    state: BitVoidNodeState,
+    selectedMode: HotspotSecurityMode,
+    active: Boolean,
+    accentColor: Color,
+    onPowerChanged: (Boolean) -> Unit,
+) {
+    val modeLabel = if (selectedMode == HotspotSecurityMode.OPEN_VISIBLE) {
+        "Open · no password"
+    } else {
+        "WPA2 · password protected"
+    }
+    val description = when (state.status) {
+        NodeStatus.RUNNING -> if (state.securityMode == HotspotSecurityMode.OPEN_VISIBLE) {
+            "Your Open network and local portal are ready for nearby guests."
+        } else {
+            "Your protected local network and portal are ready for nearby guests."
+        }
+        NodeStatus.STARTING -> "Android is preparing the selected network and local portal."
+        NodeStatus.WAITING_FOR_HOTSPOT ->
+            "Complete the hotspot setup below. Detection will continue automatically."
+        NodeStatus.ERROR -> state.errorMessage ?: "The host engine needs attention before it can start."
+        NodeStatus.STOPPED -> "Start an offline sharing session with no internet or cloud dependency."
+    }
+
+    Column(
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, accentColor.copy(alpha = 0.32f), RoundedCornerShape(18.dp))
+            .background(
+                Brush.linearGradient(
+                    colors = listOf(
+                        accentColor.copy(alpha = 0.11f),
+                        VoidPanel,
+                        VoidPanel,
+                    ),
+                ),
+                RoundedCornerShape(18.dp),
+            )
+            .padding(18.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(46.dp)
+                    .background(accentColor.copy(alpha = 0.14f), RoundedCornerShape(13.dp))
+                    .border(1.dp, accentColor.copy(alpha = 0.35f), RoundedCornerShape(13.dp)),
+            ) {
+                Box(
+                    Modifier
+                        .size(11.dp)
+                        .background(accentColor, CircleShape),
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Host engine", color = VoidText, style = MaterialTheme.typography.headlineSmall)
+                Text(modeLabel, color = VoidMuted, style = MaterialTheme.typography.bodyMedium)
+            }
+            Text(
+                when (state.status) {
+                    NodeStatus.RUNNING -> "LIVE"
+                    NodeStatus.STARTING -> "STARTING"
+                    NodeStatus.WAITING_FOR_HOTSPOT -> "SETUP"
+                    NodeStatus.ERROR -> "ERROR"
+                    NodeStatus.STOPPED -> "READY"
+                },
+                color = accentColor,
+                fontWeight = FontWeight.Bold,
+                fontSize = 10.sp,
+                letterSpacing = 0.8.sp,
+                modifier = Modifier
+                    .background(accentColor.copy(alpha = 0.1f), RoundedCornerShape(50.dp))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+            )
+        }
+        Text(
+            description,
+            color = if (state.status == NodeStatus.ERROR) VoidRed else VoidMuted,
+            style = MaterialTheme.typography.bodyLarge,
+        )
+        Button(
+            onClick = { onPowerChanged(!active) },
+            enabled = state.status != NodeStatus.STARTING,
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (active) VoidRed.copy(alpha = 0.16f) else VoidGreen,
+                contentColor = if (active) VoidRed else Color(0xFF06251B),
+                disabledContainerColor = VoidPanelBright,
+                disabledContentColor = VoidMuted,
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(54.dp),
+        ) {
+            if (state.status == NodeStatus.STARTING) {
+                CircularProgressIndicator(
+                    color = VoidMuted,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(17.dp),
+                )
+                Spacer(Modifier.width(9.dp))
+            }
+            Text(
+                when {
+                    state.status == NodeStatus.STARTING -> "Starting host engine…"
+                    active -> "Stop host engine"
+                    state.status == NodeStatus.ERROR -> "Try again"
+                    else -> "Start host engine"
+                },
+                style = MaterialTheme.typography.labelLarge,
+            )
         }
     }
 }
@@ -837,30 +938,38 @@ private fun NetworkSecuritySelector(
     onModeSelected: (HotspotSecurityMode) -> Boolean,
 ) {
     Column(
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, VoidLine, RoundedCornerShape(8.dp))
-            .background(VoidPanel, RoundedCornerShape(8.dp))
-            .padding(12.dp),
+            .border(1.dp, VoidLine, RoundedCornerShape(18.dp))
+            .background(VoidPanel, RoundedCornerShape(18.dp))
+            .padding(14.dp),
     ) {
+        Text("Choose how guests connect", color = VoidText, style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Both options broadcast a visible network. You can change this before the host starts.",
+            color = VoidMuted,
+            style = MaterialTheme.typography.bodyMedium,
+        )
         HotspotSecurityMode.entries.forEach { mode ->
             val selected = mode == selectedMode
+            val isOpen = mode == HotspotSecurityMode.OPEN_VISIBLE
+            val badgeColor = if (isOpen) VoidAmber else VoidBlue
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
                     .border(
                         1.dp,
-                        if (selected) VoidGreen.copy(alpha = 0.55f) else VoidLine,
-                        RoundedCornerShape(7.dp),
+                        if (selected) VoidGreen.copy(alpha = 0.62f) else VoidLine,
+                        RoundedCornerShape(14.dp),
                     )
                     .background(
-                        if (selected) VoidGreen.copy(alpha = 0.06f) else VoidPanelBright,
-                        RoundedCornerShape(7.dp),
+                        if (selected) VoidGreen.copy(alpha = 0.065f) else VoidPanelBright,
+                        RoundedCornerShape(14.dp),
                     )
                     .clickable(enabled = enabled) { onModeSelected(mode) }
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                    .padding(horizontal = 10.dp, vertical = 11.dp),
             ) {
                 RadioButton(
                     selected = selected,
@@ -869,41 +978,58 @@ private fun NetworkSecuritySelector(
                     colors = RadioButtonDefaults.colors(
                         selectedColor = VoidGreen,
                         unselectedColor = VoidMuted,
-                        disabledSelectedColor = VoidGreen.copy(alpha = 0.45f),
-                        disabledUnselectedColor = VoidMuted.copy(alpha = 0.45f),
+                        disabledSelectedColor = VoidGreen.copy(alpha = 0.5f),
+                        disabledUnselectedColor = VoidMuted.copy(alpha = 0.5f),
                     ),
                 )
                 Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (isOpen) "Open network" else "WPA2 network",
+                            color = if (selected) VoidText else VoidMuted,
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            if (isOpen) "NO PASSWORD" else "RECOMMENDED",
+                            color = badgeColor,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 9.sp,
+                            letterSpacing = 0.5.sp,
+                            modifier = Modifier
+                                .background(badgeColor.copy(alpha = 0.1f), RoundedCornerShape(50.dp))
+                                .padding(horizontal = 8.dp, vertical = 5.dp),
+                        )
+                    }
                     Text(
-                        if (mode == HotspotSecurityMode.OPEN_VISIBLE) {
-                            "OPEN NETWORK · VISIBLE · NO PASSWORD"
+                        if (isOpen) {
+                            "Fastest guest access. Configure Android hotspot security as None/Open."
                         } else {
-                            "WPA2 NETWORK · VISIBLE · PASSWORD PROTECTED"
-                        },
-                        color = if (selected) VoidGreen else VoidText,
-                        style = MaterialTheme.typography.labelLarge,
-                    )
-                    Text(
-                        if (mode == HotspotSecurityMode.OPEN_VISIBLE) {
-                            "Uses a system Open hotspot. Set Security to None/Open and Hidden Network to Off."
-                        } else {
-                            "Android creates a visible Local Only Hotspot and generates the SSID and WPA2 passphrase."
+                            "Android generates a protected network name and passphrase for you."
                         },
                         color = VoidMuted,
                         style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(top = 3.dp),
+                        modifier = Modifier.padding(top = 4.dp),
                     )
                 }
             }
         }
         if (!enabled) {
-            Text(
-                "NETWORK MODE LOCKED WHILE THE HOST ENGINE IS ACTIVE",
-                color = VoidAmber,
-                fontSize = 9.sp,
-                letterSpacing = 0.8.sp,
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(VoidAmber.copy(alpha = 0.07f), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 11.dp, vertical = 9.dp),
+            ) {
+                Box(Modifier.size(7.dp).background(VoidAmber, CircleShape))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Network selection is locked while the host engine is active.",
+                    color = VoidAmber,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
         }
     }
 }
@@ -912,28 +1038,32 @@ private fun NetworkSecuritySelector(
 private fun SecurityStatusCard(state: BitVoidNodeState) {
     val (label, color) = when {
         state.status == NodeStatus.WAITING_FOR_HOTSPOT ->
-            "SECURITY: OPEN HOTSPOT SETUP REQUIRED" to VoidAmber
+            "Open hotspot setup required" to VoidAmber
         state.securityMode == HotspotSecurityMode.OPEN_VISIBLE && state.status == NodeStatus.RUNNING ->
-            "SECURITY: OPEN (NO PASSWORD REQUIRED)" to VoidGreen
+            "Open network · No password required" to VoidGreen
         state.securityMode == HotspotSecurityMode.WPA2_VISIBLE && state.status == NodeStatus.RUNNING ->
-            "SECURITY: WPA2 (PASSWORD REQUIRED)" to VoidGreen
+            "WPA2 network · Password required" to VoidGreen
         state.status == NodeStatus.STARTING ->
-            "SECURITY: STARTING ${state.securityMode.name}" to VoidMuted
-        else -> "SECURITY: ${state.securityMode.name.replace('_', ' ')} SELECTED" to VoidMuted
+            "Preparing ${state.securityMode.name.replace('_', ' ').lowercase()}" to VoidMuted
+        else -> "${state.securityMode.name.replace('_', ' ').lowercase().replaceFirstChar { it.uppercase() }} selected" to VoidMuted
     }
-    Text(
-        text = label,
-        color = color,
-        fontFamily = FontFamily.Monospace,
-        fontWeight = FontWeight.Black,
-        fontSize = 13.sp,
-        letterSpacing = 0.7.sp,
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, color.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
-            .background(color.copy(alpha = 0.08f), RoundedCornerShape(8.dp))
-            .padding(horizontal = 16.dp, vertical = 17.dp),
-    )
+            .border(1.dp, color.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+            .background(color.copy(alpha = 0.07f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 15.dp, vertical = 14.dp),
+    ) {
+        Box(Modifier.size(8.dp).background(color, CircleShape))
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = label,
+            color = color,
+            fontWeight = FontWeight.SemiBold,
+            style = MaterialTheme.typography.bodyLarge,
+        )
+    }
 }
 
 @Composable
@@ -947,13 +1077,13 @@ private fun NetworkShareCard(state: BitVoidNodeState) {
             .border(
                 1.dp,
                 if (open) VoidGreen.copy(alpha = 0.55f) else VoidLine,
-                RoundedCornerShape(8.dp),
+                RoundedCornerShape(16.dp),
             )
-            .background(if (open) VoidGreen.copy(alpha = 0.06f) else VoidPanel, RoundedCornerShape(8.dp))
+            .background(if (open) VoidGreen.copy(alpha = 0.055f) else VoidPanel, RoundedCornerShape(16.dp))
             .padding(16.dp),
     ) {
         Text(
-            if (open) "ZERO-AUTH JOIN" else "WPA2 JOIN DETAILS",
+            if (open) "Share Open network" else "Share WPA2 access",
             color = if (state.status == NodeStatus.RUNNING) VoidGreen else VoidMuted,
             style = MaterialTheme.typography.labelLarge,
         )
@@ -969,10 +1099,10 @@ private fun NetworkShareCard(state: BitVoidNodeState) {
         Button(
             onClick = { shareNetworkDetails(context, state) },
             enabled = state.status == NodeStatus.RUNNING,
-            shape = RoundedCornerShape(7.dp),
+            shape = RoundedCornerShape(12.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = VoidGreen,
-                contentColor = Color(0xFF00291D),
+                contentColor = Color(0xFF06251B),
                 disabledContainerColor = VoidGreenDark,
                 disabledContentColor = VoidMuted,
             ),
@@ -981,7 +1111,7 @@ private fun NetworkShareCard(state: BitVoidNodeState) {
                 .height(52.dp),
         ) {
             Text(
-                if (open) "SHARE OPEN SSID + PORTAL" else "SHARE WPA2 JOIN DETAILS",
+                if (open) "Share network details" else "Share network & passphrase",
                 style = MaterialTheme.typography.labelLarge,
             )
         }
@@ -1038,11 +1168,11 @@ private fun OpenHotspotSetupCard() {
         verticalArrangement = Arrangement.spacedBy(9.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, VoidAmber.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
-            .background(VoidAmber.copy(alpha = 0.07f), RoundedCornerShape(8.dp))
+            .border(1.dp, VoidAmber.copy(alpha = 0.42f), RoundedCornerShape(16.dp))
+            .background(VoidAmber.copy(alpha = 0.07f), RoundedCornerShape(16.dp))
             .padding(16.dp),
     ) {
-        Text("SYSTEM OPEN HOTSPOT REQUIRED", color = VoidAmber, style = MaterialTheme.typography.labelLarge)
+        Text("Finish Open hotspot setup", color = VoidAmber, style = MaterialTheme.typography.titleMedium)
         Text(
             "In Android hotspot settings set Network name to ${BitVoidNetworkConfig.DEFAULT_SSID}, Security to None/Open, and Hidden Network to Off. Return to BitVoid; detection continues automatically.",
             color = VoidText,
@@ -1051,10 +1181,12 @@ private fun OpenHotspotSetupCard() {
         OutlinedButton(
             onClick = { openWirelessHotspotSettings(context) },
             colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidAmber),
-            shape = RoundedCornerShape(7.dp),
-            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(50.dp),
         ) {
-            Text("OPEN ANDROID HOTSPOT SETTINGS", style = MaterialTheme.typography.labelLarge)
+            Text("Open Android hotspot settings", style = MaterialTheme.typography.labelLarge)
         }
     }
 }
@@ -1082,8 +1214,8 @@ private fun CredentialCard(label: String, value: String, available: Boolean) {
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, if (available) VoidGreen.copy(alpha = 0.28f) else VoidLine, RoundedCornerShape(8.dp))
-            .background(VoidPanel, RoundedCornerShape(8.dp))
+            .border(1.dp, if (available) VoidGreen.copy(alpha = 0.25f) else VoidLine, RoundedCornerShape(12.dp))
+            .background(VoidPanel, RoundedCornerShape(12.dp))
             .clickable(enabled = available) {
                 clipboard.setText(AnnotatedString(value))
                 Toast.makeText(context, "$label copied", Toast.LENGTH_SHORT).show()
@@ -1091,7 +1223,7 @@ private fun CredentialCard(label: String, value: String, available: Boolean) {
             .padding(16.dp),
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(label, color = VoidMuted, fontSize = 9.sp, letterSpacing = 1.3.sp)
+            Text(label, color = VoidMuted, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
             Spacer(Modifier.height(5.dp))
             Text(
                 text = value,
@@ -1104,7 +1236,7 @@ private fun CredentialCard(label: String, value: String, available: Boolean) {
             )
         }
         if (available) {
-            Text("COPY", color = VoidGreen, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+            Text("Copy", color = VoidGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -1127,13 +1259,13 @@ private fun ClientDashboard(
         if (state.isConnected) portalUrl = state.portalUrl
     }
 
-    SectionLabel("01 / PEER DISCOVERY")
+    SectionLabel("01 / Nearby networks")
     Spacer(Modifier.height(12.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         OutlinedButton(
             onClick = onScan,
             enabled = !state.isScanning,
-            shape = RoundedCornerShape(7.dp),
+            shape = RoundedCornerShape(12.dp),
             colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidGreen),
             modifier = Modifier.weight(1f),
         ) {
@@ -1145,15 +1277,15 @@ private fun ClientDashboard(
                 )
                 Spacer(Modifier.width(8.dp))
             }
-            Text(if (state.isScanning) "SCANNING" else "SCAN NEARBY", style = MaterialTheme.typography.labelLarge)
+            Text(if (state.isScanning) "Scanning…" else "Scan nearby", style = MaterialTheme.typography.labelLarge)
         }
         if (state.isConnected) {
             OutlinedButton(
                 onClick = onDisconnect,
-                shape = RoundedCornerShape(7.dp),
+                shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidRed),
             ) {
-                Text("DISCONNECT", style = MaterialTheme.typography.labelLarge)
+                Text("Disconnect", style = MaterialTheme.typography.labelLarge)
             }
         }
     }
@@ -1201,37 +1333,37 @@ private fun ClientDashboard(
     }
 
     Spacer(Modifier.height(28.dp))
-    SectionLabel("02 / QUICK CONNECT")
+    SectionLabel("02 / Connect manually")
     Spacer(Modifier.height(12.dp))
     TacticalTextField(
         value = ssid,
         onValueChange = { ssid = it },
-        label = "HOST SSID",
-        placeholder = "AndroidShare_0000",
+        label = "Network name (SSID)",
+        placeholder = "BitVoid_Net",
     )
     Spacer(Modifier.height(9.dp))
     TacticalTextField(
         value = passphrase,
         onValueChange = { passphrase = it },
-        label = "WPA2 PASSPHRASE",
+        label = "Passphrase (leave blank for Open)",
         placeholder = "Enter host passphrase",
         isPassword = true,
     )
     Spacer(Modifier.height(11.dp))
     PrimaryActionButton(
-        text = if (state.isConnecting) "AWAITING ANDROID…" else if (state.isConnected) "CONNECTED TO ${state.connectedSsid}" else "CONNECT TO LOCAL NODE",
+        text = if (state.isConnecting) "AWAITING ANDROID…" else if (state.isConnected) "CONNECTED TO ${state.connectedSsid}" else "Connect to local node",
         enabled = !state.isConnecting && !state.isConnected,
         onClick = { onConnect(ssid, passphrase) },
         showProgress = state.isConnecting,
     )
 
     Spacer(Modifier.height(28.dp))
-    SectionLabel("03 / SANITIZED VIEWER")
+    SectionLabel("03 / Private viewer")
     Spacer(Modifier.height(12.dp))
     TacticalTextField(
         value = portalUrl,
         onValueChange = { portalUrl = it; inputError = null },
-        label = "LOCAL PORTAL URL",
+        label = "Local portal address",
         placeholder = "http://192.168.43.1:8080",
         keyboardType = KeyboardType.Uri,
     )
@@ -1246,11 +1378,11 @@ private fun ClientDashboard(
                 onOpenBrowser(normalized)
             }
         },
-        shape = RoundedCornerShape(7.dp),
+        shape = RoundedCornerShape(12.dp),
         colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidGreen),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Text("OPEN SANITIZED LOCAL BROWSER", style = MaterialTheme.typography.labelLarge)
+        Text("Open private local viewer", style = MaterialTheme.typography.labelLarge)
     }
 
     val error = inputError ?: state.errorMessage
@@ -1302,7 +1434,7 @@ private fun TacticalTextField(
         visualTransformation = if (isPassword) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
         keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
         textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 14.sp),
-        shape = RoundedCornerShape(7.dp),
+        shape = RoundedCornerShape(12.dp),
         colors = OutlinedTextFieldDefaults.colors(
             focusedBorderColor = VoidGreen,
             unfocusedBorderColor = VoidLine,
@@ -1318,14 +1450,29 @@ private fun TacticalTextField(
 
 @Composable
 private fun SectionLabel(text: String) {
-    Text(
-        text = text,
-        color = VoidGreen,
-        fontFamily = FontFamily.Monospace,
-        fontWeight = FontWeight.Bold,
-        fontSize = 10.sp,
-        letterSpacing = 1.7.sp,
-    )
+    val number = text.substringBefore('/').trim()
+    val title = text.substringAfter('/', text).trim()
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = number,
+            color = VoidGreen,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            fontSize = 10.sp,
+            modifier = Modifier
+                .background(VoidGreen.copy(alpha = 0.1f), RoundedCornerShape(7.dp))
+                .padding(horizontal = 8.dp, vertical = 5.dp),
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = title,
+            color = VoidText,
+            style = MaterialTheme.typography.headlineSmall,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(12.dp))
+        HorizontalDivider(color = VoidLine, modifier = Modifier.width(36.dp))
+    }
 }
 
 @Composable
@@ -1338,16 +1485,16 @@ private fun PrimaryActionButton(
     Button(
         onClick = onClick,
         enabled = enabled,
-        shape = RoundedCornerShape(7.dp),
+        shape = RoundedCornerShape(12.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = VoidGreen,
-            contentColor = Color(0xFF00291D),
+            contentColor = Color(0xFF06251B),
             disabledContainerColor = VoidGreenDark,
             disabledContentColor = VoidMuted,
         ),
         modifier = Modifier
             .fillMaxWidth()
-            .height(50.dp),
+            .height(52.dp),
     ) {
         if (showProgress) {
             CircularProgressIndicator(
@@ -1369,7 +1516,7 @@ fun SanitizedLocalBrowser(url: String, onClose: () -> Unit) {
     val normalizedUrl = remember(url) { normalizeLocalPortalUrl(url) }
     val webView = remember {
         WebView(context).apply {
-            setBackgroundColor(android.graphics.Color.rgb(13, 17, 23))
+            setBackgroundColor(android.graphics.Color.rgb(8, 13, 18))
             WebView.setWebContentsDebuggingEnabled(false)
             settings.apply {
                 javaScriptEnabled = true
@@ -1448,12 +1595,12 @@ fun SanitizedLocalBrowser(url: String, onClose: () -> Unit) {
                 .padding(horizontal = 8.dp, vertical = 8.dp),
         ) {
             TextButton(onClick = onClose) {
-                Text("CLOSE", color = VoidGreen, style = MaterialTheme.typography.labelLarge)
+                Text("Close", color = VoidGreen, style = MaterialTheme.typography.labelLarge)
             }
             Column(modifier = Modifier.weight(1f)) {
-                Text("SANITIZED LOCAL VIEWER", color = VoidText, style = MaterialTheme.typography.labelLarge)
+                Text("Private local viewer", color = VoidText, style = MaterialTheme.typography.labelLarge)
                 Text(
-                    normalizedUrl ?: "INVALID LOCAL URL",
+                    normalizedUrl ?: "Invalid local URL",
                     color = VoidMuted,
                     fontSize = 9.sp,
                     maxLines = 1,

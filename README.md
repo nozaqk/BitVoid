@@ -5,6 +5,7 @@ BitVoid is an offline-first Android local video node. A host phone creates an An
 ## Features
 
 - Kotlin, Jetpack Compose, Material 3, coroutines, minSdk 26, target/compile SDK 35
+- Polished dark responsive interface with adaptive launcher branding, accessible status states, and clear host/client workflows
 - Persistent connected-device foreground service and low-importance notification
 - Persisted pre-launch selector for **Open Visible** or **WPA2 Visible** hosting; hidden SSIDs are never supported
 - WPA2 mode uses Android `startLocalOnlyHotspot()`, verifies the generated AP is visible, and displays its generated SSID/passphrase
