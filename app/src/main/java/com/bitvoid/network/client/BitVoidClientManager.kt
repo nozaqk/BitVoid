@@ -266,13 +266,40 @@ class BitVoidClientManager(private val context: Context) {
         val state = BitVoidNodeStateHolder.clientState.value
         if (state.connectionStatus == ClientConnectionStatus.CONNECTING || state.isScanning) return null
 
-        val link = resolveCurrentWifiLink() ?: return null
+        val link = resolveCurrentWifiLink()
+        if (link == null) {
+            if (state.connectedSsid != null) {
+                connectivityManager.bindProcessToNetwork(null)
+                BitVoidNodeStateHolder.updateClientState {
+                    it.copy(
+                        connectionStatus = ClientConnectionStatus.DISCONNECTED,
+                        currentWifiSsid = null,
+                        connectedSsid = null,
+                        statusMessage = "Waiting for the phone's Wi-Fi connection.",
+                        errorMessage = null
+                    )
+                }
+            }
+            return null
+        }
+
         val sameWifi = state.connectedSsid != null &&
             (link.ssid == null || state.connectedSsid.equals(link.ssid, ignoreCase = true))
         if (state.connectionStatus == ClientConnectionStatus.CONNECTED && sameWifi) {
             val existing = normalizeLocalPortalUrl(state.targetPortalUrl)
             if (existing != null && probeBitVoidNode(link.network, existing)) {
                 return existing
+            }
+        } else if (state.connectedSsid != null && !sameWifi) {
+            connectivityManager.bindProcessToNetwork(null)
+            BitVoidNodeStateHolder.updateClientState {
+                it.copy(
+                    connectionStatus = ClientConnectionStatus.DISCONNECTED,
+                    currentWifiSsid = link.ssid,
+                    connectedSsid = null,
+                    statusMessage = "Wi-Fi changed. Ready on ${link.ssid ?: "the current network"}.",
+                    errorMessage = null
+                )
             }
         }
 
