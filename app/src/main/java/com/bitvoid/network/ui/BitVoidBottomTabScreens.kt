@@ -208,8 +208,8 @@ fun HostNetworkProtocolDialog(
                     ProtocolDetailRow("Captive Portal", "HTTP 302 Auto-Redirect Enabled")
                     ProtocolDetailRow("SSID Visibility", "Always Visible (Hidden Network OFF)")
                     ProtocolDetailRow(
-                        "Open Mode",
-                        "Uses a visible system hotspot with Security None/Open"
+                        "Autonomous Mode",
+                        "Works without Phone Wi-Fi or Hotspot ON"
                     )
                     if (hostState.isServerRunning) {
                         ProtocolDetailRow("Active Gateway", hostState.effectivePortalUrl)

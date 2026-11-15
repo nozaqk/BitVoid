@@ -14,7 +14,7 @@ enum class HotspotSecurityMode(
     ),
     WPA2_VISIBLE(
         title = "WPA2 Network (Visible, Password Protected)",
-        description = "Android creates a visible Local Only Hotspot and generates its WPA2 passphrase.",
+        description = "Anyone nearby sees the network name and enters the configured WPA2 passphrase.",
         badgeLabel = "SECURITY: WPA2-PSK (VISIBLE SSID)"
     )
 }
