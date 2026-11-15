@@ -103,7 +103,10 @@ class BitVoidLocalServerTest {
         assertTrue(html.contains("id=\"voice-call-btn\""))
         assertTrue(html.contains("id=\"video-call-btn\""))
         assertTrue(html.contains("id=\"dm-presence-status\""))
-        assertTrue(html.contains("msg-att-preview"))
+        assertTrue(html.contains("id=\"live-class-btn\" class=\"btn-ghost hidden\""))
+        assertFalse(html.contains("msg-att-preview"))
+        assertFalse(html.contains("msg-att-img"))
+        assertTrue(html.contains("msg-att-actions"))
         assertTrue(html.contains("upload-spinner"))
         assertTrue(html.contains("General Chat"))
         assertTrue(html.contains("PUBLIC"))
@@ -428,6 +431,27 @@ class BitVoidLocalServerTest {
         assertFalse(hosts.contains("8.8.8.8"))
         assertEquals(253, hosts.size)
         assertTrue(BitVoidClientManager.buildSubnetCandidateHosts("not-an-ip", emptyList()).isEmpty())
+    }
+
+    @Test
+    fun `all discovered nodes choose the same lowest ipv4 shared gateway`() {
+        val ordered = BitVoidClientManager.orderNodeUrlsForSharedGateway(
+            listOf(
+                "http://192.168.49.200:8080/",
+                "http://192.168.49.11:8080",
+                "http://192.168.49.2:8080",
+                "http://192.168.49.11:8080"
+            )
+        )
+
+        assertEquals(
+            listOf(
+                "http://192.168.49.2:8080",
+                "http://192.168.49.11:8080",
+                "http://192.168.49.200:8080"
+            ),
+            ordered
+        )
     }
 
     @Test

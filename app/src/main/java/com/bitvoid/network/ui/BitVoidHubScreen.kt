@@ -98,7 +98,6 @@ import com.bitvoid.network.client.RemoteMediaItem
 import com.bitvoid.network.direct.DirectConversationSummary
 import com.bitvoid.network.model.ClientConnectionStatus
 import com.bitvoid.network.model.ClientState
-import com.bitvoid.network.model.MediaCategory
 import com.bitvoid.network.ui.theme.VoidAmber
 import com.bitvoid.network.ui.theme.VoidBorder
 import com.bitvoid.network.ui.theme.VoidCrimson
@@ -2194,25 +2193,13 @@ private fun WhatsAppChannelChatSpace(
                         message = msg,
                         isMine = msg.sender == session.callsign,
                         onOpenAttachment = { att ->
-                            val category = attachmentCategory(att.mimeType, att.name)
-                            if (category == MediaCategory.VIDEO || category == MediaCategory.AUDIO) {
-                                activePlaybackItem = RemoteMediaItem(
-                                    id = att.id,
-                                    title = att.name,
-                                    size = att.size,
-                                    mimeType = att.mimeType,
-                                    category = category,
-                                    badge = category.badge,
-                                    streamUrl = att.streamUrl,
-                                    downloadUrl = att.downloadUrl
-                                )
-                            } else {
-                                val rawTarget = att.downloadUrl.ifBlank { att.streamUrl }
-                                openAttachmentExternally(
-                                    context,
-                                    onBuildAttachmentUrl(rawTarget, session.token)
-                                )
-                            }
+                            // Sent files stay as compact metadata cards. Opening/downloading is
+                            // always an explicit external action; chat never expands file content.
+                            val rawTarget = att.downloadUrl.ifBlank { att.streamUrl }
+                            openAttachmentExternally(
+                                context,
+                                onBuildAttachmentUrl(rawTarget, session.token)
+                            )
                         }
                     )
                 }
@@ -2373,7 +2360,6 @@ private fun WhatsAppMessageBubble(
                     .uppercase(Locale.US)
                     .take(5)
                     .ifBlank { "FILE" }
-                val isMedia = att.mimeType.startsWith("video/") || att.mimeType.startsWith("audio/")
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -2417,8 +2403,8 @@ private fun WhatsAppMessageBubble(
                         )
                     }
                     Icon(
-                        imageVector = if (isMedia) Icons.Filled.PlayArrow else Icons.Filled.Download,
-                        contentDescription = if (isMedia) "Play ${att.name}" else "Download ${att.name}",
+                        imageVector = Icons.Filled.Download,
+                        contentDescription = "Open or download ${att.name}",
                         tint = VoidCyan,
                         modifier = Modifier.size(20.dp)
                     )
@@ -2455,17 +2441,6 @@ private fun WhatsAppMessageBubble(
                 }
             }
         }
-    }
-}
-
-private fun attachmentCategory(mimeType: String, fileName: String): MediaCategory {
-    val lowerMime = mimeType.lowercase(Locale.US)
-    val ext = fileName.substringAfterLast('.', "").lowercase(Locale.US)
-    return when {
-        lowerMime.startsWith("video/") || ext in setOf("mp4", "mkv", "webm", "mov", "avi") -> MediaCategory.VIDEO
-        lowerMime.startsWith("audio/") || ext in setOf("mp3", "m4a", "wav", "ogg", "flac", "aac") -> MediaCategory.AUDIO
-        lowerMime.startsWith("image/") || ext in setOf("jpg", "jpeg", "png", "gif", "webp") -> MediaCategory.IMAGE
-        else -> MediaCategory.DOCUMENT
     }
 }
 
