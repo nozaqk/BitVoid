@@ -133,7 +133,8 @@ fun generateQrImageBitmap(payload: String, sizePx: Int = 512): ImageBitmap? {
 fun shareOpenNetworkDetails(context: Context, hostState: HostState) {
     val ssid = hostState.effectiveSsid
     val portalUrl = hostState.effectivePortalUrl
-    val securityLine = if (hostState.isOpenSecurity || hostState.passphrase.isBlank()) {
+    val effectivelyOpen = hostState.isOpenSecurity && hostState.passphrase.isBlank()
+    val securityLine = if (effectivelyOpen) {
         HostState.SECURITY_OPEN_LABEL
     } else {
         "SECURITY: WPA2 (PASS: ${hostState.passphrase})"
@@ -167,11 +168,12 @@ fun HostOpenNetworkQrSection(
 
     val ssid = hostState.effectiveSsid
     val portalUrl = hostState.effectivePortalUrl
-    val wifiPayload = remember(ssid, hostState.passphrase, hostState.isOpenSecurity) {
+    val effectivelyOpen = hostState.isOpenSecurity && hostState.passphrase.isBlank()
+    val wifiPayload = remember(ssid, hostState.passphrase, effectivelyOpen) {
         buildWifiQrPayload(
             ssid = ssid,
             passphrase = hostState.passphrase,
-            isOpen = hostState.isOpenSecurity
+            isOpen = effectivelyOpen
         )
     }
     val activePayload = if (qrMode == QrPayloadMode.WIFI_OPEN_SSID) wifiPayload else portalUrl
@@ -184,7 +186,7 @@ fun HostOpenNetworkQrSection(
             .background(VoidObsidian)
             .border(
                 1.dp,
-                if (hostState.isOpenSecurity) VoidMint.copy(alpha = 0.45f) else VoidAmber.copy(alpha = 0.5f),
+                if (effectivelyOpen) VoidMint.copy(alpha = 0.45f) else VoidAmber.copy(alpha = 0.5f),
                 RoundedCornerShape(12.dp)
             )
             .padding(14.dp),
@@ -224,7 +226,7 @@ fun HostOpenNetworkQrSection(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             QrModePill(
-                label = "WIFI OPEN QR",
+                label = if (effectivelyOpen) "WIFI OPEN QR" else "WIFI PASS QR",
                 selected = qrMode == QrPayloadMode.WIFI_OPEN_SSID,
                 modifier = Modifier
                     .weight(1f)
@@ -251,7 +253,11 @@ fun HostOpenNetworkQrSection(
                 Image(
                     bitmap = qrBitmap,
                     contentDescription = if (qrMode == QrPayloadMode.WIFI_OPEN_SSID) {
-                        "QR code to join open Wi-Fi network $ssid without a password"
+                        if (effectivelyOpen) {
+                            "QR code to join open Wi-Fi network $ssid without a password"
+                        } else {
+                            "QR code to join Wi-Fi network $ssid with passphrase"
+                        }
                     } else {
                         "QR code to open BitVoid portal at $portalUrl"
                     },
@@ -265,10 +271,10 @@ fun HostOpenNetworkQrSection(
 
         Text(
             text = if (qrMode == QrPayloadMode.WIFI_OPEN_SSID) {
-                if (hostState.isOpenSecurity) {
+                if (effectivelyOpen) {
                     "Friends scan with Camera to join '$ssid' (no password) and auto-open the BitVoid portal."
                 } else {
-                    "Scan with Camera to join '$ssid' with configured passkey."
+                    "Friends scan with Camera to join '$ssid' with its OS-assigned Wi-Fi passphrase and open the BitVoid portal."
                 }
             } else {
                 "Scan to launch $portalUrl directly in browser or BitVoid Client."
@@ -300,7 +306,7 @@ fun HostOpenNetworkQrSection(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "SHARE OPEN SSID",
+                    text = if (effectivelyOpen) "SHARE OPEN SSID" else "SHARE WIFI INFO",
                     style = MaterialTheme.typography.labelLarge
                 )
             }

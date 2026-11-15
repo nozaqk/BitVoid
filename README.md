@@ -35,9 +35,8 @@ BitVoid is an offline-first Android local video node. A host phone creates an An
 - No request logs, no client IP/MAC retention, ephemeral per-response session IDs
 - Identifying request headers discarded by the server
 - Fixed-size privacy padding header and 4 KiB-block portal body padding
-- Client Node is reduced to a Wi-Fi scanner: it never joins or switches networks, and only links through the Wi-Fi already connected to the phone
-- Silent same-Wi-Fi BitVoid discovery probes the local subnet, identifies `/api/node`, and automatically routes the app to a discovered gateway without showing discovery progress
-- Manual **Connect Node** validates the selected SSID against the phone's current Wi-Fi and discovers the host URL automatically—no gateway URL or Wi-Fi passphrase entry is required
+- Full Client Node workspace with gateway synchronization, nearby Wi-Fi discovery/joining, native channel access, public media feed, and embedded local portal tabs
+- Client connections resolve the active hotspot gateway automatically after Android establishes the selected Wi-Fi link
 - Sandboxed local WebView with room JavaScript enabled but WebRTC injection-blocked; cookies, persistent cache, external hosts, camera, microphone, and geolocation remain disabled
 
 ## Project structure
@@ -79,7 +78,7 @@ The APK is produced at `app/build/outputs/apk/debug/app-debug.apk`.
 6. Press **START BITVOID HOST ENGINE**. WPA2 mode creates Android's visible Local Only Hotspot and displays its generated credentials. Open mode waits for a system hotspot; use **OPEN ANDROID HOTSPOT SETTINGS**, set the name to `BitVoid_Net`, Security to None/Open, and Hidden Network to Off, then return to BitVoid.
 7. Confirm the security card and use the join-share button to send friends the SSID, passphrase when applicable, portal URL, and Wi-Fi QR payload.
 8. Nearby viewers join the displayed network and open `http://<gateway>:8080`. Captive-probe requests that reach BitVoid are redirected to the portal. The first screen asks for a Private Room ID, optional passkey, and chat alias; the public broadcast remains at `/public`.
-9. In another BitVoid app, open **CLIENT NODE**, scan, choose the Wi-Fi already connected to that phone, and tap **CONNECT NODE**. BitVoid does not switch Wi-Fi; it discovers the gateway through the current network. It also performs this discovery silently while the app is running and links automatically when a BitVoid node appears.
+9. In another BitVoid app, open **CLIENT NODE** to synchronize a local gateway URL, scan/join the Host Wi-Fi, browse native channels and public media, or use the embedded local portal.
 10. Authenticated room members receive an in-memory token, can stream only videos assigned to that room, exchange real-time local chat messages, and share files.
 11. From **HUB**, start a voice/video call with a channel or username, or create a named Live Class. Share its `CLS-XXXX-XX` ID with students on the same BitVoid network.
 12. During a Live Class, the teacher can share the Android screen, upload presentation materials, synchronize the current page, and use classroom Q&A while students follow in the native app or local browser portal.

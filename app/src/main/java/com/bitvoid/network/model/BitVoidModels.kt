@@ -126,7 +126,6 @@ data class ClientState(
     val connectionStatus: ClientConnectionStatus = ClientConnectionStatus.DISCONNECTED,
     val isScanning: Boolean = false,
     val discoveredNetworks: List<DiscoveredNetwork> = emptyList(),
-    val currentWifiSsid: String? = null,
     val connectedSsid: String? = null,
     val targetPortalUrl: String = "http://192.168.43.1:8080",
     val statusMessage: String = "Standby — ready to scan or connect to a BitVoid node",

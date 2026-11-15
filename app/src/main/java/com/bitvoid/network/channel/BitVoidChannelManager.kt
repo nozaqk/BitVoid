@@ -310,8 +310,8 @@ object BitVoidChannelManager {
     }
 
     /**
-     * Issues a scoped [ChannelSession] token to a student who has provided a verified,
-     * active Live Class ID (`CLS-XXXX-XX`) issued by the host teacher.
+     * Issues a scoped [ChannelSession] token to a student who has provided a verified
+     * active Live Class ID (`CLS-XXXX-XX`) issued by the Host Teacher.
      */
     fun issueLiveClassStudentSession(
         rawChannelId: String,

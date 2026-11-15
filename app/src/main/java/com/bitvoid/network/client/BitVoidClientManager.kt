@@ -10,9 +10,10 @@ import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.wifi.ScanResult
-import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
+import android.net.wifi.WifiNetworkSpecifier
 import android.os.Build
 import android.provider.Settings
 import android.webkit.CookieManager
@@ -27,28 +28,10 @@ import com.bitvoid.network.model.ClientConnectionStatus
 import com.bitvoid.network.model.DiscoveredNetwork
 import com.bitvoid.network.service.BitVoidNodeStateHolder
 import java.io.ByteArrayInputStream
-import java.net.HttpURLConnection
 import java.net.Inet4Address
 import java.net.InetAddress
-import java.net.URL
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 
 class BitVoidClientManager(private val context: Context) {
-
-    private data class CurrentWifiLink(
-        val network: Network,
-        val ssid: String?,
-        val localIpv4: String,
-        val gatewayHosts: List<String>,
-        val signalDbm: Int,
-        val frequencyMhz: Int
-    )
 
     private val appContext = context.applicationContext
     private val wifiManager = appContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
@@ -56,9 +39,8 @@ class BitVoidClientManager(private val context: Context) {
         appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
     private var scanReceiver: BroadcastReceiver? = null
-    private val discoveryMutex = Mutex()
+    private var activeNetworkCallback: ConnectivityManager.NetworkCallback? = null
 
-    /** Lists nearby Wi-Fi networks only. It never asks Android to join or switch networks. */
     fun scanNearbyNetworks() {
         val hasLocation = ContextCompat.checkSelfPermission(
             appContext,
@@ -70,24 +52,23 @@ class BitVoidClientManager(private val context: Context) {
                 it.copy(
                     isScanning = false,
                     connectionStatus = ClientConnectionStatus.ERROR,
-                    errorMessage = "Fine Location permission is required by Android to read nearby Wi-Fi names."
+                    errorMessage = "Fine Location permission is required by Android to read nearby Wi-Fi SSIDs."
                 )
             }
             return
         }
 
-        val currentLink = resolveCurrentWifiLink()
         BitVoidNodeStateHolder.updateClientState {
             it.copy(
                 isScanning = true,
-                currentWifiSsid = currentLink?.ssid,
                 connectionStatus = ClientConnectionStatus.SCANNING,
-                statusMessage = "Scanning nearby Wi-Fi networks…",
+                statusMessage = "Scanning local 2.4 / 5 GHz spectrum for BitVoid nodes...",
                 errorMessage = null
             )
         }
 
         unregisterScanReceiver()
+
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context?, intent: Intent?) {
                 unregisterScanReceiver()
@@ -110,8 +91,9 @@ class BitVoidClientManager(private val context: Context) {
         } catch (_: SecurityException) {
             false
         }
+
         if (!started) {
-            // Android can throttle scans; cached results still provide a useful list.
+            // Android throttles background scans; read cached scanResults cleanly
             unregisterScanReceiver()
             publishScanResults()
         }
@@ -119,7 +101,6 @@ class BitVoidClientManager(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     private fun publishScanResults() {
-        val currentLink = resolveCurrentWifiLink()
         val rawResults: List<ScanResult> = try {
             wifiManager.scanResults ?: emptyList()
         } catch (_: SecurityException) {
@@ -128,11 +109,17 @@ class BitVoidClientManager(private val context: Context) {
 
         val mapped = rawResults
             .asSequence()
-            .filter { extractSsid(it).isNotBlank() }
-            .distinctBy { extractSsid(it).lowercase() }
+            .filter { result ->
+                val ssid = extractSsid(result)
+                ssid.isNotBlank()
+            }
+            .distinctBy { extractSsid(it) }
             .map { result ->
                 val ssid = extractSsid(result)
                 val caps = result.capabilities ?: ""
+                val isCandidate = ssid.contains("BitVoid", ignoreCase = true) ||
+                    ssid.startsWith("AndroidShare", ignoreCase = true) ||
+                    ssid.startsWith("DIRECT-", ignoreCase = true)
                 DiscoveredNetwork(
                     ssid = ssid,
                     signalDbm = result.level,
@@ -143,47 +130,29 @@ class BitVoidClientManager(private val context: Context) {
                         caps.contains("WPA") -> "WPA"
                         else -> "OPEN"
                     },
-                    isBitVoidCandidate = ssid.contains("BitVoid", ignoreCase = true)
+                    isBitVoidCandidate = isCandidate
                 )
             }
             .sortedWith(
-                compareByDescending<DiscoveredNetwork> {
-                    it.ssid.equals(currentLink?.ssid, ignoreCase = true)
-                }.thenByDescending { it.isBitVoidCandidate }
+                compareByDescending<DiscoveredNetwork> { it.isBitVoidCandidate }
                     .thenByDescending { it.signalDbm }
             )
-            .toMutableList()
-
-        val currentSsid = currentLink?.ssid
-        if (!currentSsid.isNullOrBlank() && mapped.none { it.ssid.equals(currentSsid, ignoreCase = true) }) {
-            mapped.add(
-                0,
-                DiscoveredNetwork(
-                    ssid = currentSsid,
-                    signalDbm = currentLink.signalDbm,
-                    frequencyMhz = currentLink.frequencyMhz,
-                    securityLabel = "CONNECTED",
-                    isBitVoidCandidate = currentSsid.contains("BitVoid", ignoreCase = true)
-                )
-            )
-        }
+            .toList()
 
         BitVoidNodeStateHolder.updateClientState { state ->
             state.copy(
                 isScanning = false,
-                currentWifiSsid = currentSsid,
                 connectionStatus = if (state.connectedSsid != null) {
                     ClientConnectionStatus.CONNECTED
                 } else {
                     ClientConnectionStatus.DISCONNECTED
                 },
                 discoveredNetworks = mapped,
-                statusMessage = when {
-                    currentSsid == null -> "Connect this phone to a Wi-Fi network, then scan again."
-                    mapped.isEmpty() -> "Connected to $currentSsid. No additional Wi-Fi names were reported."
-                    else -> "Connected to $currentSsid · ${mapped.size} Wi-Fi network(s) visible."
-                },
-                errorMessage = null
+                statusMessage = if (mapped.isEmpty()) {
+                    "No nearby Wi-Fi beacons reported. Ensure Wi-Fi is enabled or enter SSID manually."
+                } else {
+                    "Detected ${mapped.size} nearby Wi-Fi network(s)."
+                }
             )
         }
     }
@@ -197,193 +166,143 @@ class BitVoidClientManager(private val context: Context) {
         }
     }
 
-    /**
-     * Links BitVoid to a gateway already reachable through the phone's current Wi-Fi.
-     * This deliberately never uses WifiNetworkSpecifier and never changes the device Wi-Fi network.
-     */
-    suspend fun connectToNode(selectedSsid: String) {
-        val link = resolveCurrentWifiLink()
-        if (link == null) {
+    fun connectToNode(ssid: String, passphrase: String, gatewayHostPort: String) {
+        val cleanSsid = ssid.trim()
+        if (cleanSsid.isEmpty()) {
             BitVoidNodeStateHolder.updateClientState {
                 it.copy(
                     connectionStatus = ClientConnectionStatus.ERROR,
-                    currentWifiSsid = null,
-                    connectedSsid = null,
-                    errorMessage = "Connect the phone to Wi-Fi first. BitVoid will use that existing connection."
+                    errorMessage = "Enter a valid target SSID to connect."
                 )
             }
             return
         }
 
-        val cleanSelection = selectedSsid.trim()
-        if (cleanSelection.isNotEmpty() &&
-            !link.ssid.isNullOrBlank() &&
-            !cleanSelection.equals(link.ssid, ignoreCase = true)
-        ) {
+        val normalizedUrl = normalizeLocalPortalUrl(gatewayHostPort)
+        if (normalizedUrl == null) {
             BitVoidNodeStateHolder.updateClientState {
                 it.copy(
                     connectionStatus = ClientConnectionStatus.ERROR,
-                    currentWifiSsid = link.ssid,
-                    connectedSsid = null,
-                    errorMessage = "'$cleanSelection' is not the phone's current Wi-Fi. Join it in Android Wi-Fi settings first."
+                    errorMessage = "Target portal must be a private RFC1918 or loopback address (e.g., 192.168.43.1:8080)."
                 )
             }
             return
         }
 
-        val activeSsid = link.ssid ?: cleanSelection.ifBlank { "Current Wi-Fi" }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            BitVoidNodeStateHolder.updateClientState {
+                it.copy(
+                    connectionStatus = ClientConnectionStatus.DISCONNECTED,
+                    targetPortalUrl = normalizedUrl,
+                    statusMessage = "Android 8-9 requires joining '$cleanSsid' via system Wi-Fi settings, then launching the sandboxed browser."
+                )
+            }
+            openSystemWifiSettings()
+            return
+        }
+
+        disconnectFromNode()
+
         BitVoidNodeStateHolder.updateClientState {
             it.copy(
                 connectionStatus = ClientConnectionStatus.CONNECTING,
-                currentWifiSsid = link.ssid,
-                connectedSsid = null,
-                isBrowserOpen = false,
-                statusMessage = "Finding a BitVoid gateway on $activeSsid…",
+                targetPortalUrl = normalizedUrl,
+                statusMessage = "Negotiating isolated Wi-Fi link to $cleanSsid...",
                 errorMessage = null
             )
         }
 
-        val foundUrl = discoverNodeOnLink(link, preferredPortalUrl = null)
-        if (foundUrl == null) {
-            BitVoidNodeStateHolder.updateClientState {
-                it.copy(
-                    connectionStatus = ClientConnectionStatus.ERROR,
-                    currentWifiSsid = link.ssid,
-                    connectedSsid = null,
-                    errorMessage = "No BitVoid node was found on $activeSsid. Start the Host gateway on another phone connected to this Wi-Fi."
-                )
-            }
-            return
+        val isDefaultPortalPlaceholder = gatewayHostPort.isBlank() ||
+            normalizedUrl == "http://192.168.43.1:8080" ||
+            normalizedUrl == "http://127.0.0.1:8080"
+
+        val specifierBuilder = WifiNetworkSpecifier.Builder()
+            .setSsid(cleanSsid)
+        if (passphrase.isNotBlank()) {
+            specifierBuilder.setWpa2Passphrase(passphrase)
         }
 
-        // Route this app through the already-connected Wi-Fi, even when Android prefers mobile data.
-        connectivityManager.bindProcessToNetwork(link.network)
-        publishLinkedNode(link, foundUrl, silent = false)
-    }
+        val request = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .setNetworkSpecifier(specifierBuilder.build())
+            .build()
 
-    /** Finds and links a BitVoid host without exposing discovery progress in the UI. */
-    suspend fun discoverAndLinkSilently(): String? {
-        val state = BitVoidNodeStateHolder.clientState.value
-        if (state.connectionStatus == ClientConnectionStatus.CONNECTING || state.isScanning) return null
-
-        val link = resolveCurrentWifiLink()
-        if (link == null) {
-            if (state.connectedSsid != null) {
-                connectivityManager.bindProcessToNetwork(null)
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                super.onAvailable(network)
+                connectivityManager.bindProcessToNetwork(network)
+                val gatewayIp = resolveGatewayFromLink(network)
+                val resolvedUrl = resolvePortalUrlAfterConnect(
+                    normalizedRequestedUrl = normalizedUrl,
+                    wasDefaultPlaceholder = isDefaultPortalPlaceholder,
+                    linkGatewayIp = gatewayIp
+                )
                 BitVoidNodeStateHolder.updateClientState {
                     it.copy(
-                        connectionStatus = ClientConnectionStatus.DISCONNECTED,
-                        currentWifiSsid = null,
-                        connectedSsid = null,
-                        statusMessage = "Waiting for the phone's Wi-Fi connection.",
+                        connectionStatus = ClientConnectionStatus.CONNECTED,
+                        connectedSsid = cleanSsid,
+                        targetPortalUrl = resolvedUrl,
+                        isBrowserOpen = true,
+                        statusMessage = "Linked to isolated node '$cleanSsid' (Zero-Internet Route Active).",
                         errorMessage = null
                     )
                 }
             }
-            return null
+
+            override fun onUnavailable() {
+                super.onUnavailable()
+                connectivityManager.bindProcessToNetwork(null)
+                BitVoidNodeStateHolder.updateClientState {
+                    it.copy(
+                        connectionStatus = ClientConnectionStatus.ERROR,
+                        connectedSsid = null,
+                        errorMessage = "Connection to '$cleanSsid' was declined or timed out."
+                    )
+                }
+            }
+
+            override fun onLost(network: Network) {
+                super.onLost(network)
+                connectivityManager.bindProcessToNetwork(null)
+                BitVoidNodeStateHolder.updateClientState {
+                    it.copy(
+                        connectionStatus = ClientConnectionStatus.DISCONNECTED,
+                        connectedSsid = null,
+                        statusMessage = "Local Wi-Fi link closed."
+                    )
+                }
+            }
         }
 
-        val sameWifi = state.connectedSsid != null &&
-            (link.ssid == null || state.connectedSsid.equals(link.ssid, ignoreCase = true))
-        if (state.connectionStatus == ClientConnectionStatus.CONNECTED && sameWifi) {
-            val existing = normalizeLocalPortalUrl(state.targetPortalUrl)
-            if (existing != null && probeBitVoidNode(link.network, existing)) {
-                return existing
-            }
-        } else if (state.connectedSsid != null && !sameWifi) {
-            connectivityManager.bindProcessToNetwork(null)
+        activeNetworkCallback = callback
+        try {
+            connectivityManager.requestNetwork(request, callback)
+        } catch (e: SecurityException) {
+            activeNetworkCallback = null
             BitVoidNodeStateHolder.updateClientState {
                 it.copy(
-                    connectionStatus = ClientConnectionStatus.DISCONNECTED,
-                    currentWifiSsid = link.ssid,
-                    connectedSsid = null,
-                    statusMessage = "Wi-Fi changed. Ready on ${link.ssid ?: "the current network"}.",
-                    errorMessage = null
+                    connectionStatus = ClientConnectionStatus.ERROR,
+                    errorMessage = "Permission denied requesting Wi-Fi network: ${e.localizedMessage}"
                 )
             }
-        }
-
-        val foundUrl = discoverNodeOnLink(link, state.targetPortalUrl) ?: return null
-        connectivityManager.bindProcessToNetwork(link.network)
-        publishLinkedNode(link, foundUrl, silent = true)
-        return foundUrl
-    }
-
-    private fun publishLinkedNode(link: CurrentWifiLink, foundUrl: String, silent: Boolean) {
-        val activeSsid = link.ssid ?: "Current Wi-Fi"
-        BitVoidNodeStateHolder.updateClientState {
-            it.copy(
-                connectionStatus = ClientConnectionStatus.CONNECTED,
-                currentWifiSsid = link.ssid,
-                connectedSsid = activeSsid,
-                targetPortalUrl = foundUrl,
-                isBrowserOpen = false,
-                statusMessage = if (silent) {
-                    "Linked to a BitVoid node on $activeSsid."
-                } else {
-                    "Gateway linked through $activeSsid. Open Hub to access it."
-                },
-                errorMessage = null
-            )
-        }
-    }
-
-    private suspend fun discoverNodeOnLink(
-        link: CurrentWifiLink,
-        preferredPortalUrl: String?
-    ): String? = discoveryMutex.withLock {
-        withContext(Dispatchers.IO) {
-            val candidates = buildList {
-                normalizeLocalPortalUrl(preferredPortalUrl.orEmpty())?.let { preferred ->
-                    val host = android.net.Uri.parse(preferred).host
-                    if (host != null && host != "127.0.0.1" && host != "localhost") add(preferred.trimEnd('/'))
-                }
-                buildSubnetCandidateHosts(link.localIpv4, link.gatewayHosts).forEach { host ->
-                    add("http://$host:8080")
-                }
-            }.distinct()
-
-            for (batch in candidates.chunked(DISCOVERY_BATCH_SIZE)) {
-                val matches = coroutineScope {
-                    batch.map { candidate ->
-                        async { candidate.takeIf { probeBitVoidNode(link.network, it) } }
-                    }.awaitAll()
-                }
-                matches.firstOrNull { it != null }?.let { return@withContext it }
-            }
-            null
-        }
-    }
-
-    private fun probeBitVoidNode(network: Network, baseUrl: String): Boolean {
-        var connection: HttpURLConnection? = null
-        return try {
-            val endpoint = URL("${baseUrl.trimEnd('/')}/api/node")
-            connection = network.openConnection(endpoint) as HttpURLConnection
-            connection.requestMethod = "GET"
-            connection.instanceFollowRedirects = false
-            connection.connectTimeout = DISCOVERY_CONNECT_TIMEOUT_MS
-            connection.readTimeout = DISCOVERY_READ_TIMEOUT_MS
-            connection.setRequestProperty("X-BitVoid-Discovery", "1")
-            connection.setRequestProperty("User-Agent", "BitVoid-Discovery/1.0")
-            connection.responseCode == HttpURLConnection.HTTP_OK &&
-                connection.getHeaderField("X-BitVoid-Node") == "1"
-        } catch (_: Exception) {
-            false
-        } finally {
-            connection?.disconnect()
         }
     }
 
     fun disconnectFromNode() {
         connectivityManager.bindProcessToNetwork(null)
+        activeNetworkCallback?.let { cb ->
+            try {
+                connectivityManager.unregisterNetworkCallback(cb)
+            } catch (_: Exception) {
+            }
+        }
+        activeNetworkCallback = null
         BitVoidNodeStateHolder.updateClientState {
             it.copy(
                 connectionStatus = ClientConnectionStatus.DISCONNECTED,
                 connectedSsid = null,
-                isBrowserOpen = false,
-                statusMessage = "Node link cleared. The phone remains connected to Wi-Fi.",
-                errorMessage = null
+                statusMessage = "Disconnected from peer node."
             )
         }
     }
@@ -410,86 +329,39 @@ class BitVoidClientManager(private val context: Context) {
         scanReceiver = null
     }
 
-    @SuppressLint("MissingPermission")
-    @Suppress("DEPRECATION")
-    private fun resolveCurrentWifiLink(): CurrentWifiLink? {
-        val active = connectivityManager.activeNetwork
-        val orderedNetworks = buildList {
-            if (active != null) add(active)
-            connectivityManager.allNetworks.forEach { network ->
-                if (network != active) add(network)
+    private fun resolveGatewayFromLink(network: Network): String? {
+        return try {
+            val linkProps = connectivityManager.getLinkProperties(network)
+            val defaultRouteGateway = linkProps?.routes?.firstOrNull { route ->
+                route.isDefaultRoute &&
+                    route.gateway is Inet4Address &&
+                    !(route.gateway as Inet4Address).isAnyLocalAddress
+            }?.gateway?.hostAddress
+            if (!defaultRouteGateway.isNullOrBlank()) return defaultRouteGateway
+
+            val anyRouteGateway = linkProps?.routes?.firstOrNull { route ->
+                route.gateway is Inet4Address && !(route.gateway as Inet4Address).isAnyLocalAddress
+            }?.gateway?.hostAddress
+            if (!anyRouteGateway.isNullOrBlank()) return anyRouteGateway
+
+            val dhcpAddress = (linkProps?.dhcpServerAddress as? Inet4Address)?.hostAddress
+            if (!dhcpAddress.isNullOrBlank() && dhcpAddress != "0.0.0.0") return dhcpAddress
+
+            val localV4 = linkProps?.linkAddresses?.firstOrNull { la ->
+                la.address is Inet4Address && !la.address.isLoopbackAddress
+            }?.address?.hostAddress
+            if (!localV4.isNullOrBlank() && isPrivateLocalHost(localV4)) {
+                val prefix = localV4.substringBeforeLast('.', "")
+                if (prefix.isNotBlank()) return "$prefix.1"
             }
+            null
+        } catch (_: Exception) {
+            null
         }
-
-        for (network in orderedNetworks) {
-            val capabilities = connectivityManager.getNetworkCapabilities(network) ?: continue
-            if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) continue
-            val linkProperties = connectivityManager.getLinkProperties(network) ?: continue
-            val localIpv4 = linkProperties.linkAddresses.firstOrNull { linkAddress ->
-                linkAddress.address is Inet4Address &&
-                    !linkAddress.address.isLoopbackAddress &&
-                    !linkAddress.address.isLinkLocalAddress
-            }?.address?.hostAddress ?: continue
-
-            val wifiInfo = try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    capabilities.transportInfo as? WifiInfo
-                } else {
-                    wifiManager.connectionInfo
-                }
-            } catch (_: SecurityException) {
-                null
-            }
-            val ssid = wifiInfo?.ssid
-                ?.removeSurrounding("\"")
-                ?.takeUnless { it.isBlank() || it.equals(WifiManager.UNKNOWN_SSID, ignoreCase = true) }
-            val gateways = buildList {
-                linkProperties.routes.forEach { route ->
-                    val gateway = route.gateway as? Inet4Address
-                    val host = gateway?.hostAddress
-                    if (!host.isNullOrBlank() && !gateway.isAnyLocalAddress) add(host)
-                }
-                val dhcp = (linkProperties.dhcpServerAddress as? Inet4Address)?.hostAddress
-                if (!dhcp.isNullOrBlank() && dhcp != "0.0.0.0") add(dhcp)
-            }.distinct()
-
-            return CurrentWifiLink(
-                network = network,
-                ssid = ssid,
-                localIpv4 = localIpv4,
-                gatewayHosts = gateways,
-                signalDbm = wifiInfo?.rssi ?: -127,
-                frequencyMhz = wifiInfo?.frequency ?: 0
-            )
-        }
-        return null
     }
 
     companion object {
         private const val SANITIZED_USER_AGENT = "BitVoid/1.0 (Isolated)"
-        private const val DISCOVERY_BATCH_SIZE = 48
-        private const val DISCOVERY_CONNECT_TIMEOUT_MS = 350
-        private const val DISCOVERY_READ_TIMEOUT_MS = 450
-
-        /** Gateway addresses are tried first, followed by every peer in the current /24 LAN. */
-        fun buildSubnetCandidateHosts(
-            localIpv4: String,
-            gatewayHosts: List<String>
-        ): List<String> {
-            val octets = localIpv4.split('.').mapNotNull { it.toIntOrNull() }
-            if (octets.size != 4 || octets.any { it !in 0..255 }) return emptyList()
-            val prefix = "${octets[0]}.${octets[1]}.${octets[2]}"
-            return buildList {
-                gatewayHosts.forEach { gateway ->
-                    val clean = gateway.trim()
-                    if (clean != localIpv4 && isPrivateLocalHost(clean)) add(clean)
-                }
-                for (lastOctet in 1..254) {
-                    val candidate = "$prefix.$lastOctet"
-                    if (candidate != localIpv4) add(candidate)
-                }
-            }.distinct()
-        }
 
         fun resolvePortalUrlAfterConnect(
             normalizedRequestedUrl: String,
