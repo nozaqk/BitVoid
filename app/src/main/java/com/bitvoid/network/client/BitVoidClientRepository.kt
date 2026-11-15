@@ -136,12 +136,6 @@ enum class ClientWsStatus {
     ERROR
 }
 
-enum class ClientHubTab(val label: String) {
-    CHANNELS("CHANNELS"),
-    PUBLIC_FEED("PUBLIC FEED"),
-    WEB_PORTAL("WEB PORTAL")
-}
-
 class BitVoidClientRepository {
 
     companion object {
