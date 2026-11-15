@@ -174,19 +174,13 @@ fun BitVoidDashboard(
     val isImporting by viewModel.isImportingFiles.collectAsStateWithLifecycle()
     val channels by viewModel.channels.collectAsStateWithLifecycle()
 
-    val clientGatewayUrl by viewModel.clientGatewayUrl.collectAsStateWithLifecycle()
     val clientChannels by viewModel.clientChannels.collectAsStateWithLifecycle()
-    val isLoadingChannels by viewModel.isLoadingChannels.collectAsStateWithLifecycle()
-    val channelsError by viewModel.channelsError.collectAsStateWithLifecycle()
     val activeChannelSession by viewModel.activeChannelSession.collectAsStateWithLifecycle()
     val channelMessages by viewModel.channelMessages.collectAsStateWithLifecycle()
     val clientWsStatus by viewModel.clientWsStatus.collectAsStateWithLifecycle()
     val channelPeersCount by viewModel.channelPeersCount.collectAsStateWithLifecycle()
     val isJoiningChannel by viewModel.isJoiningChannel.collectAsStateWithLifecycle()
     val channelJoinError by viewModel.channelJoinError.collectAsStateWithLifecycle()
-    val clientPublicMedia by viewModel.clientPublicMedia.collectAsStateWithLifecycle()
-    val isLoadingPublicMedia by viewModel.isLoadingPublicMedia.collectAsStateWithLifecycle()
-    val publicMediaError by viewModel.publicMediaError.collectAsStateWithLifecycle()
 
     val myUsername by viewModel.myUsername.collectAsStateWithLifecycle()
     val directConversations by viewModel.directConversations.collectAsStateWithLifecycle()
@@ -271,38 +265,9 @@ fun BitVoidDashboard(
     val clientHubContent: @Composable () -> Unit = {
         BitVoidClientHubContent(
             clientState = clientState,
-            gatewayUrl = clientGatewayUrl,
-            channels = clientChannels,
-            isLoadingChannels = isLoadingChannels,
-            channelsError = channelsError,
-            activeChannelSession = activeChannelSession,
-            channelMessages = channelMessages,
-            wsStatus = clientWsStatus,
-            channelPeersCount = channelPeersCount,
-            isJoiningChannel = isJoiningChannel,
-            channelJoinError = channelJoinError,
-            publicMedia = clientPublicMedia,
-            isLoadingPublicMedia = isLoadingPublicMedia,
-            publicMediaError = publicMediaError,
-            onSetGatewayUrl = { viewModel.setClientGatewayUrl(it) },
-            onRefreshChannels = { viewModel.refreshClientChannels(it) },
-            onRefreshPublicMedia = { viewModel.refreshClientPublicMedia(it) },
-            onJoinChannel = { channelId, privateKey, url ->
-                viewModel.joinChannel(channelId, privateKey, url)
-            },
-            onSendChatMessage = { viewModel.sendChannelChatMessage(it) },
-            onLeaveChannel = { viewModel.leaveChannel() },
-            onBuildStreamUrl = { item, token -> viewModel.buildClientStreamUrl(item, token) },
             onScanNetworks = { viewModel.scanNearbyNodes() },
-            onConnectNode = { ssid, pass, url -> viewModel.connectToNode(ssid, pass, url) },
-            onDisconnectClient = { viewModel.disconnectClient() },
-            onOpenWifiSettings = { viewModel.openSystemWifiSettings() },
-            onRequestEvaluated = { allowed -> viewModel.recordSandboxRequest(allowed) },
-            isUploadingFile = isUploadingChatFile,
-            onUploadChannelFile = { uri, caption -> viewModel.uploadFileToActiveChannel(uri, caption) },
-            onBuildAttachmentUrl = { path, token -> viewModel.buildAttachmentUrl(path, token) },
-            callUiState = callUiState,
-            callActions = callActions
+            onConnectNode = { ssid -> viewModel.connectToNode(ssid) },
+            onOpenWifiSettings = { viewModel.openSystemWifiSettings() }
         )
     }
 

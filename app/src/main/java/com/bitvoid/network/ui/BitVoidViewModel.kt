@@ -54,6 +54,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.webrtc.EglBase
@@ -361,6 +362,20 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             }
         }
         viewModelScope.launch {
+            // Discover another BitVoid gateway over the phone's existing Wi-Fi without
+            // showing discovery progress or asking Android to switch networks.
+            delay(1_500L)
+            while (isActive) {
+                if (!hostState.value.isServerRunning &&
+                    clientState.value.connectionStatus != ClientConnectionStatus.CONNECTING &&
+                    !clientState.value.isScanning
+                ) {
+                    clientManager.discoverAndLinkSilently()
+                }
+                delay(15_000L)
+            }
+        }
+        viewModelScope.launch {
             callManager.activeRoomId.collect { roomId ->
                 if (roomId == null) {
                     _loadedMaterialDecks.value = emptyMap()
@@ -467,11 +482,6 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
 
     fun selectMode(mode: NodeMode) {
         _selectedMode.value = mode
-        if (mode == NodeMode.CLIENT) {
-            syncGatewayToLocalIfAvailable()
-            refreshClientChannels()
-            refreshClientPublicMedia()
-        }
     }
 
     private fun syncGatewayToLocalIfAvailable() {
@@ -675,9 +685,10 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         clientManager.scanNearbyNetworks()
     }
 
-    fun connectToNode(ssid: String, passphrase: String, portalHostPort: String) {
-        clientRepository.setGatewayBaseUrl(portalHostPort)
-        clientManager.connectToNode(ssid, passphrase, portalHostPort)
+    fun connectToNode(ssid: String) {
+        viewModelScope.launch {
+            clientManager.connectToNode(ssid)
+        }
     }
 
     fun disconnectClient() {

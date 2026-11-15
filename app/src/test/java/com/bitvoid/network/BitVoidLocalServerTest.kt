@@ -108,6 +108,22 @@ class BitVoidLocalServerTest {
     }
 
     @Test
+    fun `node identity endpoint supports lightweight same wifi discovery`() {
+        val conn = (URL("http://127.0.0.1:$testPort/api/node").openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            setRequestProperty("X-BitVoid-Discovery", "1")
+        }
+
+        assertEquals(200, conn.responseCode)
+        assertEquals("1", conn.getHeaderField("X-BitVoid-Node"))
+        assertEquals("1", conn.getHeaderField("X-BitVoid-Protocol"))
+        val body = JSONObject(conn.inputStream.bufferedReader().readText())
+        assertEquals("bitvoid", body.getString("service"))
+        assertEquals("gateway", body.getString("nodeType"))
+        assertEquals(1, body.getInt("protocolVersion"))
+    }
+
+    @Test
     fun `private videos default to hidden and return 403 until toggled public`() {
         val sampleFile = File(server.sharedDirectory, "secret_clip.mp4")
         val payload = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ".toByteArray()
@@ -392,6 +408,21 @@ class BitVoidLocalServerTest {
         assertTrue(BitVoidClientManager.isPrivateLocalHost("172.16.4.2"))
         assertFalse(BitVoidClientManager.isPrivateLocalHost("8.8.8.8"))
         assertFalse(BitVoidClientManager.isPrivateLocalHost("172.32.0.1"))
+    }
+
+    @Test
+    fun `silent node discovery tries wifi gateways before every peer on the local subnet`() {
+        val hosts = BitVoidClientManager.buildSubnetCandidateHosts(
+            localIpv4 = "192.168.50.42",
+            gatewayHosts = listOf("192.168.50.1", "192.168.50.254", "8.8.8.8")
+        )
+
+        assertEquals("192.168.50.1", hosts.first())
+        assertEquals("192.168.50.254", hosts[1])
+        assertFalse(hosts.contains("192.168.50.42"))
+        assertFalse(hosts.contains("8.8.8.8"))
+        assertEquals(253, hosts.size)
+        assertTrue(BitVoidClientManager.buildSubnetCandidateHosts("not-an-ip", emptyList()).isEmpty())
     }
 
     @Test

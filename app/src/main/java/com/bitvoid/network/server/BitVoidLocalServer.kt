@@ -357,6 +357,10 @@ class BitVoidLocalServer(
                     )
                 }
 
+                rawUri == "/api/node" -> {
+                    serveNodeIdentity(ephemeralToken, isHead = (method == Method.HEAD))
+                }
+
                 isCaptivePortalProbe(normalizedPath, sanitizedHeaders) -> {
                     serveCaptivePortalRedirect(
                         sanitizedHeaders = sanitizedHeaders,
@@ -625,6 +629,34 @@ class BitVoidLocalServer(
         val bodyMap = HashMap<String, String>()
         session.parseBody(bodyMap)
         return bodyMap["postData"] ?: ""
+    }
+
+    /** Lightweight identity response used by silent same-Wi-Fi client discovery. */
+    private fun serveNodeIdentity(ephemeralToken: String, isHead: Boolean): Response {
+        val payload = JSONObject().apply {
+            put("service", "bitvoid")
+            put("nodeType", "gateway")
+            put("protocolVersion", 1)
+            put("port", DEFAULT_PORT)
+            put("features", JSONArray(listOf("channels", "calls", "liveClass", "files")))
+        }.toString()
+        val payloadBytes = payload.toByteArray(StandardCharsets.UTF_8)
+        val response = newFixedLengthResponse(
+            Response.Status.OK,
+            "application/json; charset=utf-8",
+            ByteArrayInputStream(if (isHead) ByteArray(0) else payloadBytes),
+            payloadBytes.size.toLong()
+        )
+        response.setGzipEncoding(false)
+        response.addHeader("Content-Length", payloadBytes.size.toString())
+        response.addHeader("Cache-Control", "no-store")
+        response.addHeader("X-BitVoid-Node", "1")
+        response.addHeader("X-BitVoid-Protocol", "1")
+        response.addHeader("X-BitVoid-Session", ephemeralToken)
+        if (!isHead) {
+            totalBytesServed.addAndGet(payloadBytes.size.toLong())
+        }
+        return response
     }
 
     // ───────────────────────────────────────────────────────────────────────────
