@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path
+        name="live_docs_cache"
+        path="bitvoid_live_docs/" />
+    <files-path
+        name="bitvoid_vault"
+        path="." />
+</paths>

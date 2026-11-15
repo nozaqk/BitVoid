@@ -22,7 +22,12 @@ BitVoid is an offline-first Android local video node. A host phone creates an An
 - Host-created private Room IDs with optional PBKDF2-hashed passkeys
 - Cryptographically random, expiring room tokens held in memory only
 - Token-gated private video routes and room APIs using `X-Room-Token`
-- Real-time NanoWSD chat at `/ws/chat/{roomId}` with ephemeral RAM-only history
+- Real-time NanoWSD channel and direct chat with ephemeral RAM-only history and arbitrary file attachments
+- Local-only WebRTC voice/video calls with microphone mute, camera switching, speaker routing, and no external STUN/TURN servers
+- Live classrooms with teacher/student roles, shareable `CLS-XXXX-XX` IDs, visible or hidden Hub listings, Q&A chat, and synchronized participant state
+- Android screen sharing through a media-projection foreground service, plus browser screen sharing where supported
+- Classroom presentation of PDF, PPT/PPTX, DOC/DOCX, images, text, and other downloadable materials with synchronized page selection
+- Native Compose and browser meeting stages backed by the host's authenticated `/ws/signaling` endpoint
 - Host room dashboard showing assigned private videos and active chat participants
 - Android, Apple, Windows, and Firefox captive-probe path/host handlers returning `302` to the active local portal
 - RFC 7233 single-range streaming with `206 Partial Content` for media seeking
@@ -38,6 +43,7 @@ BitVoid is an offline-first Android local video node. A host phone creates an An
 ```text
 app/src/main/java/com/bitvoid/network/
 ├── MainActivity.kt
+├── call/        # WebRTC media, signaling, screen sharing, and document previews
 ├── channel/     # Host channels and participant state
 ├── client/      # Peer discovery and client networking
 ├── direct/      # Ephemeral direct chat
@@ -71,16 +77,20 @@ The APK is produced at `app/build/outputs/apk/debug/app-debug.apk`.
 6. Press **START BITVOID HOST ENGINE**. WPA2 mode creates Android's visible Local Only Hotspot and displays its generated credentials. Open mode waits for a system hotspot; use **OPEN ANDROID HOTSPOT SETTINGS**, set the name to `BitVoid_Net`, Security to None/Open, and Hidden Network to Off, then return to BitVoid.
 7. Confirm the security card and use the join-share button to send friends the SSID, passphrase when applicable, portal URL, and Wi-Fi QR payload.
 8. Nearby viewers join the displayed network and open `http://<gateway>:8080`. Captive-probe requests that reach BitVoid are redirected to the portal. The first screen asks for a Private Room ID, optional passkey, and chat alias; the public broadcast remains at `/public`.
-9. Authenticated room members receive an in-memory token, can stream only videos assigned to that room, and can exchange real-time local chat messages. The host dashboard displays the live participant count.
+9. Authenticated room members receive an in-memory token, can stream only videos assigned to that room, exchange real-time local chat messages, and share files.
+10. From **HUB**, start a voice/video call with a channel or username, or create a named Live Class. Share its `CLS-XXXX-XX` ID with students on the same BitVoid network.
+11. During a Live Class, the teacher can share the Android screen, upload presentation materials, synchronize the current page, and use classroom Q&A while students follow in the native app or local browser portal.
 
-## Room security model
+## Room, call, and classroom security model
 
 - Room IDs, passkey verifiers, client sessions, participant state, and chat history live only in memory. Stopping the host node or ending the app process clears all rooms and chat.
 - Passkeys are salted and derived with PBKDF2-HMAC-SHA256. Raw passkeys are not stored.
 - Private room APIs require `X-Room-Token`; missing, expired, or room-mismatched tokens receive `401 Unauthorized`.
 - Native WebSocket clients can send `X-Room-Token` during the upgrade. Browser WebSocket APIs cannot set arbitrary headers, so the bundled portal carries the same bearer token in the `Sec-WebSocket-Protocol` handshake header.
 - HTML video elements also cannot set custom request headers. The bundled portal therefore uses an ephemeral token query parameter for private range requests. Tokens are never persisted, responses use `Referrer-Policy: no-referrer`, and the server keeps no access log.
-- Chat is host-relayed over the isolated LAN rather than end-to-end encrypted between peers. An Open hotspot does not provide WPA link encryption: nearby observers can potentially inspect unencrypted HTTP traffic, so room tokens are access controls rather than transport encryption.
+- Chat and WebRTC signaling are host-relayed over the isolated LAN. WebRTC media is peer-to-peer and encrypted by WebRTC, but an Open hotspot does not protect HTTP chat, document, or signaling traffic at the Wi-Fi link layer; room tokens are access controls rather than transport encryption.
+- Call and classroom signaling accepts only local-node requests and validates channel, direct-chat, or Live Class sessions. The peer connection is configured without external ICE servers, so media remains on the local network.
+- Live Class IDs map to in-memory host sessions. Ending the class, stopping the host, or ending the app process revokes the session and closes its signaling peers.
 
 ## Platform notes
 
