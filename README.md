@@ -28,6 +28,9 @@ BitVoid is an offline-first Android local video node. A host phone creates an An
 - Android screen sharing through a media-projection foreground service, plus browser screen sharing where supported
 - Classroom presentation of PDF, PPT/PPTX, DOC/DOCX, images, text, and other downloadable materials with synchronized page selection
 - Native Compose and browser meeting stages backed by the host's authenticated `/ws/signaling` endpoint
+- Responsive browser voice and video icon controls, with separate audio-only and camera-enabled call starts
+- Professional browser attachment cards with responsive video/audio/image previews, file metadata, secure open/download actions, and upload progress
+- Ephemeral same-node username presence: direct chat and calls open only when the target is active on the current BitVoid Wi-Fi gateway
 - Host room dashboard showing assigned private videos and active chat participants
 - Android, Apple, Windows, and Firefox captive-probe path/host handlers returning `302` to the active local portal
 - RFC 7233 single-range streaming with `206 Partial Content` for media seeking

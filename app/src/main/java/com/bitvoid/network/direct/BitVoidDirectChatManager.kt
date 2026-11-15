@@ -95,6 +95,7 @@ object BitVoidDirectChatManager {
     private const val MAX_MESSAGES_PER_DM = 150
     private const val GCM_IV_LENGTH_BYTES = 12
     private const val GCM_TAG_LENGTH_BITS = 128
+    private const val USER_PRESENCE_TTL_MS = 45_000L
 
     private val HEX_ALPHABET = "0123456789abcdef".toCharArray()
     private val secureRandom = SecureRandom()
@@ -119,6 +120,7 @@ object BitVoidDirectChatManager {
     )
 
     private val registeredUsers = ConcurrentHashMap<String, String>() // lower -> display username
+    private val userLastSeenMs = ConcurrentHashMap<String, Long>()
     private val threads = ConcurrentHashMap<String, InternalThread>()
     private val sessionTokens = ConcurrentHashMap<String, DirectSession>()
     private val messageHistory = ConcurrentHashMap<String, CopyOnWriteArrayList<DirectChatMessage>>()
@@ -138,12 +140,23 @@ object BitVoidDirectChatManager {
                     "Username ID must be 2–24 characters using letters, numbers, '.', '_', or '-'."
                 )
             )
-        registeredUsers[clean.lowercase(Locale.US)] = clean
+        val key = clean.lowercase(Locale.US)
+        registeredUsers[key] = clean
+        userLastSeenMs[key] = System.currentTimeMillis()
         publishUsers()
         return Result.success(clean)
     }
 
-    fun getKnownUsers(): List<String> = _knownUsersFlow.value
+    fun getKnownUsers(): List<String> {
+        publishUsers()
+        return _knownUsersFlow.value
+    }
+
+    fun isUserAvailable(rawUsername: String): Boolean {
+        val clean = BitVoidUserPrefs.normalizeUsernameOrNull(rawUsername) ?: return false
+        pruneStaleUsers()
+        return registeredUsers.containsKey(clean.lowercase(Locale.US))
+    }
 
     fun computeDmId(userOne: String, userTwo: String): String {
         val first = userOne.trim().lowercase(Locale.US)
@@ -161,16 +174,23 @@ object BitVoidDirectChatManager {
             return Result.failure(IllegalArgumentException("Enter another user's Username ID to chat."))
         }
 
-        registeredUsers[myClean.lowercase(Locale.US)] = myClean
-        registeredUsers[targetClean.lowercase(Locale.US)] = targetClean
+        registerUser(myClean)
+        pruneStaleUsers()
+        val targetKey = targetClean.lowercase(Locale.US)
+        val activeTarget = registeredUsers[targetKey]
+            ?: return Result.failure(
+                IllegalStateException(
+                    "User @$targetClean is not available on this BitVoid node or local Wi-Fi."
+                )
+            )
 
-        val dmId = computeDmId(myClean, targetClean)
+        val dmId = computeDmId(myClean, activeTarget)
         val existing = threads[dmId]
         if (existing == null) {
             threads[dmId] = InternalThread(
                 dmId = dmId,
                 userA = myClean,
-                userB = targetClean,
+                userB = activeTarget,
                 updatedTimestampMs = System.currentTimeMillis()
             )
         }
@@ -183,7 +203,7 @@ object BitVoidDirectChatManager {
             token = token,
             dmId = dmId,
             myUsername = myClean,
-            peerUsername = targetClean,
+            peerUsername = activeTarget,
             issuedAt = issuedAt
         )
         sessionTokens[token] = session
@@ -203,10 +223,12 @@ object BitVoidDirectChatManager {
         if (requiredDmId != null && session.dmId != requiredDmId) {
             return null
         }
+        touchUser(session.myUsername)
         return session
     }
 
     fun registerSocket(session: DirectSession, listener: DirectSocketListener) {
+        touchUser(session.myUsername)
         val list = socketListeners.computeIfAbsent(session.dmId) { CopyOnWriteArrayList() }
         list.add(listener)
     }
@@ -283,6 +305,7 @@ object BitVoidDirectChatManager {
 
     fun clearAllForTests() {
         registeredUsers.clear()
+        userLastSeenMs.clear()
         threads.clear()
         sessionTokens.clear()
         messageHistory.clear()
@@ -301,7 +324,23 @@ object BitVoidDirectChatManager {
         return """{"id":"${jsonEscape(msg.id)}","dmId":"${jsonEscape(msg.dmId)}","channelId":"${jsonEscape(msg.dmId)}","sender":"${jsonEscape(msg.senderUsername)}","text":"${jsonEscape(msg.text)}","time":"${jsonEscape(msg.timestampLabel)}"$attachmentJson}"""
     }
 
+    private fun touchUser(rawUsername: String) {
+        val clean = BitVoidUserPrefs.normalizeUsernameOrNull(rawUsername) ?: return
+        val key = clean.lowercase(Locale.US)
+        registeredUsers[key] = clean
+        userLastSeenMs[key] = System.currentTimeMillis()
+    }
+
+    private fun pruneStaleUsers(nowMs: Long = System.currentTimeMillis()) {
+        userLastSeenMs.forEach { (key, lastSeen) ->
+            if (nowMs - lastSeen > USER_PRESENCE_TTL_MS && userLastSeenMs.remove(key, lastSeen)) {
+                registeredUsers.remove(key)
+            }
+        }
+    }
+
     private fun publishUsers() {
+        pruneStaleUsers()
         _knownUsersFlow.value = registeredUsers.values.sortedBy { it.lowercase(Locale.US) }
     }
 

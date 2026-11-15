@@ -410,6 +410,7 @@ class BitVoidLocalServer(
 
                 // Direct User Chat GET endpoints
                 rawUri == "/api/users" -> {
+                    requireSameWifiNode(session)
                     serveUsersListJson(ephemeralToken, isHead = (method == Method.HEAD))
                 }
 
@@ -1361,6 +1362,7 @@ class BitVoidLocalServer(
     // ───────────────────────────────────────────────────────────────────────────
 
     private fun handleRegisterUser(session: IHTTPSession, ephemeralToken: String): Response {
+        requireSameWifiNode(session)
         val rawBody = readPostBody(session)
         val json = try {
             JSONObject(rawBody)
@@ -1406,6 +1408,7 @@ class BitVoidLocalServer(
     }
 
     private fun handleDirectOpen(session: IHTTPSession, ephemeralToken: String): Response {
+        requireSameWifiNode(session)
         val rawBody = readPostBody(session)
         val json = try {
             JSONObject(rawBody)
@@ -1419,6 +1422,14 @@ class BitVoidLocalServer(
         }
         val myUsername = json.optString("myUsername", "")
         val targetUsername = json.optString("targetUsername", "")
+        if (!BitVoidDirectChatManager.isUserAvailable(targetUsername)) {
+            return buildPaddedTextResponse(
+                status = Response.Status.NOT_FOUND,
+                mimeType = "application/json; charset=utf-8",
+                body = """{"error":"user_not_on_node","detail":"User @${jsonEscape(targetUsername.trim().removePrefix("@"))} is not available on this BitVoid node or local Wi-Fi."}""",
+                token = ephemeralToken
+            )
+        }
         val opened = BitVoidDirectChatManager.openDirectSession(myUsername, targetUsername)
         if (opened.isFailure) {
             return buildPaddedTextResponse(
@@ -2225,6 +2236,48 @@ class BitVoidLocalServer(
             .btn-ghost { border: 1px solid var(--border); color: var(--text); background: var(--bg); }
             .btn-ghost.active { border-color: var(--mint); color: var(--mint); background: rgba(0, 255, 156, 0.08); }
             .btn-danger { border: 1px solid var(--crimson); color: var(--crimson); background: transparent; }
+            .call-icon-btn {
+              width: 42px;
+              height: 42px;
+              padding: 0;
+              border-radius: 12px;
+              border: 1px solid var(--border);
+              color: var(--text);
+              background: var(--bg);
+              transition: border-color 0.16s ease, color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+            }
+            .call-icon-btn svg {
+              width: 20px;
+              height: 20px;
+              fill: none;
+              stroke: currentColor;
+              stroke-width: 1.9;
+              stroke-linecap: round;
+              stroke-linejoin: round;
+              pointer-events: none;
+            }
+            .call-icon-btn:hover, .call-icon-btn:focus-visible {
+              border-color: var(--mint);
+              color: var(--mint);
+              background: rgba(0, 255, 156, 0.1);
+              transform: translateY(-1px);
+              outline: none;
+            }
+            .call-icon-btn.video-call:hover, .call-icon-btn.video-call:focus-visible {
+              border-color: var(--cyan);
+              color: var(--cyan);
+              background: rgba(0, 209, 255, 0.1);
+            }
+            .call-icon-btn.active {
+              border-color: var(--mint);
+              color: var(--mint);
+              box-shadow: 0 0 0 3px rgba(0, 255, 156, 0.1);
+            }
+            .call-icon-btn:disabled {
+              opacity: 0.38;
+              cursor: not-allowed;
+              transform: none;
+            }
 
             /* Slide-out Sidebar Drawer */
             .sidebar-backdrop {
@@ -2363,6 +2416,43 @@ class BitVoidLocalServer(
             }
             input:focus { outline: none; border-color: var(--mint); }
             .err { color: var(--crimson); font-size: 11px; }
+            .presence-status {
+              display: flex;
+              align-items: center;
+              gap: 7px;
+              min-height: 18px;
+              color: var(--muted);
+              font-size: 10px;
+              line-height: 1.35;
+            }
+            .presence-status::before {
+              content: '';
+              width: 7px;
+              height: 7px;
+              flex-shrink: 0;
+              border-radius: 50%;
+              background: var(--muted);
+              box-shadow: 0 0 0 3px rgba(139, 148, 158, 0.1);
+            }
+            .presence-status.checking { color: var(--cyan); }
+            .presence-status.checking::before {
+              background: var(--cyan);
+              animation: presence-pulse 1s ease-in-out infinite;
+            }
+            .presence-status.online { color: var(--mint); }
+            .presence-status.online::before {
+              background: var(--mint);
+              box-shadow: 0 0 0 3px rgba(0, 255, 156, 0.12);
+            }
+            .presence-status.offline { color: var(--crimson); }
+            .presence-status.offline::before {
+              background: var(--crimson);
+              box-shadow: 0 0 0 3px rgba(255, 77, 109, 0.1);
+            }
+            @keyframes presence-pulse {
+              0%, 100% { opacity: 0.4; }
+              50% { opacity: 1; }
+            }
 
             /* Collapsible Channel Media Drawer */
             .media-drawer {
@@ -2545,43 +2635,142 @@ class BitVoidLocalServer(
               padding: 0;
             }
             .send-circle:hover { filter: brightness(1.08); }
+            .bubble.has-attachment {
+              width: min(620px, 82%);
+              max-width: min(620px, 82%);
+              padding: 6px 6px 5px;
+            }
             .msg-attachment {
-              margin-top: 4px;
-              margin-bottom: 4px;
-              padding: 8px 10px;
-              border-radius: 10px;
-              background: rgba(13, 17, 23, 0.72);
-              border: 1px solid var(--border);
+              position: relative;
+              overflow: hidden;
+              margin-bottom: 5px;
+              padding: 12px;
+              border-radius: 12px;
+              background: linear-gradient(145deg, rgba(20, 29, 38, 0.98), rgba(10, 15, 21, 0.98));
+              border: 1px solid rgba(139, 148, 158, 0.28);
               display: grid;
-              gap: 6px;
+              gap: 10px;
+              box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+            }
+            .msg-attachment::before {
+              content: '';
+              position: absolute;
+              inset: 0 0 auto 0;
+              height: 2px;
+              background: linear-gradient(90deg, var(--mint), var(--cyan), transparent 82%);
             }
             .msg-att-head {
               display: flex;
               align-items: center;
-              gap: 8px;
+              gap: 10px;
+              min-width: 0;
             }
+            .msg-att-icon {
+              flex-shrink: 0;
+              width: 42px;
+              height: 42px;
+              border-radius: 11px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              background: rgba(0, 255, 156, 0.1);
+              border: 1px solid rgba(0, 255, 156, 0.35);
+              color: var(--mint);
+              font-size: 10px;
+              font-weight: 800;
+              letter-spacing: 0.4px;
+            }
+            .msg-att-meta { min-width: 0; flex: 1; }
             .msg-att-name {
-              font-size: 12px;
-              font-weight: 700;
+              font-size: 13px;
+              font-weight: 750;
               color: var(--text);
-              word-break: break-all;
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
             }
             .msg-att-sub {
+              margin-top: 3px;
               font-size: 10px;
               color: var(--muted);
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
             }
-            .msg-att-img {
+            .msg-att-state {
+              flex-shrink: 0;
+              padding: 3px 7px;
+              border-radius: 999px;
+              border: 1px solid rgba(0, 209, 255, 0.35);
+              color: var(--cyan);
+              background: rgba(0, 209, 255, 0.08);
+              font-size: 9px;
+              font-weight: 700;
+            }
+            .msg-att-preview {
+              overflow: hidden;
               width: 100%;
-              max-height: 200px;
+              border-radius: 10px;
+              background: #05070A;
+              border: 1px solid var(--border);
+            }
+            .msg-att-preview video,
+            .msg-att-preview audio {
+              display: block;
+              width: 100%;
+              margin: 0;
+              border: 0;
+              border-radius: 0;
+              background: #05070A;
+            }
+            .msg-att-preview video {
+              max-height: 360px;
+              aspect-ratio: 16 / 9;
               object-fit: contain;
-              border-radius: 6px;
+            }
+            .msg-att-preview audio { min-height: 48px; }
+            .msg-att-img {
+              display: block;
+              width: 100%;
+              max-height: 340px;
+              object-fit: contain;
               background: #05070A;
             }
             .msg-att-actions {
-              display: flex;
-              gap: 6px;
-              flex-wrap: wrap;
+              display: grid;
+              grid-template-columns: repeat(2, minmax(0, 1fr));
+              gap: 8px;
             }
+            .msg-att-actions .btn {
+              min-height: 38px;
+              border-radius: 9px;
+              font-size: 10px;
+            }
+            .upload-bubble {
+              display: flex;
+              align-items: center;
+              gap: 11px;
+              min-width: min(320px, 78vw);
+            }
+            .upload-spinner {
+              width: 26px;
+              height: 26px;
+              flex-shrink: 0;
+              border-radius: 50%;
+              border: 3px solid rgba(0, 255, 156, 0.18);
+              border-top-color: var(--mint);
+              animation: upload-spin 0.8s linear infinite;
+            }
+            .upload-state-name {
+              color: var(--text);
+              font-size: 12px;
+              font-weight: 700;
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+            }
+            .upload-state-sub { color: var(--muted); font-size: 10px; margin-top: 2px; }
+            @keyframes upload-spin { to { transform: rotate(360deg); } }
             .empty {
               border: 1px dashed var(--border);
               border-radius: 10px;
@@ -2757,6 +2946,20 @@ class BitVoidLocalServer(
               object-fit: contain;
             }
 
+            @media (max-width: 640px) {
+              .wa-topbar { gap: 7px; padding: 8px; }
+              .wa-top-avatar { width: 34px; height: 34px; }
+              .wa-top-title { font-size: 13px; }
+              .wa-top-sub { font-size: 9px; }
+              .top-actions { gap: 4px; }
+              .call-icon-btn { width: 38px; height: 38px; border-radius: 10px; }
+              .call-icon-btn svg { width: 19px; height: 19px; }
+              .bubble.has-attachment { width: 94%; max-width: 94%; }
+              .msg-att-state { display: none; }
+              .msg-att-preview video { max-height: 240px; }
+              .msg-att-img { max-height: 260px; }
+            }
+
             /* PC / Desktop Split-Pane Format */
             @media (min-width: 900px) {
               .wa-app {
@@ -2830,7 +3033,8 @@ class BitVoidLocalServer(
                 <div class="section-title" style="margin:0;color:var(--mint);">DIRECT CHAT (USERNAME ID)</div>
                 <input id="dm-my-username" type="text" placeholder="Your Username ID" readonly autocomplete="off">
                 <input id="dm-target-username" type="text" placeholder="Peer Username ID (e.g. user-4210)" autocomplete="off">
-                <button id="dm-open-btn" class="btn-cyan" type="button">CHAT WITH USER</button>
+                <div id="dm-presence-status" class="presence-status">Enter a Username ID to check this Wi-Fi node.</div>
+                <button id="dm-open-btn" class="btn-cyan" type="button" disabled>CHAT WITH USER</button>
                 <div id="dm-error" class="err hidden"></div>
               </div>
 
@@ -2863,7 +3067,12 @@ class BitVoidLocalServer(
                 </div>
                 <div class="top-actions">
                   <button id="live-class-btn" class="btn-ghost" type="button">LIVE CLASS / CALL</button>
-                  <button id="toggle-media-btn" class="btn-ghost" type="button">MEDIA (<span id="public-count">${publicItems.size}</span>)</button>
+                  <button id="voice-call-btn" class="call-icon-btn hidden" type="button" title="Start voice call" aria-label="Start voice call">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.2 3.5 9.7 7.9 7.9 10c1.3 2.8 3.4 4.9 6.2 6.2l2.1-1.8 4.4 2.5-.7 3.1c-.2.8-.9 1.4-1.8 1.4C9.6 20.9 3.1 14.4 2.6 5.9c0-.9.6-1.6 1.4-1.8l3.2-.6Z"/></svg>
+                  </button>
+                  <button id="video-call-btn" class="call-icon-btn video-call hidden" type="button" title="Start video call" aria-label="Start video call">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="12" height="12" rx="2"/><path d="m15 10 6-3v10l-6-3z"/></svg>
+                  </button>
                   <button id="exit-channel-btn" class="btn-danger hidden" type="button">EXIT</button>
                 </div>
               </header>
@@ -2977,6 +3186,9 @@ class BitVoidLocalServer(
               var dmTargetInput = document.getElementById('dm-target-username');
               var dmOpenBtn = document.getElementById('dm-open-btn');
               var dmErr = document.getElementById('dm-error');
+              var dmPresenceStatus = document.getElementById('dm-presence-status');
+              var presenceCheckTimer = null;
+              var peerIsAvailable = false;
 
               var activeAvatar = document.getElementById('active-channel-avatar');
               var activeTitle = document.getElementById('active-channel-title');
@@ -2986,6 +3198,8 @@ class BitVoidLocalServer(
               var peersEl = document.getElementById('channel-peers');
               var exitChannelBtn = document.getElementById('exit-channel-btn');
               var liveClassBtn = document.getElementById('live-class-btn');
+              var voiceCallBtn = document.getElementById('voice-call-btn');
+              var videoCallBtn = document.getElementById('video-call-btn');
               var liveStagePanel = document.getElementById('live-stage-panel');
               var closeLiveStageBtn = document.getElementById('close-live-stage-btn');
               var liveModeBadge = document.getElementById('live-mode-badge');
@@ -3098,6 +3312,73 @@ class BitVoidLocalServer(
                 return (mb / 1024).toFixed(2) + ' GB';
               }
 
+              function setPresenceStatus(state, text) {
+                peerIsAvailable = state === 'online';
+                dmPresenceStatus.className = 'presence-status' + (state ? (' ' + state) : '');
+                dmPresenceStatus.textContent = text;
+                dmOpenBtn.disabled = !peerIsAvailable;
+                voiceCallBtn.disabled = activeDm ? !peerIsAvailable : false;
+                videoCallBtn.disabled = activeDm ? !peerIsAvailable : false;
+              }
+
+              function refreshPeerPresence() {
+                var target = (dmTargetInput.value || '').trim().replace(/^@/, '');
+                if (!target) {
+                  setPresenceStatus('', 'Enter a Username ID to check this Wi-Fi node.');
+                  return Promise.resolve(false);
+                }
+                setPresenceStatus('checking', 'Checking this BitVoid node...');
+                return fetch('/api/users', { cache: 'no-store' })
+                  .then(function (r) {
+                    if (!r.ok) throw new Error('Presence check failed');
+                    return r.json();
+                  })
+                  .then(function (data) {
+                    var users = Array.isArray(data.users) ? data.users : [];
+                    var found = users.some(function (u) {
+                      return String(u).toLowerCase() === target.toLowerCase();
+                    });
+                    if (found) {
+                      setPresenceStatus('online', '@' + target + ' is available on this Wi-Fi node.');
+                    } else {
+                      setPresenceStatus('offline', '@' + target + ' is not available on this Wi-Fi node.');
+                    }
+                    return found;
+                  })
+                  .catch(function () {
+                    setPresenceStatus('offline', 'Unable to verify this user on the local node.');
+                    return false;
+                  });
+              }
+
+              function registerBrowserPresence() {
+                var username = (dmMyInput.value || '').trim().replace(/^@/, '');
+                if (!username) return Promise.resolve();
+                return fetch('/api/users/register', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ username: username }),
+                  cache: 'no-store'
+                }).then(function () {
+                  if ((dmTargetInput.value || '').trim()) return refreshPeerPresence();
+                }).catch(function () {});
+              }
+
+              function friendlyFileType(name, mime) {
+                var m = String(mime || '').toLowerCase();
+                var lower = String(name || '').toLowerCase();
+                if (m.indexOf('video/') === 0) return 'Video';
+                if (m.indexOf('audio/') === 0) return 'Audio';
+                if (m.indexOf('image/') === 0) return 'Image';
+                if (m.indexOf('pdf') !== -1 || lower.endsWith('.pdf')) return 'PDF document';
+                if (m.indexOf('word') !== -1 || lower.endsWith('.doc') || lower.endsWith('.docx')) return 'Word document';
+                if (m.indexOf('sheet') !== -1 || m.indexOf('excel') !== -1 || lower.endsWith('.xls') || lower.endsWith('.xlsx') || lower.endsWith('.csv')) return 'Spreadsheet';
+                if (m.indexOf('presentation') !== -1 || m.indexOf('powerpoint') !== -1 || lower.endsWith('.ppt') || lower.endsWith('.pptx')) return 'Presentation';
+                if (m.indexOf('text/') === 0 || lower.endsWith('.txt')) return 'Text document';
+                if (m.indexOf('zip') !== -1 || m.indexOf('archive') !== -1 || lower.endsWith('.zip') || lower.endsWith('.rar') || lower.endsWith('.7z')) return 'Archive';
+                return 'File';
+              }
+
               function buildMediaCard(item, tokenQuery) {
                 var card = document.createElement('article');
                 card.className = 'card';
@@ -3148,7 +3429,7 @@ class BitVoidLocalServer(
                 banner.className = 'wa-welcome-pill';
                 banner.innerHTML = '<strong>' + esc(chName) + '</strong> · ' +
                   (isPublic ? 'Public BitVoid channel space.' : 'Private ID-locked channel space.') +
-                  ' Tap <strong>MEDIA</strong> top-right for channel streams.';
+                  ' Share videos and files securely from the composer below.';
                 chatBox.appendChild(banner);
               }
 
@@ -3161,24 +3442,27 @@ class BitVoidLocalServer(
                 var mime = String(att.mimeType || '').toLowerCase();
                 var preview = '';
                 if (mime.indexOf('image/') === 0) {
-                  preview = '<img class="msg-att-img" src="' + esc(sUrl) + '" alt="' + esc(att.name) + '" loading="lazy">';
+                  preview = '<div class="msg-att-preview"><img class="msg-att-img" src="' + esc(sUrl) + '" alt="' + esc(att.name) + '" loading="lazy"></div>';
                 } else if (mime.indexOf('video/') === 0) {
-                  preview = '<video controls preload="metadata" playsinline><source src="' + esc(sUrl) + '" type="' + esc(att.mimeType) + '"></video>';
+                  preview = '<div class="msg-att-preview"><video controls preload="metadata" playsinline><source src="' + esc(sUrl) + '" type="' + esc(att.mimeType) + '"></video></div>';
                 } else if (mime.indexOf('audio/') === 0) {
-                  preview = '<audio controls preload="metadata"><source src="' + esc(sUrl) + '" type="' + esc(att.mimeType) + '"></audio>';
+                  preview = '<div class="msg-att-preview"><audio controls preload="metadata"><source src="' + esc(sUrl) + '" type="' + esc(att.mimeType) + '"></audio></div>';
                 }
-                var ext = (att.name.split('.').pop() || 'FILE').toUpperCase().slice(0, 6);
+                var rawExt = att.name.indexOf('.') >= 0 ? att.name.split('.').pop() : '';
+                var ext = (rawExt || 'FILE').toUpperCase().slice(0, 6);
+                var typeLabel = friendlyFileType(att.name, att.mimeType);
                 return '<div class="msg-attachment">' +
                   '<div class="msg-att-head">' +
-                    '<span class="badge">' + esc(ext) + '</span>' +
-                    '<div class="meta">' +
-                      '<div class="msg-att-name">' + esc(att.name) + '</div>' +
-                      '<div class="msg-att-sub">' + fmtBytes(att.size || 0) + ' · ' + esc(att.mimeType || 'file') + '</div>' +
+                    '<span class="msg-att-icon">' + esc(ext) + '</span>' +
+                    '<div class="msg-att-meta">' +
+                      '<div class="msg-att-name" title="' + esc(att.name) + '">' + esc(att.name) + '</div>' +
+                      '<div class="msg-att-sub">' + esc(typeLabel) + ' · ' + fmtBytes(att.size || 0) + '</div>' +
                     '</div>' +
+                    '<span class="msg-att-state">LOCAL FILE</span>' +
                   '</div>' +
                   preview +
                   '<div class="msg-att-actions">' +
-                    '<a class="btn btn-primary" href="' + esc(sUrl) + '" target="_blank">OPEN</a>' +
+                    '<a class="btn btn-primary" href="' + esc(sUrl) + '" target="_blank" rel="noopener">OPEN</a>' +
                     '<a class="btn btn-ghost" href="' + esc(dUrl) + '" download="' + esc(att.name) + '">DOWNLOAD</a>' +
                   '</div>' +
                 '</div>';
@@ -3196,7 +3480,7 @@ class BitVoidLocalServer(
                 var textHtml = msg.text ? ('<div class="msg-text">' + esc(msg.text) + '</div>') : '';
                 var ticks = isMine ? '<span class="msg-ticks">&#10003;&#10003;</span>' : '';
                 row.innerHTML =
-                  '<div class="bubble">' +
+                  '<div class="bubble' + (msg.attachment ? ' has-attachment' : '') + '">' +
                     senderLine +
                     attHtml +
                     textHtml +
@@ -3212,6 +3496,22 @@ class BitVoidLocalServer(
                 pill.textContent = text;
                 chatBox.appendChild(pill);
                 chatBox.scrollTop = chatBox.scrollHeight;
+              }
+
+              function appendUploadProgress(file) {
+                var row = document.createElement('div');
+                row.className = 'msg-row out';
+                row.innerHTML =
+                  '<div class="bubble upload-bubble">' +
+                    '<span class="upload-spinner" aria-hidden="true"></span>' +
+                    '<div style="min-width:0;flex:1;">' +
+                      '<div class="upload-state-name">' + esc(file.name || 'Local file') + '</div>' +
+                      '<div class="upload-state-sub">Uploading ' + fmtBytes(file.size || 0) + ' securely to this node...</div>' +
+                    '</div>' +
+                  '</div>';
+                chatBox.appendChild(row);
+                chatBox.scrollTop = chatBox.scrollHeight;
+                return row;
               }
 
               function connectChannelWs(channelId, token) {
@@ -3263,7 +3563,10 @@ class BitVoidLocalServer(
                 activeCallsign.textContent = data.callsign || '-';
                 chatInput.placeholder = 'Message ' + label + '...';
                 liveClassBtn.textContent = 'LIVE CLASS / CALL';
-                liveClassBtn.classList.remove('active');
+                liveClassBtn.classList.remove('active', 'hidden');
+                voiceCallBtn.classList.add('hidden');
+                videoCallBtn.classList.add('hidden');
+                rtcStartCallBtn.classList.remove('hidden');
                 if (data.isPublic) {
                   activeAvatar.textContent = '#';
                   activeAvatar.className = 'wa-top-avatar';
@@ -3396,11 +3699,18 @@ class BitVoidLocalServer(
                     activeBadge.textContent = 'DIRECT CHAT';
                     activeBadge.className = 'pill';
                     peersEl.textContent = '2';
-                    liveClassBtn.textContent = 'VOICE / VIDEO CALL';
+                    liveClassBtn.classList.add('hidden');
+                    voiceCallBtn.classList.remove('hidden');
+                    videoCallBtn.classList.remove('hidden');
+                    rtcStartCallBtn.classList.add('hidden');
+                    voiceCallBtn.classList.remove('active');
+                    videoCallBtn.classList.remove('active');
+                    dmTargetInput.value = data.peerUsername;
+                    refreshPeerPresence();
                     exitChannelBtn.classList.remove('hidden');
                     var banner = document.createElement('div');
                     banner.className = 'wa-welcome-pill';
-                    banner.innerHTML = '<strong>Direct Chat with @' + esc(data.peerUsername) + '</strong> · You: <strong>@' + esc(data.myUsername) + '</strong> · Tap VOICE / VIDEO CALL above to call.';
+                    banner.innerHTML = '<strong>Direct Chat with @' + esc(data.peerUsername) + '</strong> · You: <strong>@' + esc(data.myUsername) + '</strong> · Use the phone or camera icons above to call.';
                     chatBox.appendChild(banner);
                     (data.messages || []).forEach(appendChatMessage);
                     connectDirectWs(data.dmId, data.token);
@@ -3459,15 +3769,19 @@ class BitVoidLocalServer(
                     .then(function (st) {
                       if (!st) return;
                       if (st.isActive) {
-                        liveClassBtn.textContent = 'CALL ACTIVE (' + (st.participantCount || 1) + ')';
-                        liveClassBtn.classList.add('active');
+                        voiceCallBtn.classList.add('active');
+                        videoCallBtn.classList.add('active');
+                        voiceCallBtn.title = 'Join active call (' + (st.participantCount || 1) + ' peers)';
+                        videoCallBtn.title = 'Join active video call (' + (st.participantCount || 1) + ' peers)';
                         if (!rtcSocket) {
-                          liveRoomStatusEl.textContent = 'Direct Voice/Video Call ringing/active · ' + (st.participantCount || 1) + ' peer(s)';
+                          liveRoomStatusEl.textContent = 'Direct call ringing/active · ' + (st.participantCount || 1) + ' peer(s)';
                           renderRtcParticipants(st.peers || []);
                         }
                       } else if (!rtcSocket) {
-                        liveClassBtn.textContent = 'VOICE / VIDEO CALL';
-                        liveClassBtn.classList.remove('active');
+                        voiceCallBtn.classList.remove('active');
+                        videoCallBtn.classList.remove('active');
+                        voiceCallBtn.title = 'Start voice call';
+                        videoCallBtn.title = 'Start video call';
                       }
                     })
                     .catch(function () {});
@@ -3664,7 +3978,7 @@ class BitVoidLocalServer(
                   .then(function (r) { return r.json(); })
                   .then(function (data) {
                     var list = data.media || data.videos || [];
-                    publicCountEl.textContent = String(list.length);
+                    if (publicCountEl) publicCountEl.textContent = String(list.length);
                     var nextSig = list.map(function (v) { return v.id; }).join('|');
                     if (nextSig !== currentPublicFeedSig) {
                       currentPublicFeedSig = nextSig;
@@ -3761,10 +4075,11 @@ class BitVoidLocalServer(
                 if (activeDm) {
                   rtcStartClassHostBtn.classList.add('hidden');
                   rtcJoinClassStudentBtn.classList.add('hidden');
-                  rtcStartCallBtn.textContent = 'CALL @' + activeDm.peerUsername;
+                  rtcStartCallBtn.classList.add('hidden');
                 } else {
                   rtcStartClassHostBtn.classList.remove('hidden');
                   rtcJoinClassStudentBtn.classList.remove('hidden');
+                  rtcStartCallBtn.classList.remove('hidden');
                   rtcStartCallBtn.textContent = 'START VOICE / VIDEO CALL';
                 }
                 if (joined) {
@@ -3958,7 +4273,7 @@ class BitVoidLocalServer(
                 liveRoomStatusEl.textContent = 'Left live session';
               }
 
-              function joinRtcSession(mode, role, startWithMedia, roomOverride, presetClassCode) {
+              function joinRtcSession(mode, role, startWithMedia, roomOverride, presetClassCode, startWithVideo) {
                 var targetRoom = roomOverride || (activeDm ? activeDm.dmId : (activeChannel ? activeChannel.channelId : ''));
                 var targetToken = activeDm ? activeDm.token : (activeChannel ? activeChannel.token : '');
                 var targetChannelId = activeChannel ? activeChannel.channelId : targetRoom;
@@ -3980,8 +4295,9 @@ class BitVoidLocalServer(
                 rtcPeerId = 'web_' + Math.random().toString(36).slice(2, 10);
                 rtcMuted = (role === 'STUDENT_VIEWER');
 
+                var wantsVideo = startWithVideo !== false && role !== 'STUDENT_VIEWER';
                 var mediaPromise = (startWithMedia && navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
-                  ? navigator.mediaDevices.getUserMedia({ audio: true, video: role !== 'STUDENT_VIEWER' })
+                  ? navigator.mediaDevices.getUserMedia({ audio: true, video: wantsVideo })
                       .catch(function () {
                         return navigator.mediaDevices.getUserMedia({ audio: true, video: false })
                           .catch(function () { return null; });
@@ -4107,10 +4423,25 @@ class BitVoidLocalServer(
                 });
               }
 
+              function startDirectCall(withVideo) {
+                if (!activeDm) return;
+                refreshPeerPresence().then(function (available) {
+                  if (!available) {
+                    dmErr.textContent = 'Call unavailable: @' + activeDm.peerUsername + ' is not active on this Wi-Fi node.';
+                    dmErr.classList.remove('hidden');
+                    openSidebar();
+                    return;
+                  }
+                  joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true, null, null, withVideo);
+                });
+              }
+
               liveClassBtn.addEventListener('click', function () {
                 liveStagePanel.classList.toggle('hidden');
                 updateRtcControlsUi();
               });
+              voiceCallBtn.addEventListener('click', function () { startDirectCall(false); });
+              videoCallBtn.addEventListener('click', function () { startDirectCall(true); });
               closeLiveStageBtn.addEventListener('click', function () {
                 liveStagePanel.classList.add('hidden');
               });
@@ -4287,14 +4618,16 @@ class BitVoidLocalServer(
               menuToggleBtn.addEventListener('click', openSidebar);
               closeSidebarBtn.addEventListener('click', closeSidebar);
               backdrop.addEventListener('click', closeSidebar);
-              toggleMediaBtn.addEventListener('click', function () {
-                var hidden = mediaDrawer.classList.toggle('hidden');
-                if (hidden) {
-                  toggleMediaBtn.classList.remove('active');
-                } else {
-                  toggleMediaBtn.classList.add('active');
-                }
-              });
+              if (toggleMediaBtn) {
+                toggleMediaBtn.addEventListener('click', function () {
+                  var hidden = mediaDrawer.classList.toggle('hidden');
+                  if (hidden) {
+                    toggleMediaBtn.classList.remove('active');
+                  } else {
+                    toggleMediaBtn.classList.add('active');
+                  }
+                });
+              }
 
               unlockBtn.addEventListener('click', function () {
                 var cid = (privateIdInput.value || '').trim();
@@ -4305,6 +4638,16 @@ class BitVoidLocalServer(
                 }
                 joinChannel(cid, privateKeyInput.value || '');
               });
+              dmTargetInput.addEventListener('input', function () {
+                peerIsAvailable = false;
+                dmOpenBtn.disabled = true;
+                dmErr.classList.add('hidden');
+                if (presenceCheckTimer) clearTimeout(presenceCheckTimer);
+                presenceCheckTimer = setTimeout(refreshPeerPresence, 350);
+              });
+              dmTargetInput.addEventListener('keydown', function (ev) {
+                if (ev.key === 'Enter' && !dmOpenBtn.disabled) dmOpenBtn.click();
+              });
               dmOpenBtn.addEventListener('click', function () {
                 var mu = (dmMyInput.value || '').trim();
                 var tu = (dmTargetInput.value || '').trim();
@@ -4313,7 +4656,14 @@ class BitVoidLocalServer(
                   dmErr.classList.remove('hidden');
                   return;
                 }
-                openDirectChat(mu, tu);
+                refreshPeerPresence().then(function (available) {
+                  if (!available) {
+                    dmErr.textContent = 'This user is not active on the current BitVoid node or local Wi-Fi.';
+                    dmErr.classList.remove('hidden');
+                    return;
+                  }
+                  openDirectChat(mu, tu);
+                });
               });
               exitChannelBtn.addEventListener('click', function () {
                 leaveRtcSession();
@@ -4333,6 +4683,7 @@ class BitVoidLocalServer(
                 if (caption) fd.append('caption', caption);
                 chatAttachBtn.disabled = true;
                 chatAttachBtn.textContent = '...';
+                var uploadProgressRow = appendUploadProgress(file);
                 var uploadUrl = activeDm
                   ? ('/api/dm/' + encodeURIComponent(activeDm.dmId) + '/upload')
                   : ('/api/channels/' + encodeURIComponent(activeChannel.channelId) + '/upload');
@@ -4349,11 +4700,15 @@ class BitVoidLocalServer(
                     return r.json();
                   })
                   .then(function (d) {
+                    if (uploadProgressRow && uploadProgressRow.parentNode) uploadProgressRow.parentNode.removeChild(uploadProgressRow);
+                    uploadProgressRow = null;
                     if (caption) chatInput.value = '';
                     if (d && d.message) appendChatMessage(d.message);
                     refreshActiveChannelMedia();
                   })
                   .catch(function (err) {
+                    if (uploadProgressRow && uploadProgressRow.parentNode) uploadProgressRow.parentNode.removeChild(uploadProgressRow);
+                    uploadProgressRow = null;
                     appendNotice(err.message || 'File upload failed');
                   })
                   .finally(function () {
@@ -4368,8 +4723,10 @@ class BitVoidLocalServer(
               });
 
               bindSidebarClicks();
+              registerBrowserPresence();
               pollChannelsAndFeed();
               setInterval(pollChannelsAndFeed, 3000);
+              setInterval(registerBrowserPresence, 15000);
             })();
           </script>
         </body>
