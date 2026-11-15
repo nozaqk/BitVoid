@@ -28,7 +28,7 @@ import com.bitvoid.network.model.HostState
 import com.bitvoid.network.model.HotspotSecurityMode
 import com.bitvoid.network.model.HotspotStatus
 import com.bitvoid.network.server.BitVoidLocalServer
-import com.example.R
+import com.bitvoid.network.R
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import kotlinx.coroutines.CoroutineScope

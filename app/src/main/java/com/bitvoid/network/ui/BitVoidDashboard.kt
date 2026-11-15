@@ -152,7 +152,7 @@ import com.bitvoid.network.ui.theme.VoidSurface
 import com.bitvoid.network.ui.theme.VoidSurfaceElevated
 import com.bitvoid.network.ui.theme.VoidTextPrimary
 import com.bitvoid.network.ui.theme.VoidTextSecondary
-import com.example.R
+import com.bitvoid.network.R
 import java.util.Locale
 import kotlinx.coroutines.launch
 
