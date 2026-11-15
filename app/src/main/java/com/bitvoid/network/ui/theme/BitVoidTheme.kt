@@ -13,7 +13,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.R
+import com.bitvoid.network.R
 
 val VoidObsidian = Color(0xFF0D1117)
 val VoidSurface = Color(0xFF161B22)

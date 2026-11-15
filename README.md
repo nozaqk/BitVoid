@@ -4,7 +4,7 @@ BitVoid is an offline-first Android local video node. A host phone creates an An
 
 ## Features
 
-- Kotlin, Jetpack Compose, Material 3, coroutines, minSdk 26, target SDK 36, compile SDK 36.1
+- Kotlin, Jetpack Compose, Material 3, coroutines, minSdk 26, target/compile SDK 36
 - Polished dark responsive interface with adaptive launcher branding, accessible status states, and clear host/client workflows
 - Persistent connected-device foreground service and low-importance notification
 - Persisted pre-launch selector for **Open Visible** or **WPA2 Visible** hosting; hidden SSIDs are never supported
@@ -51,7 +51,7 @@ app/src/main/java/com/bitvoid/network/
 
 ## Build
 
-1. Install Android Studio with Android SDK 36.1 and JDK 17.
+1. Install Android Studio with Android SDK 36 and JDK 17.
 2. Open this repository and let Gradle sync.
 3. Build from Android Studio, or run:
 
