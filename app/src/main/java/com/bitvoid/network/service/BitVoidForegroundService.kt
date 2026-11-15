@@ -465,9 +465,9 @@ class BitVoidForegroundService : Service() {
                             isHiddenSsid = softAp.isHiddenSsid
                         } else {
                             val wifiCfg = reservation.wifiConfiguration
-                            activeSsid = wifiCfg.SSID?.removeSurrounding("\"").orEmpty()
-                            activePassphrase = wifiCfg.preSharedKey.orEmpty().removeSurrounding("\"")
-                            isHiddenSsid = wifiCfg.hiddenSSID
+                            activeSsid = wifiCfg?.SSID?.removeSurrounding("\"").orEmpty()
+                            activePassphrase = wifiCfg?.preSharedKey.orEmpty().removeSurrounding("\"")
+                            isHiddenSsid = wifiCfg?.hiddenSSID ?: false
                         }
 
                         if (isHiddenSsid) {
