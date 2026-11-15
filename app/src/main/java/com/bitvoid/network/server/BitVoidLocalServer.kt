@@ -2636,20 +2636,20 @@ class BitVoidLocalServer(
             }
             .send-circle:hover { filter: brightness(1.08); }
             .bubble.has-attachment {
-              width: min(620px, 82%);
-              max-width: min(620px, 82%);
+              width: min(460px, 76%);
+              max-width: min(460px, 76%);
               padding: 6px 6px 5px;
             }
             .msg-attachment {
               position: relative;
               overflow: hidden;
               margin-bottom: 5px;
-              padding: 12px;
+              padding: 10px;
               border-radius: 12px;
               background: linear-gradient(145deg, rgba(20, 29, 38, 0.98), rgba(10, 15, 21, 0.98));
               border: 1px solid rgba(139, 148, 158, 0.28);
               display: grid;
-              gap: 10px;
+              gap: 8px;
               box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
             }
             .msg-attachment::before {
@@ -2706,35 +2706,6 @@ class BitVoidLocalServer(
               background: rgba(0, 209, 255, 0.08);
               font-size: 9px;
               font-weight: 700;
-            }
-            .msg-att-preview {
-              overflow: hidden;
-              width: 100%;
-              border-radius: 10px;
-              background: #05070A;
-              border: 1px solid var(--border);
-            }
-            .msg-att-preview video,
-            .msg-att-preview audio {
-              display: block;
-              width: 100%;
-              margin: 0;
-              border: 0;
-              border-radius: 0;
-              background: #05070A;
-            }
-            .msg-att-preview video {
-              max-height: 360px;
-              aspect-ratio: 16 / 9;
-              object-fit: contain;
-            }
-            .msg-att-preview audio { min-height: 48px; }
-            .msg-att-img {
-              display: block;
-              width: 100%;
-              max-height: 340px;
-              object-fit: contain;
-              background: #05070A;
             }
             .msg-att-actions {
               display: grid;
@@ -2956,8 +2927,6 @@ class BitVoidLocalServer(
               .call-icon-btn svg { width: 19px; height: 19px; }
               .bubble.has-attachment { width: 94%; max-width: 94%; }
               .msg-att-state { display: none; }
-              .msg-att-preview video { max-height: 240px; }
-              .msg-att-img { max-height: 260px; }
             }
 
             /* PC / Desktop Split-Pane Format */
@@ -3066,7 +3035,7 @@ class BitVoidLocalServer(
                   </div>
                 </div>
                 <div class="top-actions">
-                  <button id="live-class-btn" class="btn-ghost" type="button">LIVE CLASS / CALL</button>
+                  <button id="live-class-btn" class="btn-ghost hidden" type="button">LIVE CLASS / CALL</button>
                   <button id="voice-call-btn" class="call-icon-btn hidden" type="button" title="Start voice call" aria-label="Start voice call">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.2 3.5 9.7 7.9 7.9 10c1.3 2.8 3.4 4.9 6.2 6.2l2.1-1.8 4.4 2.5-.7 3.1c-.2.8-.9 1.4-1.8 1.4C9.6 20.9 3.1 14.4 2.6 5.9c0-.9.6-1.6 1.4-1.8l3.2-.6Z"/></svg>
                   </button>
@@ -3439,15 +3408,6 @@ class BitVoidLocalServer(
                 var q = token ? ('?token=' + encodeURIComponent(token)) : '';
                 var sUrl = (att.streamUrl || '') + q;
                 var dUrl = (att.downloadUrl || att.streamUrl || '') + q;
-                var mime = String(att.mimeType || '').toLowerCase();
-                var preview = '';
-                if (mime.indexOf('image/') === 0) {
-                  preview = '<div class="msg-att-preview"><img class="msg-att-img" src="' + esc(sUrl) + '" alt="' + esc(att.name) + '" loading="lazy"></div>';
-                } else if (mime.indexOf('video/') === 0) {
-                  preview = '<div class="msg-att-preview"><video controls preload="metadata" playsinline><source src="' + esc(sUrl) + '" type="' + esc(att.mimeType) + '"></video></div>';
-                } else if (mime.indexOf('audio/') === 0) {
-                  preview = '<div class="msg-att-preview"><audio controls preload="metadata"><source src="' + esc(sUrl) + '" type="' + esc(att.mimeType) + '"></audio></div>';
-                }
                 var rawExt = att.name.indexOf('.') >= 0 ? att.name.split('.').pop() : '';
                 var ext = (rawExt || 'FILE').toUpperCase().slice(0, 6);
                 var typeLabel = friendlyFileType(att.name, att.mimeType);
@@ -3460,7 +3420,6 @@ class BitVoidLocalServer(
                     '</div>' +
                     '<span class="msg-att-state">LOCAL FILE</span>' +
                   '</div>' +
-                  preview +
                   '<div class="msg-att-actions">' +
                     '<a class="btn btn-primary" href="' + esc(sUrl) + '" target="_blank" rel="noopener">OPEN</a>' +
                     '<a class="btn btn-ghost" href="' + esc(dUrl) + '" download="' + esc(att.name) + '">DOWNLOAD</a>' +
@@ -3563,7 +3522,11 @@ class BitVoidLocalServer(
                 activeCallsign.textContent = data.callsign || '-';
                 chatInput.placeholder = 'Message ' + label + '...';
                 liveClassBtn.textContent = 'LIVE CLASS / CALL';
-                liveClassBtn.classList.remove('active', 'hidden');
+                liveClassBtn.classList.remove('active');
+                liveClassBtn.classList.toggle(
+                  'hidden',
+                  data.channelId === '${BitVoidChannelManager.DEFAULT_PUBLIC_CHANNEL_ID}'
+                );
                 voiceCallBtn.classList.add('hidden');
                 videoCallBtn.classList.add('hidden');
                 rtcStartCallBtn.classList.remove('hidden');

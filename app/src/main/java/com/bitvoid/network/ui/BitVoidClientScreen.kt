@@ -141,8 +141,11 @@ private fun ClientGatewayBarCard(
                 }
                 ClientBadgeChip(
                     label = when (clientState.connectionStatus) {
-                        ClientConnectionStatus.CONNECTED -> "NODE LINKED"
-                        ClientConnectionStatus.CONNECTING -> "FINDING NODE"
+                        ClientConnectionStatus.CONNECTED -> {
+                            val count = clientState.linkedNodeUrls.size.coerceAtLeast(1)
+                            "$count ${if (count == 1) "NODE" else "NODES"} LINKED"
+                        }
+                        ClientConnectionStatus.CONNECTING -> "FINDING NODES"
                         ClientConnectionStatus.SCANNING -> "SCANNING"
                         ClientConnectionStatus.ERROR -> "CHECK WI-FI"
                         ClientConnectionStatus.DISCONNECTED -> "READY"
@@ -157,7 +160,7 @@ private fun ClientGatewayBarCard(
             }
 
             Text(
-                text = "BitVoid does not join or switch Wi-Fi here. Connect this phone to Wi-Fi first, then select that same network and link its local BitVoid gateway.",
+                text = "BitVoid never joins or switches Wi-Fi here. Connect this phone in Android first, then select that same network to link every local BitVoid node through one shared gateway.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = VoidTextSecondary
             )
@@ -276,12 +279,21 @@ private fun ClientGatewayBarCard(
             }
 
             if (clientState.connectionStatus == ClientConnectionStatus.CONNECTED) {
+                val linkedCount = clientState.linkedNodeUrls.size.coerceAtLeast(1)
                 Text(
-                    text = "Gateway: ${clientState.targetPortalUrl} · Open Hub to use channels, calls, files, and Live Classes.",
+                    text = "${linkedCount} ${if (linkedCount == 1) "node" else "nodes"} linked · Shared gateway: ${clientState.targetPortalUrl}",
                     style = MaterialTheme.typography.bodySmall,
                     color = VoidMint,
                     modifier = Modifier.testTag("client_linked_gateway")
                 )
+                if (clientState.linkedNodeUrls.size > 1) {
+                    Text(
+                        text = "All reachable BitVoid nodes on this Wi-Fi are linked and use the same gateway selection.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = VoidTextSecondary,
+                        modifier = Modifier.testTag("client_linked_node_count")
+                    )
+                }
             }
 
             Button(
@@ -314,7 +326,7 @@ private fun ClientGatewayBarCard(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = if (clientState.connectionStatus == ClientConnectionStatus.CONNECTING) {
-                        "FINDING BITVOID NODE"
+                        "LINKING BITVOID NODES"
                     } else {
                         "CONNECT NODE"
                     },
@@ -323,7 +335,7 @@ private fun ClientGatewayBarCard(
             }
 
             Text(
-                text = "BitVoid also checks the current Wi-Fi silently and links automatically when another BitVoid gateway appears.",
+                text = "BitVoid silently refreshes all nodes on this Wi-Fi. If none exists, Connect Nodes starts a local gateway on the current Wi-Fi and shares it.",
                 style = MaterialTheme.typography.labelSmall,
                 color = VoidTextSecondary
             )

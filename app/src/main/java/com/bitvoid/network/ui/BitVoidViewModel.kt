@@ -24,6 +24,7 @@ import com.bitvoid.network.client.BitVoidClientRepository
 import com.bitvoid.network.client.ChannelCallStatus
 import com.bitvoid.network.client.ClientChannelSession
 import com.bitvoid.network.client.ClientChatMessage
+import com.bitvoid.network.client.ClientNodeConnectResult
 import com.bitvoid.network.client.ClientDirectSession
 import com.bitvoid.network.client.ClientWsStatus
 import com.bitvoid.network.client.RemoteChannelSummary
@@ -330,14 +331,17 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         }
         viewModelScope.launch {
             var lastStatus: ClientConnectionStatus? = null
+            var lastGatewayUrl: String? = null
             clientState.collect { cState ->
                 if (cState.connectionStatus == ClientConnectionStatus.CONNECTED) {
+                    val gatewayChanged = lastGatewayUrl != cState.targetPortalUrl
                     clientRepository.setGatewayBaseUrl(cState.targetPortalUrl)
-                    if (lastStatus != ClientConnectionStatus.CONNECTED) {
+                    if (lastStatus != ClientConnectionStatus.CONNECTED || gatewayChanged) {
                         refreshClientChannels(cState.targetPortalUrl)
                         refreshClientPublicMedia(cState.targetPortalUrl)
                         refreshLiveClasses(cState.targetPortalUrl)
                     }
+                    lastGatewayUrl = cState.targetPortalUrl
                 }
                 lastStatus = cState.connectionStatus
             }
@@ -362,12 +366,12 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             }
         }
         viewModelScope.launch {
-            // Discover another BitVoid gateway over the phone's existing Wi-Fi without
-            // showing discovery progress or asking Android to switch networks.
+            // Refresh every BitVoid node over the phone's existing Wi-Fi without exposing
+            // discovery progress or asking Android to switch networks. A phone hosting its own
+            // gateway still scans so all peers converge on the same deterministic gateway.
             delay(1_500L)
             while (isActive) {
-                if (!hostState.value.isServerRunning &&
-                    clientState.value.connectionStatus != ClientConnectionStatus.CONNECTING &&
+                if (clientState.value.connectionStatus != ClientConnectionStatus.CONNECTING &&
                     !clientState.value.isScanning
                 ) {
                     clientManager.discoverAndLinkSilently()
@@ -699,7 +703,26 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
 
     fun connectToNode(ssid: String) {
         viewModelScope.launch {
-            clientManager.connectToNode(ssid)
+            when (clientManager.connectToNode(ssid, reportMissingNode = false)) {
+                ClientNodeConnectResult.NO_NODE -> {
+                    // No gateway is present yet. Host one on the Wi-Fi Android already joined,
+                    // wait for the LAN server to bind, then rescan and link all reachable nodes.
+                    BitVoidForegroundService.startServerOnly(appContext)
+                    var attempts = 0
+                    while (!hostState.value.isServerRunning &&
+                        hostState.value.status != HotspotStatus.ERROR &&
+                        attempts < 60
+                    ) {
+                        delay(100L)
+                        attempts++
+                    }
+                    clientManager.connectToNode(ssid, reportMissingNode = true)
+                }
+
+                ClientNodeConnectResult.CONNECTED,
+                ClientNodeConnectResult.NO_WIFI,
+                ClientNodeConnectResult.WRONG_WIFI -> Unit
+            }
         }
     }
 
