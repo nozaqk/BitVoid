@@ -74,6 +74,17 @@ jobs:
       - name: Rename APK
         run: cp app/build/outputs/apk/debug/app-debug.apk "BitVoid-${{ steps.tag.outputs.name }}.apk"
 
+      - name: Remove older releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          current_tag="${{ steps.tag.outputs.name }}"
+          gh release list --limit 100 --json tagName --jq '.[].tagName' | while IFS= read -r tag; do
+            if [ "$tag" != "$current_tag" ]; then
+              gh release delete "$tag" --yes --cleanup-tag
+            fi
+          done
+
       - name: Create release and upload APK
         uses: softprops/action-gh-release@v2
         with:
@@ -81,3 +92,4 @@ jobs:
           name: BitVoid ${{ steps.tag.outputs.name }}
           files: BitVoid-${{ steps.tag.outputs.name }}.apk
           generate_release_notes: true
+          overwrite_files: true
