@@ -99,7 +99,12 @@ class BitVoidLocalServerTest {
         assertTrue(html.contains("channels-sidebar"))
         assertTrue(html.contains("menu-toggle-btn"))
         assertTrue(html.contains("wa-composer"))
-        assertTrue(html.contains("toggle-media-btn"))
+        assertFalse(html.contains("id=\"toggle-media-btn\""))
+        assertTrue(html.contains("id=\"voice-call-btn\""))
+        assertTrue(html.contains("id=\"video-call-btn\""))
+        assertTrue(html.contains("id=\"dm-presence-status\""))
+        assertTrue(html.contains("msg-att-preview"))
+        assertTrue(html.contains("upload-spinner"))
         assertTrue(html.contains("General Chat"))
         assertTrue(html.contains("PUBLIC"))
         assertTrue(html.contains("PRIVATE"))
@@ -497,6 +502,49 @@ class BitVoidLocalServerTest {
         } finally {
             repo.release()
         }
+    }
+
+    @Test
+    fun `direct chat rejects usernames that are not present on the same node`() {
+        val baseUrl = "http://127.0.0.1:$testPort"
+
+        fun postJson(path: String, body: String): Pair<Int, String> {
+            val conn = (URL("$baseUrl$path").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json")
+                outputStream.write(body.toByteArray(StandardCharsets.UTF_8))
+            }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val responseBody = stream?.readBytes()?.let { String(it, StandardCharsets.UTF_8) }.orEmpty()
+            conn.disconnect()
+            return code to responseBody
+        }
+
+        assertEquals(
+            200,
+            postJson("/api/users/register", """{"username":"alice-online"}""").first
+        )
+
+        val unavailable = postJson(
+            "/api/dm/open",
+            """{"myUsername":"alice-online","targetUsername":"bob-offline"}"""
+        )
+        assertEquals(404, unavailable.first)
+        assertEquals("user_not_on_node", JSONObject(unavailable.second).getString("error"))
+        assertTrue(JSONObject(unavailable.second).getString("detail").contains("not available"))
+
+        assertEquals(
+            200,
+            postJson("/api/users/register", """{"username":"bob-offline"}""").first
+        )
+        val available = postJson(
+            "/api/dm/open",
+            """{"myUsername":"alice-online","targetUsername":"bob-offline"}"""
+        )
+        assertEquals(200, available.first)
+        assertEquals("bob-offline", JSONObject(available.second).getString("peerUsername"))
     }
 
     @Test

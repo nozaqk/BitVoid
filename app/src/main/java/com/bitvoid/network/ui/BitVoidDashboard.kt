@@ -574,7 +574,7 @@ private fun BitVoidHeaderBar(
                 Spacer(modifier = Modifier.width(12.dp))
                 Column {
                     Text(
-                        text = "BITVOID // v1.4.1",
+                        text = "BITVOID // v1.4.2",
                         style = MaterialTheme.typography.titleLarge,
                         color = VoidTextPrimary
                     )

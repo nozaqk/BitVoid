@@ -376,6 +376,18 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             }
         }
         viewModelScope.launch {
+            // Presence is intentionally ephemeral: active app users renew their username on
+            // this local node, while users that leave the Wi-Fi disappear automatically.
+            delay(2_000L)
+            while (isActive) {
+                BitVoidDirectChatManager.registerUser(_myUsername.value)
+                if (clientState.value.connectionStatus == ClientConnectionStatus.CONNECTED) {
+                    clientRepository.registerUsername(_myUsername.value)
+                }
+                delay(15_000L)
+            }
+        }
+        viewModelScope.launch {
             callManager.activeRoomId.collect { roomId ->
                 if (roomId == null) {
                     _loadedMaterialDecks.value = emptyMap()
