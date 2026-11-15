@@ -1,9 +1,15 @@
 package com.bitvoid.network.server
 
 import android.content.Context
+import com.bitvoid.network.call.BitVoidSignalingServer
+import com.bitvoid.network.call.LiveClassMaterial
+import com.bitvoid.network.call.ParticipantRole
+import com.bitvoid.network.call.SignalingPeer
+import com.bitvoid.network.call.SignalingSessionMode
 import com.bitvoid.network.channel.BitVoidChannel
 import com.bitvoid.network.channel.BitVoidChannelManager
 import com.bitvoid.network.channel.ChannelSession
+import com.bitvoid.network.client.BitVoidClientManager
 import com.bitvoid.network.direct.BitVoidDirectChatManager
 import com.bitvoid.network.direct.DirectSession
 import com.bitvoid.network.media.BitVoidMediaItem
@@ -30,6 +36,7 @@ import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import org.json.JSONArray
 import org.json.JSONObject
 
 class BitVoidLocalServer(
@@ -114,6 +121,43 @@ class BitVoidLocalServer(
 
     override fun serve(session: IHTTPSession): Response {
         val rawUri = session.uri ?: "/"
+        if (rawUri.startsWith("/ws/signaling")) {
+            if (!isSameWifiNodeRequest(session)) {
+                val respToken = generateEphemeralToken()
+                val forbidden = buildPaddedTextResponse(
+                    status = Response.Status.FORBIDDEN,
+                    mimeType = "application/json; charset=utf-8",
+                    body = """{"error":"forbidden","detail":"Signaling restricted to peers on the same local Wi-Fi node."}""",
+                    token = respToken
+                )
+                applyAnonymizationHeaders(forbidden, respToken)
+                return forbidden
+            }
+            @Suppress("DEPRECATION")
+            val params = session.parms
+            val pathRoom = rawUri.removePrefix("/ws/signaling").trimStart('/')
+            val roomId = URLDecoder.decode(
+                params["roomId"] ?: params["channelId"] ?: pathRoom,
+                StandardCharsets.UTF_8.name()
+            ).trim()
+            val channelId = URLDecoder.decode(
+                params["channelId"] ?: roomId,
+                StandardCharsets.UTF_8.name()
+            ).trim()
+            val token = extractAuthToken(session)
+            if (roomId.isBlank() || !BitVoidSignalingServer.authorizeSignalingJoin(roomId, channelId, token)) {
+                val respToken = generateEphemeralToken()
+                val unauthorized = buildPaddedTextResponse(
+                    status = Response.Status.UNAUTHORIZED,
+                    mimeType = "application/json; charset=utf-8",
+                    body = """{"error":"unauthorized","detail":"Valid Live Class ID or channel access required for WebRTC signaling"}""",
+                    token = respToken
+                )
+                applyAnonymizationHeaders(unauthorized, respToken)
+                return unauthorized
+            }
+            return super.serve(session)
+        }
         if (rawUri.startsWith("/ws/chat/") || rawUri.startsWith("/ws/dm/") || isWebsocketRequested(session)) {
             val isDmWs = rawUri.startsWith("/ws/dm/")
             val targetId = when {
@@ -163,6 +207,46 @@ class BitVoidLocalServer(
     override fun openWebSocket(handshake: IHTTPSession): WebSocket {
         val rawUri = handshake.uri ?: ""
         val token = extractAuthToken(handshake)
+        if (rawUri.startsWith("/ws/signaling")) {
+            @Suppress("DEPRECATION")
+            val params = handshake.parms
+            val pathRoom = rawUri.removePrefix("/ws/signaling").trimStart('/')
+            val roomId = URLDecoder.decode(
+                params["roomId"] ?: params["channelId"] ?: pathRoom,
+                StandardCharsets.UTF_8.name()
+            ).trim()
+            val channelId = URLDecoder.decode(
+                params["channelId"] ?: roomId,
+                StandardCharsets.UTF_8.name()
+            ).trim()
+            if (roomId.isBlank() || !BitVoidSignalingServer.authorizeSignalingJoin(roomId, channelId, token)) {
+                throw SecurityException("Unauthorized WebRTC signaling WebSocket session")
+            }
+            val mode = runCatching {
+                SignalingSessionMode.valueOf(params["mode"].orEmpty())
+            }.getOrDefault(SignalingSessionMode.VOICE_VIDEO_CALL)
+            val role = runCatching {
+                ParticipantRole.valueOf(params["role"].orEmpty())
+            }.getOrDefault(ParticipantRole.SPEAKER)
+            val peerId = params["peerId"]
+            val displayName = params["name"]
+            val isMuted = params["isMuted"]?.toBooleanStrictOrNull() ?: false
+            val isVideoOn = params["isVideoOn"]?.toBooleanStrictOrNull() ?: false
+            val isScreenSharing = params["isScreenSharing"]?.toBooleanStrictOrNull() ?: false
+
+            return BitVoidSignalingWebSocket(
+                handshakeRequest = handshake,
+                roomId = roomId,
+                channelId = channelId,
+                requestedPeerId = peerId,
+                displayName = displayName,
+                mode = mode,
+                role = role,
+                initialMuted = isMuted,
+                initialVideoOn = isVideoOn,
+                initialScreenSharing = isScreenSharing
+            )
+        }
         if (rawUri.startsWith("/ws/dm/")) {
             val dmId = URLDecoder.decode(rawUri.removePrefix("/ws/dm/"), StandardCharsets.UTF_8.name())
             val directSession = BitVoidDirectChatManager.validateToken(token, requiredDmId = dmId)
@@ -238,6 +322,23 @@ class BitVoidLocalServer(
                     handleDirectMessagePost(dmId, session, authToken, ephemeralToken)
                 }
 
+                // Live Class & Shared Presentation Materials POST endpoints
+                method == Method.POST && rawUri == "/api/live-class/start" -> {
+                    requireSameWifiNode(session)
+                    handleLiveClassStart(session, ephemeralToken)
+                }
+
+                method == Method.POST && rawUri == "/api/live-class/join" -> {
+                    requireSameWifiNode(session)
+                    handleLiveClassJoin(session, ephemeralToken)
+                }
+
+                method == Method.POST && rawUri.startsWith("/api/live-class/") && rawUri.endsWith("/materials") -> {
+                    requireSameWifiNode(session)
+                    val roomId = extractLiveClassRoomId(rawUri, "/materials")
+                    handleLiveClassMaterialUpload(roomId, session, authToken, ephemeralToken)
+                }
+
                 // Legacy Room POST endpoints
                 method == Method.POST && (rawUri == "/api/rooms/unlock" || rawUri == "/api/room/join") -> {
                     handleRoomUnlock(session, ephemeralToken)
@@ -293,6 +394,16 @@ class BitVoidLocalServer(
                     )
                 }
 
+                rawUri.startsWith("/api/channels/") && rawUri.endsWith("/call/status") -> {
+                    val channelId = extractChannelIdFromPath(rawUri, "/call/status")
+                    serveChannelCallStatusJson(
+                        channelId = channelId,
+                        authToken = authToken,
+                        ephemeralToken = ephemeralToken,
+                        isHead = (method == Method.HEAD)
+                    )
+                }
+
                 // Direct User Chat GET endpoints
                 rawUri == "/api/users" -> {
                     serveUsersListJson(ephemeralToken, isHead = (method == Method.HEAD))
@@ -302,6 +413,38 @@ class BitVoidLocalServer(
                     val dmId = extractDmIdFromPath(rawUri, "/messages")
                     serveDirectMessages(
                         dmId = dmId,
+                        authToken = authToken,
+                        ephemeralToken = ephemeralToken,
+                        isHead = (method == Method.HEAD)
+                    )
+                }
+
+                rawUri.startsWith("/api/dm/") && rawUri.endsWith("/call/status") -> {
+                    val dmId = extractDmIdFromPath(rawUri, "/call/status")
+                    serveDirectCallStatusJson(
+                        dmId = dmId,
+                        authToken = authToken,
+                        ephemeralToken = ephemeralToken,
+                        isHead = (method == Method.HEAD)
+                    )
+                }
+
+                rawUri == "/api/live-classes" -> {
+                    requireSameWifiNode(session)
+                    @Suppress("DEPRECATION")
+                    val username = session.parms["username"]?.trim()
+                    serveLiveClassesListJson(
+                        username = username,
+                        ephemeralToken = ephemeralToken,
+                        isHead = (method == Method.HEAD)
+                    )
+                }
+
+                rawUri.startsWith("/api/live-class/") && rawUri.endsWith("/materials") -> {
+                    requireSameWifiNode(session)
+                    val roomId = extractLiveClassRoomId(rawUri, "/materials")
+                    serveLiveClassMaterialsJson(
+                        roomId = roomId,
                         authToken = authToken,
                         ephemeralToken = ephemeralToken,
                         isHead = (method == Method.HEAD)
@@ -453,6 +596,11 @@ class BitVoidLocalServer(
 
     private fun extractDmIdFromPath(rawUri: String, suffix: String): String {
         val inner = rawUri.removePrefix("/api/dm/").removeSuffix(suffix)
+        return URLDecoder.decode(inner, StandardCharsets.UTF_8.name())
+    }
+
+    private fun extractLiveClassRoomId(rawUri: String, suffix: String): String {
+        val inner = rawUri.removePrefix("/api/live-class/").removeSuffix(suffix)
         return URLDecoder.decode(inner, StandardCharsets.UTF_8.name())
     }
 
@@ -624,6 +772,412 @@ class BitVoidLocalServer(
             status = Response.Status.OK,
             mimeType = "application/json; charset=utf-8",
             body = payload,
+            token = ephemeralToken,
+            isHead = isHead
+        )
+    }
+
+    private fun serveChannelCallStatusJson(
+        channelId: String,
+        authToken: String?,
+        ephemeralToken: String,
+        isHead: Boolean
+    ): Response {
+        val channel = BitVoidChannelManager.getChannel(channelId)
+            ?: return buildPaddedTextResponse(
+                status = Response.Status.NOT_FOUND,
+                mimeType = "application/json; charset=utf-8",
+                body = """{"error":"channel_not_found"}""",
+                token = ephemeralToken
+            )
+
+        if (!channel.isPublic) {
+            BitVoidChannelManager.validateToken(authToken, requiredChannelId = channelId)
+                ?: return unauthorizedResponse(ephemeralToken)
+        }
+
+        return buildPaddedTextResponse(
+            status = Response.Status.OK,
+            mimeType = "application/json; charset=utf-8",
+            body = BitVoidSignalingServer.roomStatusToJson(channelId),
+            token = ephemeralToken,
+            isHead = isHead
+        )
+    }
+
+    private fun serveDirectCallStatusJson(
+        dmId: String,
+        authToken: String?,
+        ephemeralToken: String,
+        isHead: Boolean
+    ): Response {
+        BitVoidDirectChatManager.validateToken(authToken, requiredDmId = dmId)
+            ?: return unauthorizedResponse(ephemeralToken)
+        return buildPaddedTextResponse(
+            status = Response.Status.OK,
+            mimeType = "application/json; charset=utf-8",
+            body = BitVoidSignalingServer.roomStatusToJson(dmId),
+            token = ephemeralToken,
+            isHead = isHead
+        )
+    }
+
+    private fun isSameWifiNodeRequest(session: IHTTPSession): Boolean {
+        val remote = session.remoteIpAddress?.trim()?.takeIf { it.isNotEmpty() } ?: return true
+        var cleanIp = remote.substringBefore('%').trim('[', ']')
+        if (cleanIp.startsWith("::ffff:", ignoreCase = true)) {
+            cleanIp = cleanIp.substring(7)
+        }
+        if (cleanIp.isEmpty() ||
+            cleanIp == "127.0.0.1" ||
+            cleanIp == "::1" ||
+            cleanIp == "0:0:0:0:0:0:0:1"
+        ) {
+            return true
+        }
+        return BitVoidClientManager.isPrivateLocalHost(cleanIp)
+    }
+
+    private fun requireSameWifiNode(session: IHTTPSession) {
+        if (!isSameWifiNodeRequest(session)) {
+            throw SecurityException("Access allowed only for devices connected on the same local Wi-Fi node.")
+        }
+    }
+
+    private fun serveLiveClassesListJson(
+        username: String?,
+        ephemeralToken: String,
+        isHead: Boolean
+    ): Response {
+        val cleanRequestUser = username?.trim()?.removePrefix("@").orEmpty()
+        val list = BitVoidSignalingServer.listLiveClassesForUser(cleanRequestUser)
+        val arr = JSONArray().apply {
+            list.forEach { state ->
+                val isCreator = cleanRequestUser.isNotEmpty() &&
+                    state.creatorUsername.equals(cleanRequestUser, ignoreCase = true)
+                put(
+                    JSONObject().apply {
+                        put("roomId", state.roomId)
+                        put("channelId", state.channelId)
+                        put("name", state.className.ifBlank { state.roomId })
+                        put("classCode", if (isCreator) state.classCode.orEmpty() else "")
+                        put("creatorUsername", state.creatorUsername)
+                        put("isHidden", state.isHidden)
+                        put("participantCount", state.peers.size)
+                        put("isActive", state.isActive)
+                    }
+                )
+            }
+        }
+        val payload = JSONObject().apply {
+            put("liveClasses", arr)
+        }.toString()
+        return buildPaddedTextResponse(
+            status = Response.Status.OK,
+            mimeType = "application/json; charset=utf-8",
+            body = payload,
+            token = ephemeralToken,
+            isHead = isHead
+        )
+    }
+
+    private fun handleLiveClassStart(session: IHTTPSession, ephemeralToken: String): Response {
+        val rawBody = readPostBody(session)
+        val json = try {
+            JSONObject(rawBody)
+        } catch (_: Exception) {
+            return buildPaddedTextResponse(
+                status = Response.Status.BAD_REQUEST,
+                mimeType = "application/json; charset=utf-8",
+                body = """{"error":"invalid_json"}""",
+                token = ephemeralToken
+            )
+        }
+
+        val rawName = json.optString("name", json.optString("title", "")).trim()
+        if (rawName.isEmpty()) {
+            return buildPaddedTextResponse(
+                status = Response.Status.BAD_REQUEST,
+                mimeType = "application/json; charset=utf-8",
+                body = """{"error":"missing_name","detail":"Enter a Live Class name."}""",
+                token = ephemeralToken
+            )
+        }
+        val isHidden = json.optBoolean("isHidden", false)
+        val creatorUsername = json.optString("username", "").trim().removePrefix("@").ifEmpty {
+            "Host-${ephemeralToken.takeLast(4).uppercase(Locale.US)}"
+        }
+
+        val invite = BitVoidSignalingServer.registerLiveClass(
+            rawName = rawName,
+            rawCreatorUsername = creatorUsername,
+            isHidden = isHidden
+        )
+
+        BitVoidChannelManager.createChannel(
+            rawName = invite.className,
+            isPublic = false,
+            rawChannelId = invite.roomId,
+            rawPrivateKey = null,
+            mediaIds = emptySet(),
+            isHidden = true
+        )
+
+        val hostSession = BitVoidChannelManager.issueLiveClassStudentSession(
+            rawChannelId = invite.channelId,
+            rawUsername = creatorUsername
+        ) ?: return buildPaddedTextResponse(
+            status = Response.Status.INTERNAL_ERROR,
+            mimeType = "application/json; charset=utf-8",
+            body = """{"error":"channel_init_failed"}""",
+            token = ephemeralToken
+        )
+
+        val payload = JSONObject().apply {
+            put("token", hostSession.token)
+            put("classCode", invite.classCode)
+            put("roomId", invite.roomId)
+            put("channelId", hostSession.channelId)
+            put("name", invite.className)
+            put("isPublic", false)
+            put("isHidden", invite.isHidden)
+            put("creatorUsername", invite.creatorUsername)
+            put("callsign", hostSession.callsign)
+            put("activeMaterialId", "")
+            put("activePageIndex", 0)
+            put("media", JSONArray())
+            put("videos", JSONArray())
+            put("messages", JSONArray())
+            put("materials", JSONArray())
+        }.toString()
+
+        return buildPaddedTextResponse(
+            status = Response.Status.OK,
+            mimeType = "application/json; charset=utf-8",
+            body = payload,
+            token = ephemeralToken
+        )
+    }
+
+    private fun handleLiveClassJoin(session: IHTTPSession, ephemeralToken: String): Response {
+        val rawBody = readPostBody(session)
+        val json = try {
+            JSONObject(rawBody)
+        } catch (_: Exception) {
+            return buildPaddedTextResponse(
+                status = Response.Status.BAD_REQUEST,
+                mimeType = "application/json; charset=utf-8",
+                body = """{"error":"invalid_json"}""",
+                token = ephemeralToken
+            )
+        }
+
+        val rawCode = json.optString(
+            "classCode",
+            json.optString("liveClassId", json.optString("code", ""))
+        ).trim()
+        val rawRoomId = json.optString("roomId", "").trim()
+        val username = json.optString("username", "").trim().takeIf { it.isNotEmpty() }
+
+        val invite = if (rawCode.isNotEmpty()) {
+            BitVoidSignalingServer.resolveLiveClassByCode(rawCode)
+                ?: return buildPaddedTextResponse(
+                    status = Response.Status.NOT_FOUND,
+                    mimeType = "application/json; charset=utf-8",
+                    body = """{"error":"live_class_not_found","detail":"Incorrect or inactive Live Class ID. Verify the CLS- code and try again."}""",
+                    token = ephemeralToken
+                )
+        } else if (rawRoomId.isNotEmpty()) {
+            BitVoidSignalingServer.resolveLiveClassByRoomIdForUser(rawRoomId, username)
+                ?: return buildPaddedTextResponse(
+                    status = Response.Status.FORBIDDEN,
+                    mimeType = "application/json; charset=utf-8",
+                    body = """{"error":"live_class_hidden_or_not_found","detail":"Hidden Live Class requires the exact CLS- Class ID and connection to the same Wi-Fi node."}""",
+                    token = ephemeralToken
+                )
+        } else {
+            return buildPaddedTextResponse(
+                status = Response.Status.BAD_REQUEST,
+                mimeType = "application/json; charset=utf-8",
+                body = """{"error":"missing_class_id","detail":"Enter the Live Class ID (CLS-...) shared by the host."}""",
+                token = ephemeralToken
+            )
+        }
+
+        val studentSession = BitVoidChannelManager.issueLiveClassStudentSession(
+            rawChannelId = invite.channelId,
+            rawUsername = username
+        ) ?: return buildPaddedTextResponse(
+            status = Response.Status.NOT_FOUND,
+            mimeType = "application/json; charset=utf-8",
+            body = """{"error":"channel_not_found","detail":"Live Class channel is no longer available."}""",
+            token = ephemeralToken
+        )
+
+        val diskItems = BitVoidMediaManager.refreshFromDisk(context)
+        BitVoidChannelManager.syncMediaCatalog(diskItems)
+        val channel = BitVoidChannelManager.getChannel(studentSession.channelId)
+        val mediaJson = buildMediaItemsArrayJson(BitVoidChannelManager.getChannelMedia(studentSession.channelId))
+        val historyJson = BitVoidChannelManager.getChatHistory(studentSession.channelId)
+            .joinToString(",") { BitVoidChannelManager.messageToJson(it) }
+        val roomState = BitVoidSignalingServer.getRoomState(invite.roomId)
+        val materialsJson = BitVoidSignalingServer.materialsToJsonArray(roomState?.materials.orEmpty()).toString()
+
+        val payload = JSONObject().apply {
+            put("token", studentSession.token)
+            put("classCode", invite.classCode)
+            put("roomId", invite.roomId)
+            put("channelId", studentSession.channelId)
+            put("name", invite.className.ifBlank { channel?.name ?: studentSession.channelId })
+            put("isPublic", studentSession.isPublic)
+            put("isHidden", invite.isHidden)
+            put("creatorUsername", invite.creatorUsername)
+            put("callsign", studentSession.callsign)
+            put("activeMaterialId", roomState?.activeMaterialId.orEmpty())
+            put("activePageIndex", roomState?.activePageIndex ?: 0)
+        }.toString().dropLast(1) +
+            ""","media":[$mediaJson],"videos":[$mediaJson],"messages":[$historyJson],"materials":$materialsJson}"""
+
+        return buildPaddedTextResponse(
+            status = Response.Status.OK,
+            mimeType = "application/json; charset=utf-8",
+            body = payload,
+            token = ephemeralToken
+        )
+    }
+
+    private fun handleLiveClassMaterialUpload(
+        roomId: String,
+        session: IHTTPSession,
+        authToken: String?,
+        ephemeralToken: String
+    ): Response {
+        val cleanRoom = roomId.trim()
+        if (cleanRoom.isEmpty()) {
+            return buildPaddedTextResponse(
+                status = Response.Status.BAD_REQUEST,
+                mimeType = "application/json; charset=utf-8",
+                body = """{"error":"invalid_room"}""",
+                token = ephemeralToken
+            )
+        }
+
+        val isDm = cleanRoom.startsWith("dm__", ignoreCase = false)
+        var uploaderName = "Presenter"
+        var targetChannelId: String? = null
+
+        if (isDm) {
+            val dmValidated = BitVoidDirectChatManager.validateToken(authToken, requiredDmId = cleanRoom)
+                ?: return unauthorizedResponse(ephemeralToken)
+            uploaderName = dmValidated.myUsername
+        } else {
+            val channel = BitVoidChannelManager.getChannel(cleanRoom)
+                ?: BitVoidSignalingServer.getRoomState(cleanRoom)?.let { BitVoidChannelManager.getChannel(it.channelId) }
+                ?: return buildPaddedTextResponse(
+                    status = Response.Status.NOT_FOUND,
+                    mimeType = "application/json; charset=utf-8",
+                    body = """{"error":"channel_not_found"}""",
+                    token = ephemeralToken
+                )
+            val validated = BitVoidChannelManager.validateToken(authToken, requiredChannelId = channel.channelId)
+            if (!channel.isPublic && validated == null) {
+                return unauthorizedResponse(ephemeralToken)
+            }
+            targetChannelId = channel.channelId
+            uploaderName = validated?.callsign ?: "Host-${ephemeralToken.takeLast(4).uppercase(Locale.US)}"
+        }
+
+        val (importedItem, _) = parseAndImportUploadedFile(session)
+            ?: return buildPaddedTextResponse(
+                status = Response.Status.BAD_REQUEST,
+                mimeType = "application/json; charset=utf-8",
+                body = """{"error":"missing_file","detail":"Select a document, PPT, PDF, or file to share."}""",
+                token = ephemeralToken
+            )
+
+        val encodedMediaId = urlEncode(importedItem.id)
+        val streamUrl: String
+        val downloadUrl: String
+        if (isDm) {
+            val encodedDm = urlEncode(cleanRoom)
+            streamUrl = "/stream/dm/$encodedDm/$encodedMediaId"
+            downloadUrl = "/download/dm/$encodedDm/$encodedMediaId"
+            BitVoidDirectChatManager.appendMessage(
+                dmId = cleanRoom,
+                senderUsername = uploaderName,
+                rawText = "Shared document in call: ${importedItem.title}",
+                attachment = importedItem
+            )
+        } else {
+            val chId = targetChannelId!!
+            streamUrl = "/stream/$encodedMediaId"
+            downloadUrl = "/download/$encodedMediaId"
+            BitVoidChannelManager.addMediaToChannel(chId, importedItem.id)
+            BitVoidChannelManager.appendChatMessage(
+                channelId = chId,
+                callsign = uploaderName,
+                rawText = "Presented Live Class document: ${importedItem.title}",
+                attachment = importedItem
+            )
+        }
+
+        val material = LiveClassMaterial(
+            id = importedItem.id,
+            fileName = importedItem.title,
+            mimeType = importedItem.mimeType,
+            sizeBytes = importedItem.size,
+            uploadedBy = uploaderName,
+            downloadUrl = downloadUrl,
+            streamUrl = streamUrl,
+            uploadedAtMs = System.currentTimeMillis()
+        )
+        BitVoidSignalingServer.addMaterialToRoom(cleanRoom, material, setAsActive = true)
+        val roomState = BitVoidSignalingServer.getRoomState(cleanRoom)
+        val body = JSONObject().apply {
+            put("ok", true)
+            put("roomId", cleanRoom)
+            put("material", BitVoidSignalingServer.materialToJson(material))
+            put("activeMaterialId", roomState?.activeMaterialId ?: material.id)
+            put("activePageIndex", roomState?.activePageIndex ?: 0)
+            put("materials", BitVoidSignalingServer.materialsToJsonArray(roomState?.materials ?: listOf(material)))
+        }.toString()
+
+        return buildPaddedTextResponse(
+            status = Response.Status.OK,
+            mimeType = "application/json; charset=utf-8",
+            body = body,
+            token = ephemeralToken
+        )
+    }
+
+    private fun serveLiveClassMaterialsJson(
+        roomId: String,
+        authToken: String?,
+        ephemeralToken: String,
+        isHead: Boolean
+    ): Response {
+        val cleanRoom = roomId.trim()
+        if (cleanRoom.startsWith("dm__", ignoreCase = false)) {
+            BitVoidDirectChatManager.validateToken(authToken, requiredDmId = cleanRoom)
+                ?: return unauthorizedResponse(ephemeralToken)
+        } else {
+            val channel = BitVoidChannelManager.getChannel(cleanRoom)
+                ?: BitVoidSignalingServer.getRoomState(cleanRoom)?.let { BitVoidChannelManager.getChannel(it.channelId) }
+                ?: return buildPaddedTextResponse(
+                    status = Response.Status.NOT_FOUND,
+                    mimeType = "application/json; charset=utf-8",
+                    body = """{"error":"channel_not_found"}""",
+                    token = ephemeralToken
+                )
+            if (!channel.isPublic) {
+                BitVoidChannelManager.validateToken(authToken, requiredChannelId = channel.channelId)
+                    ?: return unauthorizedResponse(ephemeralToken)
+            }
+        }
+        return buildPaddedTextResponse(
+            status = Response.Status.OK,
+            mimeType = "application/json; charset=utf-8",
+            body = BitVoidSignalingServer.roomMaterialsToJson(cleanRoom),
             token = ephemeralToken,
             isHead = isHead
         )
@@ -1316,11 +1870,11 @@ class BitVoidLocalServer(
         response.addHeader("X-Frame-Options", "SAMEORIGIN")
         response.addHeader(
             "Content-Security-Policy",
-            "default-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; media-src 'self'; img-src 'self'; object-src 'none'; frame-ancestors 'none';"
+            "default-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; media-src 'self' blob: mediastream:; img-src 'self'; object-src 'none'; frame-ancestors 'none';"
         )
         response.addHeader(
             "Permissions-Policy",
-            "interest-cohort=(), camera=(), microphone=(), geolocation=(), usb=()"
+            "interest-cohort=(), camera=(self), microphone=(self), display-capture=(self), geolocation=(), usb=()"
         )
         response.addHeader("X-BitVoid-Session", ephemeralToken)
         response.addHeader("X-BitVoid-Block-Align", CONSTANT_BLOCK_SIZE.toString())
@@ -2006,6 +2560,171 @@ class BitVoidLocalServer(
             }
             .empty-title { color: var(--mint); font-weight: 700; margin-bottom: 4px; }
 
+            /* Live Class & Voice/Video Call Stage */
+            .live-stage-panel {
+              flex-shrink: 0;
+              max-height: 52vh;
+              overflow-y: auto;
+              background: #0F151D;
+              border-bottom: 1px solid var(--border);
+              padding: 10px 12px;
+              display: grid;
+              gap: 10px;
+            }
+            .live-head {
+              display: flex;
+              flex-wrap: wrap;
+              align-items: center;
+              justify-content: space-between;
+              gap: 8px;
+            }
+            .live-badge-pulse {
+              font-size: 10px;
+              font-weight: 700;
+              padding: 3px 9px;
+              border-radius: 999px;
+              border: 1px solid var(--crimson);
+              color: var(--crimson);
+              background: rgba(255, 77, 109, 0.14);
+            }
+            .live-video-grid {
+              display: grid;
+              grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+              gap: 8px;
+            }
+            .live-video-tile {
+              position: relative;
+              background: #05070A;
+              border: 1px solid var(--border);
+              border-radius: 10px;
+              overflow: hidden;
+              min-height: 132px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+            }
+            .live-video-tile.teacher-tile {
+              border-color: var(--mint);
+              grid-column: 1 / -1;
+              min-height: 190px;
+            }
+            .live-video-tile video {
+              width: 100%;
+              height: 100%;
+              max-height: 260px;
+              object-fit: contain;
+              margin: 0;
+              border: none;
+              border-radius: 0;
+            }
+            .live-tile-label {
+              position: absolute;
+              left: 8px;
+              bottom: 8px;
+              background: rgba(13, 17, 23, 0.85);
+              border: 1px solid var(--border);
+              color: var(--text);
+              font-size: 10px;
+              font-weight: 700;
+              padding: 2px 7px;
+              border-radius: 6px;
+            }
+            .live-participants-grid {
+              display: flex;
+              flex-wrap: wrap;
+              gap: 6px;
+            }
+            .live-participant-chip {
+              display: inline-flex;
+              align-items: center;
+              gap: 6px;
+              padding: 4px 9px;
+              border-radius: 999px;
+              background: var(--surface);
+              border: 1px solid var(--border);
+              font-size: 11px;
+              color: var(--text);
+            }
+            .live-participant-chip.teacher {
+              border-color: var(--mint);
+              color: var(--mint);
+            }
+            .live-controls-bar {
+              display: flex;
+              flex-wrap: wrap;
+              gap: 6px;
+              align-items: center;
+            }
+            .btn-amber { background: var(--amber); color: var(--bg); }
+            .live-class-code-pill {
+              display: inline-flex;
+              align-items: center;
+              gap: 6px;
+              padding: 4px 10px;
+              border-radius: 999px;
+              border: 1px solid var(--mint);
+              background: rgba(0, 255, 156, 0.14);
+              color: var(--mint);
+              font-size: 11px;
+              font-weight: 700;
+            }
+            .live-join-id-row {
+              display: flex;
+              flex-wrap: wrap;
+              gap: 6px;
+              align-items: center;
+              padding: 8px 10px;
+              border-radius: 10px;
+              background: var(--bg);
+              border: 1px solid rgba(56, 189, 248, 0.45);
+            }
+            .live-join-id-row input {
+              flex: 1;
+              min-width: 160px;
+            }
+            .live-doc-stage {
+              background: #080C12;
+              border: 1px solid rgba(56, 189, 248, 0.55);
+              border-radius: 10px;
+              padding: 8px 10px;
+              display: grid;
+              gap: 8px;
+            }
+            .live-doc-toolbar {
+              display: flex;
+              flex-wrap: wrap;
+              align-items: center;
+              justify-content: space-between;
+              gap: 6px;
+            }
+            .live-docs-bar {
+              display: flex;
+              flex-wrap: wrap;
+              gap: 6px;
+            }
+            .live-doc-chip {
+              background: var(--surface);
+              border: 1px solid var(--border);
+              color: var(--text);
+              padding: 4px 9px;
+              border-radius: 8px;
+              font-size: 11px;
+              font-weight: 600;
+            }
+            .live-doc-chip.active {
+              border-color: var(--mint);
+              color: var(--mint);
+              background: rgba(0, 255, 156, 0.12);
+            }
+            .live-doc-preview-frame {
+              width: 100%;
+              height: 220px;
+              border: 1px solid var(--border);
+              border-radius: 8px;
+              background: #05070A;
+              object-fit: contain;
+            }
+
             /* PC / Desktop Split-Pane Format */
             @media (min-width: 900px) {
               .wa-app {
@@ -2026,6 +2745,9 @@ class BitVoidLocalServer(
               }
               .media-drawer {
                 max-height: 42vh;
+              }
+              .live-stage-panel {
+                max-height: 54vh;
               }
               .bubble {
                 max-width: 68%;
@@ -2079,6 +2801,13 @@ class BitVoidLocalServer(
                 <button id="dm-open-btn" class="btn-cyan" type="button">CHAT WITH USER</button>
                 <div id="dm-error" class="err hidden"></div>
               </div>
+
+              <div class="unlock-box">
+                <div class="section-title" style="margin:0;color:var(--cyan);">JOIN LIVE CLASS (STUDENT ID)</div>
+                <input id="sidebar-class-code-input" type="text" placeholder="Enter Live Class ID (e.g. CLS-XXXX-XX)" autocomplete="off">
+                <button id="sidebar-join-class-btn" class="btn-primary" type="button">JOIN BY CLASS ID</button>
+                <div id="sidebar-class-error" class="err hidden"></div>
+              </div>
             </aside>
 
             <!-- Main Chat & Media Workspace -->
@@ -2101,6 +2830,7 @@ class BitVoidLocalServer(
                   </div>
                 </div>
                 <div class="top-actions">
+                  <button id="live-class-btn" class="btn-ghost" type="button">LIVE CLASS / CALL</button>
                   <button id="toggle-media-btn" class="btn-ghost" type="button">MEDIA (<span id="public-count">${publicItems.size}</span>)</button>
                   <button id="exit-channel-btn" class="btn-danger hidden" type="button">EXIT</button>
                 </div>
@@ -2118,6 +2848,66 @@ class BitVoidLocalServer(
                     $publicFeedHtml
                   </div>
                 </div>
+              </section>
+
+              <!-- Live Class & Voice/Video Call WebRTC Stage -->
+              <section id="live-stage-panel" class="live-stage-panel hidden">
+                <div class="live-head">
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <span id="live-mode-badge" class="pill">LIVE CLASS &amp; CALL STAGE</span>
+                    <span id="live-class-code-pill" class="live-class-code-pill hidden">
+                      <span>CLASS ID: <strong id="live-class-code-text">-</strong></span>
+                      <button id="live-copy-code-btn" class="btn-ghost" style="padding:2px 6px;font-size:10px;" type="button">COPY</button>
+                    </span>
+                    <span id="live-room-status" class="muted-note">Local Wi-Fi WebRTC (/ws/signaling · zero external servers)</span>
+                  </div>
+                  <button id="close-live-stage-btn" class="btn-ghost" type="button">HIDE</button>
+                </div>
+
+                <div id="live-launcher-controls" class="live-controls-bar">
+                  <button id="rtc-start-class-host-btn" class="btn-primary" type="button">START LIVE CLASS (TEACHER)</button>
+                  <button id="rtc-join-class-student-btn" class="btn-cyan" type="button">JOIN LIVE CLASS (STUDENT)</button>
+                  <button id="rtc-start-call-btn" class="btn-amber" type="button">START VOICE / VIDEO CALL</button>
+                </div>
+
+                <div id="live-join-id-row" class="live-join-id-row hidden">
+                  <input id="rtc-student-class-id-input" type="text" placeholder="Enter Live Class ID (e.g. CLS-ABCD-12)" autocomplete="off">
+                  <button id="rtc-student-class-id-submit" class="btn-cyan" type="button">ENTER CLASS</button>
+                  <button id="rtc-student-class-id-cancel" class="btn-ghost" type="button">CANCEL</button>
+                </div>
+
+                <div id="live-active-controls" class="live-controls-bar hidden">
+                  <button id="rtc-mute-btn" class="btn-ghost" type="button">MIC ON</button>
+                  <button id="rtc-cam-btn" class="btn-ghost" type="button">CAM OFF</button>
+                  <button id="rtc-share-screen-btn" class="btn-cyan" type="button">SHARE SCREEN</button>
+                  <input id="rtc-doc-input" type="file" hidden accept=".pdf,.ppt,.pptx,.doc,.docx,.txt,.csv,.png,.jpg,.jpeg,.webp,*/*">
+                  <button id="rtc-upload-doc-btn" class="btn-amber" type="button">UPLOAD DOC / PPT / PDF</button>
+                  <button id="rtc-leave-btn" class="btn-danger" type="button">LEAVE</button>
+                  <button id="rtc-end-session-btn" class="btn-danger hidden" type="button">END CLASS</button>
+                </div>
+
+                <div id="live-error-msg" class="err hidden"></div>
+
+                <div id="live-presentation-stage" class="live-doc-stage hidden">
+                  <div class="live-doc-toolbar">
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                      <span class="pill pill-cyan">SHARED DOC / SLIDES</span>
+                      <strong id="live-doc-title" style="font-size:12px;">-</strong>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                      <button id="rtc-slide-prev-btn" class="btn-ghost" style="padding:4px 8px;font-size:10px;" type="button">PREV</button>
+                      <span id="rtc-slide-page-label" class="muted-note">Page 1</span>
+                      <button id="rtc-slide-next-btn" class="btn-ghost" style="padding:4px 8px;font-size:10px;" type="button">NEXT</button>
+                      <a id="rtc-doc-open-link" class="btn btn-primary" style="padding:4px 8px;font-size:10px;" href="#" target="_blank">OPEN</a>
+                      <a id="rtc-doc-download-link" class="btn btn-ghost" style="padding:4px 8px;font-size:10px;" href="#" download>DOWNLOAD</a>
+                    </div>
+                  </div>
+                  <div id="live-materials-list" class="live-docs-bar"></div>
+                  <div id="live-doc-viewer-box"></div>
+                </div>
+
+                <div id="live-video-grid" class="live-video-grid"></div>
+                <div id="live-participants-grid" class="live-participants-grid"></div>
               </section>
 
               <!-- WhatsApp-Style Channel Chat Space -->
@@ -2163,6 +2953,46 @@ class BitVoidLocalServer(
               var wsStatusEl = document.getElementById('ws-status');
               var peersEl = document.getElementById('channel-peers');
               var exitChannelBtn = document.getElementById('exit-channel-btn');
+              var liveClassBtn = document.getElementById('live-class-btn');
+              var liveStagePanel = document.getElementById('live-stage-panel');
+              var closeLiveStageBtn = document.getElementById('close-live-stage-btn');
+              var liveModeBadge = document.getElementById('live-mode-badge');
+              var liveClassCodePill = document.getElementById('live-class-code-pill');
+              var liveClassCodeText = document.getElementById('live-class-code-text');
+              var liveCopyCodeBtn = document.getElementById('live-copy-code-btn');
+              var liveRoomStatusEl = document.getElementById('live-room-status');
+              var liveLauncherControls = document.getElementById('live-launcher-controls');
+              var liveJoinIdRow = document.getElementById('live-join-id-row');
+              var rtcStudentClassIdInput = document.getElementById('rtc-student-class-id-input');
+              var rtcStudentClassIdSubmit = document.getElementById('rtc-student-class-id-submit');
+              var rtcStudentClassIdCancel = document.getElementById('rtc-student-class-id-cancel');
+              var sidebarClassCodeInput = document.getElementById('sidebar-class-code-input');
+              var sidebarJoinClassBtn = document.getElementById('sidebar-join-class-btn');
+              var sidebarClassErr = document.getElementById('sidebar-class-error');
+              var liveActiveControls = document.getElementById('live-active-controls');
+              var rtcStartClassHostBtn = document.getElementById('rtc-start-class-host-btn');
+              var rtcJoinClassStudentBtn = document.getElementById('rtc-join-class-student-btn');
+              var rtcStartCallBtn = document.getElementById('rtc-start-call-btn');
+              var rtcMuteBtn = document.getElementById('rtc-mute-btn');
+              var rtcCamBtn = document.getElementById('rtc-cam-btn');
+              var rtcShareScreenBtn = document.getElementById('rtc-share-screen-btn');
+              var rtcDocInput = document.getElementById('rtc-doc-input');
+              var rtcUploadDocBtn = document.getElementById('rtc-upload-doc-btn');
+              var rtcLeaveBtn = document.getElementById('rtc-leave-btn');
+              var rtcEndSessionBtn = document.getElementById('rtc-end-session-btn');
+              var liveErrorMsg = document.getElementById('live-error-msg');
+              var livePresentationStage = document.getElementById('live-presentation-stage');
+              var liveDocTitle = document.getElementById('live-doc-title');
+              var rtcSlidePrevBtn = document.getElementById('rtc-slide-prev-btn');
+              var rtcSlidePageLabel = document.getElementById('rtc-slide-page-label');
+              var rtcSlideNextBtn = document.getElementById('rtc-slide-next-btn');
+              var rtcDocOpenLink = document.getElementById('rtc-doc-open-link');
+              var rtcDocDownloadLink = document.getElementById('rtc-doc-download-link');
+              var liveMaterialsList = document.getElementById('live-materials-list');
+              var liveDocViewerBox = document.getElementById('live-doc-viewer-box');
+              var liveVideoGrid = document.getElementById('live-video-grid');
+              var liveParticipantsGrid = document.getElementById('live-participants-grid');
+
               var toggleMediaBtn = document.getElementById('toggle-media-btn');
               var mediaDrawer = document.getElementById('media-drawer');
               var channelMediaFeed = document.getElementById('channel-media-feed');
@@ -2183,6 +3013,24 @@ class BitVoidLocalServer(
               var currentChannelMediaSig = '';
               var currentPublicFeedSig = '';
               var autoJoinedOnce = false;
+
+              var rtcSocket = null;
+              var rtcPeers = {};
+              var rtcRemoteStreams = {};
+              var rtcParticipantList = [];
+              var rtcPeerId = '';
+              var rtcRoomId = '';
+              var rtcMode = 'VOICE_VIDEO_CALL';
+              var rtcRole = 'SPEAKER';
+              var rtcClassCode = '';
+              var rtcMaterials = [];
+              var rtcActiveMaterialId = '';
+              var rtcActivePageIndex = 0;
+              var rtcLocalStream = null;
+              var rtcScreenStream = null;
+              var rtcMuted = false;
+              var rtcVideoOn = false;
+              var rtcScreenSharing = false;
               try {
                 var storedUser = localStorage.getItem('bv_username');
                 if (!storedUser) {
@@ -2373,6 +3221,46 @@ class BitVoidLocalServer(
                 }
               }
 
+              function applyJoinedChannelData(data) {
+                activeDm = null;
+                activeChannel = data;
+                seenMsgIds = {};
+                chatBox.innerHTML = '';
+                var label = data.name || data.channelId;
+                activeTitle.textContent = label;
+                activeCallsign.textContent = data.callsign || '-';
+                chatInput.placeholder = 'Message ' + label + '...';
+                liveClassBtn.textContent = 'LIVE CLASS / CALL';
+                liveClassBtn.classList.remove('active');
+                if (data.isPublic) {
+                  activeAvatar.textContent = '#';
+                  activeAvatar.className = 'wa-top-avatar';
+                  activeBadge.textContent = 'PUBLIC';
+                  activeBadge.className = 'pill';
+                  exitChannelBtn.classList.add('hidden');
+                } else {
+                  activeAvatar.textContent = 'ID';
+                  activeAvatar.className = 'wa-top-avatar private-mode';
+                  activeBadge.textContent = 'PRIVATE';
+                  activeBadge.className = 'pill pill-amber';
+                  exitChannelBtn.classList.remove('hidden');
+                }
+                renderWelcomeBanner(label, !!data.isPublic);
+                var list = data.media || data.videos || [];
+                currentChannelMediaSig = list.map(function (m) { return m.id; }).join('|');
+                renderMediaList(
+                  channelMediaFeed,
+                  list,
+                  data.token,
+                  'NO MEDIA IN CHANNEL YET',
+                  'Chat is active! Any media assigned by the Host appears here automatically.'
+                );
+                (data.messages || []).forEach(appendChatMessage);
+                connectChannelWs(data.channelId, data.token);
+                highlightActiveSidebar();
+                closeSidebar();
+              }
+
               function joinChannel(channelId, privateKey) {
                 channelErr.classList.add('hidden');
                 var myU = (dmMyInput && dmMyInput.value ? dmMyInput.value.trim() : '');
@@ -2385,46 +3273,55 @@ class BitVoidLocalServer(
                     if (!r.ok) throw new Error('Invalid Channel ID or key (HTTP ' + r.status + ')');
                     return r.json();
                   })
-                  .then(function (data) {
-                    activeDm = null;
-                    activeChannel = data;
-                    seenMsgIds = {};
-                    chatBox.innerHTML = '';
-                    var label = data.name || data.channelId;
-                    activeTitle.textContent = label;
-                    activeCallsign.textContent = data.callsign || '-';
-                    chatInput.placeholder = 'Message ' + label + '...';
-                    if (data.isPublic) {
-                      activeAvatar.textContent = '#';
-                      activeAvatar.className = 'wa-top-avatar';
-                      activeBadge.textContent = 'PUBLIC';
-                      activeBadge.className = 'pill';
-                      exitChannelBtn.classList.add('hidden');
-                    } else {
-                      activeAvatar.textContent = 'ID';
-                      activeAvatar.className = 'wa-top-avatar private-mode';
-                      activeBadge.textContent = 'PRIVATE';
-                      activeBadge.className = 'pill pill-amber';
-                      exitChannelBtn.classList.remove('hidden');
-                    }
-                    renderWelcomeBanner(label, !!data.isPublic);
-                    var list = data.media || data.videos || [];
-                    currentChannelMediaSig = list.map(function (m) { return m.id; }).join('|');
-                    renderMediaList(
-                      channelMediaFeed,
-                      list,
-                      data.token,
-                      'NO MEDIA IN CHANNEL YET',
-                      'Chat is active! Any media assigned by the Host appears here automatically.'
-                    );
-                    (data.messages || []).forEach(appendChatMessage);
-                    connectChannelWs(data.channelId, data.token);
-                    highlightActiveSidebar();
-                    closeSidebar();
-                  })
+                  .then(applyJoinedChannelData)
                   .catch(function (err) {
                     channelErr.textContent = err.message || 'Unable to join channel';
                     channelErr.classList.remove('hidden');
+                  });
+              }
+
+              function joinLiveClassByCode(rawCode, errEl) {
+                var cleanCode = (rawCode || '').trim().toUpperCase();
+                if (!cleanCode) {
+                  if (errEl) {
+                    errEl.textContent = 'Enter the Live Class ID (e.g. CLS-ABCD-12).';
+                    errEl.classList.remove('hidden');
+                  } else {
+                    showRtcError('Enter the Live Class ID (e.g. CLS-ABCD-12).');
+                  }
+                  return;
+                }
+                if (errEl) errEl.classList.add('hidden');
+                showRtcError('');
+                var myU = (dmMyInput && dmMyInput.value ? dmMyInput.value.trim() : '');
+                fetch('/api/live-class/join', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ classCode: cleanCode, username: myU })
+                })
+                  .then(function (r) {
+                    if (!r.ok) {
+                      return r.json().then(function (d) {
+                        throw new Error((d && d.detail) || ('Invalid Live Class ID (HTTP ' + r.status + ')'));
+                      });
+                    }
+                    return r.json();
+                  })
+                  .then(function (data) {
+                    applyJoinedChannelData(data);
+                    liveJoinIdRow.classList.add('hidden');
+                    rtcStudentClassIdInput.value = '';
+                    sidebarClassCodeInput.value = '';
+                    joinRtcSession('LIVE_CLASSROOM', 'STUDENT_VIEWER', false, data.roomId || data.channelId, data.classCode || cleanCode);
+                  })
+                  .catch(function (err) {
+                    var msg = err.message || 'Invalid or ended Live Class ID.';
+                    if (errEl) {
+                      errEl.textContent = msg;
+                      errEl.classList.remove('hidden');
+                    } else {
+                      showRtcError(msg);
+                    }
                   });
               }
 
@@ -2467,29 +3364,14 @@ class BitVoidLocalServer(
                     activeBadge.textContent = 'DIRECT CHAT';
                     activeBadge.className = 'pill';
                     peersEl.textContent = '2';
+                    liveClassBtn.textContent = 'VOICE / VIDEO CALL';
                     exitChannelBtn.classList.remove('hidden');
                     var banner = document.createElement('div');
                     banner.className = 'wa-welcome-pill';
-                    banner.innerHTML = '<strong>Direct Chat with @' + esc(data.peerUsername) + '</strong> · You: <strong>@' + esc(data.myUsername) + '</strong>';
+                    banner.innerHTML = '<strong>Direct Chat with @' + esc(data.peerUsername) + '</strong> · You: <strong>@' + esc(data.myUsername) + '</strong> · Tap VOICE / VIDEO CALL above to call.';
                     chatBox.appendChild(banner);
                     (data.messages || []).forEach(appendChatMessage);
-                    if (activeSocket) { try { activeSocket.close(); } catch (e) {} }
-                    var scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
-                    var dmWsUrl = scheme + location.host + '/ws/dm/' + encodeURIComponent(data.dmId) + '?token=' + encodeURIComponent(data.token);
-                    wsStatusEl.textContent = 'CONNECTING';
-                    try {
-                      activeSocket = new WebSocket(dmWsUrl);
-                      activeSocket.onopen = function () { wsStatusEl.textContent = 'LIVE'; };
-                      activeSocket.onclose = function () { wsStatusEl.textContent = 'HTTP-SYNC'; };
-                      activeSocket.onerror = function () { wsStatusEl.textContent = 'HTTP-SYNC'; };
-                      activeSocket.onmessage = function (ev) {
-                        try {
-                          var p = JSON.parse(ev.data);
-                          if (p.type === 'history' && Array.isArray(p.messages)) p.messages.forEach(appendChatMessage);
-                          else if (p.type === 'chat' && p.message) appendChatMessage(p.message);
-                        } catch (e) {}
-                      };
-                    } catch (e) { wsStatusEl.textContent = 'HTTP-SYNC'; }
+                    connectDirectWs(data.dmId, data.token);
                     highlightActiveSidebar();
                     closeSidebar();
                   })
@@ -2497,6 +3379,33 @@ class BitVoidLocalServer(
                     dmErr.textContent = err.message || 'Unable to start direct chat';
                     dmErr.classList.remove('hidden');
                   });
+              }
+
+              function connectDirectWs(dmId, token) {
+                if (activeSocket) { try { activeSocket.close(); } catch (e) {} }
+                var scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
+                var dmWsUrl = scheme + location.host + '/ws/dm/' + encodeURIComponent(dmId) + '?token=' + encodeURIComponent(token);
+                wsStatusEl.textContent = 'CONNECTING';
+                try {
+                  activeSocket = new WebSocket(dmWsUrl);
+                  activeSocket.onopen = function () { wsStatusEl.textContent = 'LIVE'; };
+                  activeSocket.onclose = function () {
+                    wsStatusEl.textContent = 'HTTP-SYNC';
+                    setTimeout(function () {
+                      if (activeDm && activeDm.dmId === dmId && activeDm.token === token) {
+                        connectDirectWs(dmId, token);
+                      }
+                    }, 3500);
+                  };
+                  activeSocket.onerror = function () { wsStatusEl.textContent = 'HTTP-SYNC'; };
+                  activeSocket.onmessage = function (ev) {
+                    try {
+                      var p = JSON.parse(ev.data);
+                      if (p.type === 'history' && Array.isArray(p.messages)) p.messages.forEach(appendChatMessage);
+                      else if (p.type === 'chat' && p.message) appendChatMessage(p.message);
+                    } catch (e) {}
+                  };
+                } catch (e) { wsStatusEl.textContent = 'HTTP-SYNC'; }
               }
 
               function refreshActiveChannelMedia() {
@@ -2508,6 +3417,26 @@ class BitVoidLocalServer(
                     .then(function (r) { return r.ok ? r.json() : null; })
                     .then(function (d) {
                       if (d && Array.isArray(d.messages)) d.messages.forEach(appendChatMessage);
+                    })
+                    .catch(function () {});
+                  fetch('/api/dm/' + encodeURIComponent(activeDm.dmId) + '/call/status', {
+                    headers: { 'X-DM-Token': activeDm.token },
+                    cache: 'no-store'
+                  })
+                    .then(function (r) { return r.ok ? r.json() : null; })
+                    .then(function (st) {
+                      if (!st) return;
+                      if (st.isActive) {
+                        liveClassBtn.textContent = 'CALL ACTIVE (' + (st.participantCount || 1) + ')';
+                        liveClassBtn.classList.add('active');
+                        if (!rtcSocket) {
+                          liveRoomStatusEl.textContent = 'Direct Voice/Video Call ringing/active · ' + (st.participantCount || 1) + ' peer(s)';
+                          renderRtcParticipants(st.peers || []);
+                        }
+                      } else if (!rtcSocket) {
+                        liveClassBtn.textContent = 'VOICE / VIDEO CALL';
+                        liveClassBtn.classList.remove('active');
+                      }
                     })
                     .catch(function () {});
                   return;
@@ -2550,6 +3479,30 @@ class BitVoidLocalServer(
                     }
                     if (Array.isArray(data.messages)) {
                       data.messages.forEach(appendChatMessage);
+                    }
+                  })
+                  .catch(function () {});
+
+                fetch('/api/channels/' + encodeURIComponent(activeChannel.channelId) + '/call/status', {
+                  headers: { 'X-Channel-Token': activeChannel.token },
+                  cache: 'no-store'
+                })
+                  .then(function (r) { return r.ok ? r.json() : null; })
+                  .then(function (st) {
+                    if (!st) return;
+                    if (st.isActive) {
+                      var mLabel = st.mode === 'LIVE_CLASSROOM' ? 'LIVE CLASS' : 'CALL LIVE';
+                      liveClassBtn.textContent = mLabel + ' (' + (st.participantCount || 1) + ')';
+                      liveClassBtn.classList.add('active');
+                      if (!rtcSocket) {
+                        liveRoomStatusEl.textContent = mLabel + ' in progress · ' + (st.participantCount || 1) + ' peer(s) active';
+                        renderRtcParticipants(st.peers || []);
+                      }
+                    } else if (!rtcSocket) {
+                      liveClassBtn.textContent = 'LIVE CLASS / CALL';
+                      liveClassBtn.classList.remove('active');
+                      liveRoomStatusEl.textContent = 'Local Wi-Fi WebRTC (/ws/signaling · zero external servers)';
+                      renderRtcParticipants([]);
                     }
                   })
                   .catch(function () {});
@@ -2697,6 +3650,608 @@ class BitVoidLocalServer(
                 refreshActiveChannelMedia();
               }
 
+              function showRtcError(msg) {
+                if (!msg) {
+                  liveErrorMsg.classList.add('hidden');
+                  liveErrorMsg.textContent = '';
+                } else {
+                  liveErrorMsg.textContent = msg;
+                  liveErrorMsg.classList.remove('hidden');
+                }
+              }
+
+              function renderLiveClassCode(code) {
+                rtcClassCode = code || '';
+                if (rtcClassCode) {
+                  liveClassCodeText.textContent = rtcClassCode;
+                  liveClassCodePill.classList.remove('hidden');
+                } else {
+                  liveClassCodeText.textContent = '-';
+                  liveClassCodePill.classList.add('hidden');
+                }
+              }
+
+              function renderLiveMaterials() {
+                if (!rtcMaterials || rtcMaterials.length === 0) {
+                  livePresentationStage.classList.add('hidden');
+                  liveMaterialsList.innerHTML = '';
+                  liveDocViewerBox.innerHTML = '';
+                  return;
+                }
+                livePresentationStage.classList.remove('hidden');
+                var activeMat = rtcMaterials.find(function (m) { return m.id === rtcActiveMaterialId; }) || rtcMaterials[0];
+                rtcActiveMaterialId = activeMat.id;
+
+                liveMaterialsList.innerHTML = rtcMaterials.map(function (m) {
+                  var cls = 'live-doc-chip' + (m.id === rtcActiveMaterialId ? ' active' : '');
+                  return '<button type="button" class="' + cls + '" data-mat-id="' + esc(m.id) + '">' + esc(m.fileName) + '</button>';
+                }).join('');
+                Array.prototype.forEach.call(liveMaterialsList.querySelectorAll('.live-doc-chip'), function (btn) {
+                  btn.onclick = function () {
+                    var mid = btn.getAttribute('data-mat-id');
+                    rtcActiveMaterialId = mid;
+                    rtcActivePageIndex = 0;
+                    renderLiveMaterials();
+                    if (rtcSocket && rtcSocket.readyState === 1) {
+                      rtcSocket.send(JSON.stringify({ type: 'active_material', materialId: mid, pageIndex: 0 }));
+                    }
+                  };
+                });
+
+                var tok = activeDm ? activeDm.token : (activeChannel ? activeChannel.token : '');
+                var q = tok ? ('?token=' + encodeURIComponent(tok)) : '';
+                var sUrl = (activeMat.streamUrl || '') + q;
+                var dUrl = (activeMat.downloadUrl || activeMat.streamUrl || '') + q;
+                liveDocTitle.textContent = activeMat.fileName + ' (' + fmtBytes(activeMat.sizeBytes || 0) + ' · by ' + (activeMat.uploadedBy || 'Presenter') + ')';
+                rtcSlidePageLabel.textContent = 'Slide / Page ' + (rtcActivePageIndex + 1);
+                rtcDocOpenLink.href = sUrl;
+                rtcDocDownloadLink.href = dUrl;
+                rtcDocDownloadLink.setAttribute('download', activeMat.fileName || 'document');
+
+                var lowerName = String(activeMat.fileName || '').toLowerCase();
+                var mime = String(activeMat.mimeType || '').toLowerCase();
+                if (mime.indexOf('image/') === 0) {
+                  liveDocViewerBox.innerHTML = '<img class="live-doc-preview-frame" src="' + esc(sUrl) + '" alt="' + esc(activeMat.fileName) + '">';
+                } else if (mime.indexOf('pdf') !== -1 || lowerName.endsWith('.pdf') || mime.indexOf('text/') === 0 || lowerName.endsWith('.txt')) {
+                  var pageHash = (mime.indexOf('pdf') !== -1 || lowerName.endsWith('.pdf')) ? ('#page=' + (rtcActivePageIndex + 1)) : '';
+                  liveDocViewerBox.innerHTML = '<iframe class="live-doc-preview-frame" src="' + esc(sUrl + pageHash) + '"></iframe>';
+                } else {
+                  liveDocViewerBox.innerHTML =
+                    '<div class="empty" style="padding:14px;">' +
+                      '<div class="empty-title">' + esc(activeMat.fileName) + '</div>' +
+                      '<p>Slide / Office presentation shared live (' + esc(activeMat.mimeType || 'document') + '). View synced slides in Android app or click OPEN / DOWNLOAD above.</p>' +
+                    '</div>';
+                }
+              }
+
+              function updateRtcControlsUi() {
+                var joined = !!rtcSocket;
+                if (activeDm) {
+                  rtcStartClassHostBtn.classList.add('hidden');
+                  rtcJoinClassStudentBtn.classList.add('hidden');
+                  rtcStartCallBtn.textContent = 'CALL @' + activeDm.peerUsername;
+                } else {
+                  rtcStartClassHostBtn.classList.remove('hidden');
+                  rtcJoinClassStudentBtn.classList.remove('hidden');
+                  rtcStartCallBtn.textContent = 'START VOICE / VIDEO CALL';
+                }
+                if (joined) {
+                  liveLauncherControls.classList.add('hidden');
+                  liveJoinIdRow.classList.add('hidden');
+                  liveActiveControls.classList.remove('hidden');
+                  rtcMuteBtn.textContent = rtcMuted ? 'MIC MUTED' : 'MIC ON';
+                  rtcCamBtn.textContent = rtcVideoOn ? 'CAM ON' : 'CAM OFF';
+                  rtcShareScreenBtn.textContent = rtcScreenSharing ? 'STOP SHARE' : 'SHARE SCREEN';
+                  if (rtcRole === 'HOST_TEACHER') {
+                    rtcEndSessionBtn.classList.remove('hidden');
+                  } else {
+                    rtcEndSessionBtn.classList.add('hidden');
+                  }
+                } else {
+                  liveLauncherControls.classList.remove('hidden');
+                  liveActiveControls.classList.add('hidden');
+                }
+              }
+
+              function renderRtcParticipants(peers) {
+                rtcParticipantList = peers || [];
+                liveParticipantsGrid.innerHTML = '';
+                rtcParticipantList.forEach(function (p) {
+                  var chip = document.createElement('span');
+                  var isTeacher = p.role === 'HOST_TEACHER';
+                  chip.className = 'live-participant-chip' + (isTeacher ? ' teacher' : '');
+                  var statusBits = [];
+                  if (isTeacher) statusBits.push('TEACHER');
+                  else if (p.role === 'STUDENT_VIEWER') statusBits.push('STUDENT');
+                  if (p.isScreenSharing) statusBits.push('SCREEN');
+                  else if (p.isVideoOn) statusBits.push('CAM');
+                  if (p.isMuted) statusBits.push('MUTED');
+                  chip.textContent = (p.displayName || p.peerId) + (statusBits.length ? (' · ' + statusBits.join('/')) : '');
+                  liveParticipantsGrid.appendChild(chip);
+                });
+              }
+
+              function renderRtcVideoTiles() {
+                liveVideoGrid.innerHTML = '';
+                var localStream = rtcScreenSharing && rtcScreenStream ? rtcScreenStream : rtcLocalStream;
+                if (localStream && (rtcVideoOn || rtcScreenSharing)) {
+                  var localTile = document.createElement('div');
+                  localTile.className = 'live-video-tile' + (rtcRole === 'HOST_TEACHER' ? ' teacher-tile' : '');
+                  var v = document.createElement('video');
+                  v.autoplay = true;
+                  v.muted = true;
+                  v.playsInline = true;
+                  v.srcObject = localStream;
+                  var lbl = document.createElement('span');
+                  lbl.className = 'live-tile-label';
+                  lbl.textContent = 'YOU (' + (rtcScreenSharing ? 'SCREEN' : rtcRole) + ')';
+                  localTile.appendChild(v);
+                  localTile.appendChild(lbl);
+                  liveVideoGrid.appendChild(localTile);
+                }
+
+                Object.keys(rtcRemoteStreams).forEach(function (pid) {
+                  var stream = rtcRemoteStreams[pid];
+                  if (!stream) return;
+                  var peerMeta = rtcParticipantList.find(function (p) { return p.peerId === pid; });
+                  var tile = document.createElement('div');
+                  var isTeacher = peerMeta && peerMeta.role === 'HOST_TEACHER';
+                  tile.className = 'live-video-tile' + (isTeacher ? ' teacher-tile' : '');
+                  var v = document.createElement('video');
+                  v.autoplay = true;
+                  v.playsInline = true;
+                  v.srcObject = stream;
+                  var lbl = document.createElement('span');
+                  lbl.className = 'live-tile-label';
+                  lbl.textContent = (peerMeta ? peerMeta.displayName : pid) + (isTeacher ? ' [TEACHER]' : '');
+                  tile.appendChild(v);
+                  tile.appendChild(lbl);
+                  liveVideoGrid.appendChild(tile);
+                });
+              }
+
+              function sendRtcMediaState() {
+                if (!rtcSocket || rtcSocket.readyState !== 1) return;
+                rtcSocket.send(JSON.stringify({
+                  type: 'media_state',
+                  roomId: rtcRoomId,
+                  isMuted: rtcMuted,
+                  isVideoOn: rtcVideoOn,
+                  isScreenSharing: rtcScreenSharing,
+                  role: rtcRole
+                }));
+              }
+
+              function shouldInitiateRtcOffer(remotePeer) {
+                if (rtcRole === 'HOST_TEACHER' && remotePeer.role !== 'HOST_TEACHER') return true;
+                if (rtcRole !== 'HOST_TEACHER' && remotePeer.role === 'HOST_TEACHER') return false;
+                return rtcPeerId < remotePeer.peerId;
+              }
+
+              function createOrGetRtcPeer(remotePeerId) {
+                if (rtcPeers[remotePeerId]) return rtcPeers[remotePeerId];
+                var pc = new RTCPeerConnection({ iceServers: [] });
+                rtcPeers[remotePeerId] = pc;
+
+                var activeOutVideo = (rtcScreenSharing && rtcScreenStream)
+                  ? rtcScreenStream.getVideoTracks()[0]
+                  : (rtcLocalStream ? rtcLocalStream.getVideoTracks()[0] : null);
+                var activeOutAudio = rtcLocalStream ? rtcLocalStream.getAudioTracks()[0] : null;
+
+                var audioT = pc.addTransceiver('audio', { direction: 'sendrecv' });
+                if (activeOutAudio) audioT.sender.replaceTrack(activeOutAudio);
+                var videoT = pc.addTransceiver('video', { direction: 'sendrecv' });
+                if (activeOutVideo) videoT.sender.replaceTrack(activeOutVideo);
+
+                pc.onicecandidate = function (ev) {
+                  if (ev.candidate && rtcSocket && rtcSocket.readyState === 1) {
+                    rtcSocket.send(JSON.stringify({
+                      type: 'ice',
+                      roomId: rtcRoomId,
+                      targetPeerId: remotePeerId,
+                      candidate: {
+                        sdpMid: ev.candidate.sdpMid || '0',
+                        sdpMLineIndex: ev.candidate.sdpMLineIndex || 0,
+                        candidate: ev.candidate.candidate
+                      }
+                    }));
+                  }
+                };
+
+                pc.ontrack = function (ev) {
+                  var stream = (ev.streams && ev.streams[0]) ? ev.streams[0] : new MediaStream([ev.track]);
+                  rtcRemoteStreams[remotePeerId] = stream;
+                  renderRtcVideoTiles();
+                };
+                return pc;
+              }
+
+              function sendRtcOffer(remotePeerId) {
+                var pc = createOrGetRtcPeer(remotePeerId);
+                pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true })
+                  .then(function (offer) {
+                    return pc.setLocalDescription(offer).then(function () { return offer; });
+                  })
+                  .then(function (offer) {
+                    if (rtcSocket && rtcSocket.readyState === 1) {
+                      rtcSocket.send(JSON.stringify({
+                        type: 'offer',
+                        roomId: rtcRoomId,
+                        targetPeerId: remotePeerId,
+                        sdp: offer.sdp
+                      }));
+                    }
+                  })
+                  .catch(function () {});
+              }
+
+              function cleanupRtcPeersAndMedia() {
+                Object.keys(rtcPeers).forEach(function (pid) {
+                  try { rtcPeers[pid].close(); } catch (e) {}
+                });
+                rtcPeers = {};
+                rtcRemoteStreams = {};
+                if (rtcLocalStream) {
+                  rtcLocalStream.getTracks().forEach(function (t) { t.stop(); });
+                  rtcLocalStream = null;
+                }
+                if (rtcScreenStream) {
+                  rtcScreenStream.getTracks().forEach(function (t) { t.stop(); });
+                  rtcScreenStream = null;
+                }
+                rtcScreenSharing = false;
+                rtcVideoOn = false;
+                rtcMuted = false;
+                liveVideoGrid.innerHTML = '';
+              }
+
+              function leaveRtcSession() {
+                if (rtcSocket) {
+                  try {
+                    if (rtcSocket.readyState === 1) {
+                      rtcSocket.send(JSON.stringify({ type: 'leave', roomId: rtcRoomId }));
+                    }
+                    rtcSocket.close();
+                  } catch (e) {}
+                  rtcSocket = null;
+                }
+                cleanupRtcPeersAndMedia();
+                renderRtcParticipants([]);
+                renderLiveClassCode('');
+                rtcMaterials = [];
+                rtcActiveMaterialId = '';
+                rtcActivePageIndex = 0;
+                renderLiveMaterials();
+                updateRtcControlsUi();
+                liveRoomStatusEl.textContent = 'Left live session';
+              }
+
+              function joinRtcSession(mode, role, startWithMedia, roomOverride, presetClassCode) {
+                var targetRoom = roomOverride || (activeDm ? activeDm.dmId : (activeChannel ? activeChannel.channelId : ''));
+                var targetToken = activeDm ? activeDm.token : (activeChannel ? activeChannel.token : '');
+                var targetChannelId = activeChannel ? activeChannel.channelId : targetRoom;
+                if (!targetRoom) {
+                  showRtcError('Open a channel or Direct Chat before starting a Live Class or Call.');
+                  return;
+                }
+                if (typeof RTCPeerConnection === 'undefined') {
+                  showRtcError('WebRTC is not supported by this browser.');
+                  return;
+                }
+                leaveRtcSession();
+                showRtcError('');
+                liveStagePanel.classList.remove('hidden');
+                rtcRoomId = targetRoom;
+                rtcMode = mode;
+                rtcRole = role;
+                if (presetClassCode) renderLiveClassCode(presetClassCode);
+                rtcPeerId = 'web_' + Math.random().toString(36).slice(2, 10);
+                rtcMuted = (role === 'STUDENT_VIEWER');
+
+                var mediaPromise = (startWithMedia && navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
+                  ? navigator.mediaDevices.getUserMedia({ audio: true, video: role !== 'STUDENT_VIEWER' })
+                      .catch(function () {
+                        return navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+                          .catch(function () { return null; });
+                      })
+                  : Promise.resolve(null);
+
+                mediaPromise.then(function (stream) {
+                  rtcLocalStream = stream;
+                  if (stream) {
+                    stream.getAudioTracks().forEach(function (t) { t.enabled = !rtcMuted; });
+                    rtcVideoOn = stream.getVideoTracks().length > 0 && role !== 'STUDENT_VIEWER';
+                    stream.getVideoTracks().forEach(function (t) { t.enabled = rtcVideoOn; });
+                  } else {
+                    rtcVideoOn = false;
+                    rtcMuted = true;
+                  }
+
+                  var scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
+                  var displayName = (dmMyInput && dmMyInput.value ? dmMyInput.value.trim() : '') ||
+                    (activeDm ? activeDm.myUsername : (activeChannel ? activeChannel.callsign : 'WebPeer'));
+                  var wsUrl = scheme + location.host + '/ws/signaling' +
+                    '?roomId=' + encodeURIComponent(rtcRoomId) +
+                    '&channelId=' + encodeURIComponent(targetChannelId) +
+                    '&peerId=' + encodeURIComponent(rtcPeerId) +
+                    '&name=' + encodeURIComponent(displayName) +
+                    '&mode=' + encodeURIComponent(rtcMode) +
+                    '&role=' + encodeURIComponent(rtcRole) +
+                    '&isMuted=' + rtcMuted +
+                    '&isVideoOn=' + rtcVideoOn +
+                    '&isScreenSharing=false' +
+                    (targetToken ? ('&token=' + encodeURIComponent(targetToken)) : '');
+
+                  rtcSocket = new WebSocket(wsUrl);
+                  updateRtcControlsUi();
+                  renderRtcVideoTiles();
+                  liveRoomStatusEl.textContent = 'Connecting WebRTC signaling...';
+
+                  rtcSocket.onopen = function () {
+                    liveRoomStatusEl.textContent = (rtcMode === 'LIVE_CLASSROOM' ? 'LIVE CLASS ACTIVE' : (activeDm ? ('CALL WITH @' + activeDm.peerUsername) : 'VOICE/VIDEO CALL LIVE')) + ' · Local P2P';
+                  };
+                  rtcSocket.onerror = function () {
+                    showRtcError('WebRTC signaling error on /ws/signaling.');
+                  };
+                  rtcSocket.onclose = function () {
+                    rtcSocket = null;
+                    updateRtcControlsUi();
+                  };
+                  rtcSocket.onmessage = function (ev) {
+                    try {
+                      var msg = JSON.parse(ev.data);
+                      if (msg.type === 'welcome') {
+                        if (msg.classCode) renderLiveClassCode(msg.classCode);
+                        if (Array.isArray(msg.materials)) {
+                          rtcMaterials = msg.materials;
+                          rtcActiveMaterialId = msg.activeMaterialId || '';
+                          rtcActivePageIndex = msg.activePageIndex || 0;
+                          renderLiveMaterials();
+                        }
+                        renderRtcParticipants(msg.peers || []);
+                        (msg.peers || []).forEach(function (p) {
+                          if (p.peerId !== rtcPeerId) {
+                            createOrGetRtcPeer(p.peerId);
+                            if (shouldInitiateRtcOffer(p)) sendRtcOffer(p.peerId);
+                          }
+                        });
+                      } else if (msg.type === 'peer_joined') {
+                        if (msg.classCode) renderLiveClassCode(msg.classCode);
+                        renderRtcParticipants(msg.peers || []);
+                        if (msg.peer && msg.peer.peerId !== rtcPeerId) {
+                          createOrGetRtcPeer(msg.peer.peerId);
+                          if (shouldInitiateRtcOffer(msg.peer)) sendRtcOffer(msg.peer.peerId);
+                        }
+                      } else if (msg.type === 'peers_update') {
+                        if (msg.classCode) renderLiveClassCode(msg.classCode);
+                        renderRtcParticipants(msg.peers || []);
+                        renderRtcVideoTiles();
+                      } else if (msg.type === 'material_shared' || msg.type === 'material_state') {
+                        if (Array.isArray(msg.materials)) rtcMaterials = msg.materials;
+                        if (msg.activeMaterialId) rtcActiveMaterialId = msg.activeMaterialId;
+                        if (typeof msg.activePageIndex === 'number') rtcActivePageIndex = msg.activePageIndex;
+                        renderLiveMaterials();
+                      } else if (msg.type === 'peer_left') {
+                        renderRtcParticipants(msg.peers || []);
+                        if (msg.peerId && rtcPeers[msg.peerId]) {
+                          try { rtcPeers[msg.peerId].close(); } catch (e) {}
+                          delete rtcPeers[msg.peerId];
+                          delete rtcRemoteStreams[msg.peerId];
+                          renderRtcVideoTiles();
+                        }
+                      } else if (msg.type === 'session_ended') {
+                        leaveRtcSession();
+                      } else if (msg.type === 'offer' && msg.fromPeerId && msg.sdp) {
+                        var pc = createOrGetRtcPeer(msg.fromPeerId);
+                        pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp })
+                          .then(function () { return pc.createAnswer(); })
+                          .then(function (ans) {
+                            return pc.setLocalDescription(ans).then(function () { return ans; });
+                          })
+                          .then(function (ans) {
+                            if (rtcSocket && rtcSocket.readyState === 1) {
+                              rtcSocket.send(JSON.stringify({
+                                type: 'answer',
+                                roomId: rtcRoomId,
+                                targetPeerId: msg.fromPeerId,
+                                sdp: ans.sdp
+                              }));
+                            }
+                          })
+                          .catch(function () {});
+                      } else if (msg.type === 'answer' && msg.fromPeerId && msg.sdp) {
+                        var pcAns = rtcPeers[msg.fromPeerId];
+                        if (pcAns) {
+                          pcAns.setRemoteDescription({ type: 'answer', sdp: msg.sdp }).catch(function () {});
+                        }
+                      } else if (msg.type === 'ice' && msg.fromPeerId && msg.candidate) {
+                        var pcIce = rtcPeers[msg.fromPeerId];
+                        if (pcIce) {
+                          pcIce.addIceCandidate(new RTCIceCandidate(msg.candidate)).catch(function () {});
+                        }
+                      }
+                    } catch (e) {}
+                  };
+                });
+              }
+
+              liveClassBtn.addEventListener('click', function () {
+                liveStagePanel.classList.toggle('hidden');
+                updateRtcControlsUi();
+              });
+              closeLiveStageBtn.addEventListener('click', function () {
+                liveStagePanel.classList.add('hidden');
+              });
+              liveCopyCodeBtn.addEventListener('click', function () {
+                if (rtcClassCode && navigator.clipboard) {
+                  navigator.clipboard.writeText(rtcClassCode).catch(function () {});
+                }
+              });
+              rtcStartClassHostBtn.addEventListener('click', function () {
+                joinRtcSession('LIVE_CLASSROOM', 'HOST_TEACHER', true);
+              });
+              rtcJoinClassStudentBtn.addEventListener('click', function () {
+                liveJoinIdRow.classList.toggle('hidden');
+                if (!liveJoinIdRow.classList.contains('hidden')) {
+                  rtcStudentClassIdInput.focus();
+                }
+              });
+              rtcStudentClassIdCancel.addEventListener('click', function () {
+                liveJoinIdRow.classList.add('hidden');
+              });
+              rtcStudentClassIdSubmit.addEventListener('click', function () {
+                joinLiveClassByCode(rtcStudentClassIdInput.value, null);
+              });
+              sidebarJoinClassBtn.addEventListener('click', function () {
+                joinLiveClassByCode(sidebarClassCodeInput.value, sidebarClassErr);
+              });
+              rtcStartCallBtn.addEventListener('click', function () {
+                joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true);
+              });
+              rtcUploadDocBtn.addEventListener('click', function () {
+                if (!rtcRoomId) return;
+                rtcDocInput.value = '';
+                rtcDocInput.click();
+              });
+              rtcDocInput.addEventListener('change', function () {
+                var file = rtcDocInput.files && rtcDocInput.files[0];
+                if (!file || !rtcRoomId) return;
+                var fd = new FormData();
+                fd.append('file', file, file.name);
+                var headers = activeDm
+                  ? { 'X-DM-Token': activeDm.token }
+                  : (activeChannel && activeChannel.token ? { 'X-Channel-Token': activeChannel.token } : {});
+                rtcUploadDocBtn.disabled = true;
+                rtcUploadDocBtn.textContent = 'UPLOADING...';
+                fetch('/api/live-class/' + encodeURIComponent(rtcRoomId) + '/materials', {
+                  method: 'POST',
+                  headers: headers,
+                  body: fd
+                })
+                  .then(function (r) {
+                    if (!r.ok) throw new Error('Material upload failed (HTTP ' + r.status + ')');
+                    return r.json();
+                  })
+                  .then(function (d) {
+                    if (Array.isArray(d.materials)) rtcMaterials = d.materials;
+                    if (d.activeMaterialId) rtcActiveMaterialId = d.activeMaterialId;
+                    rtcActivePageIndex = d.activePageIndex || 0;
+                    renderLiveMaterials();
+                  })
+                  .catch(function (err) {
+                    showRtcError(err.message || 'Unable to upload presentation material.');
+                  })
+                  .finally(function () {
+                    rtcUploadDocBtn.disabled = false;
+                    rtcUploadDocBtn.textContent = 'UPLOAD DOC / PPT / PDF';
+                    rtcDocInput.value = '';
+                  });
+              });
+              rtcSlidePrevBtn.addEventListener('click', function () {
+                if (rtcActivePageIndex > 0) {
+                  rtcActivePageIndex = rtcActivePageIndex - 1;
+                  renderLiveMaterials();
+                  if (rtcSocket && rtcSocket.readyState === 1) {
+                    rtcSocket.send(JSON.stringify({ type: 'slide_nav', materialId: rtcActiveMaterialId, pageIndex: rtcActivePageIndex }));
+                  }
+                }
+              });
+              rtcSlideNextBtn.addEventListener('click', function () {
+                rtcActivePageIndex = rtcActivePageIndex + 1;
+                renderLiveMaterials();
+                if (rtcSocket && rtcSocket.readyState === 1) {
+                  rtcSocket.send(JSON.stringify({ type: 'slide_nav', materialId: rtcActiveMaterialId, pageIndex: rtcActivePageIndex }));
+                }
+              });
+              rtcMuteBtn.addEventListener('click', function () {
+                rtcMuted = !rtcMuted;
+                if (rtcLocalStream) {
+                  rtcLocalStream.getAudioTracks().forEach(function (t) { t.enabled = !rtcMuted; });
+                }
+                updateRtcControlsUi();
+                sendRtcMediaState();
+              });
+              rtcCamBtn.addEventListener('click', function () {
+                rtcVideoOn = !rtcVideoOn;
+                if (rtcLocalStream && rtcLocalStream.getVideoTracks().length > 0) {
+                  rtcLocalStream.getVideoTracks().forEach(function (t) { t.enabled = rtcVideoOn; });
+                  updateRtcControlsUi();
+                  renderRtcVideoTiles();
+                  sendRtcMediaState();
+                } else if (rtcVideoOn && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                  navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+                    .then(function (camStream) {
+                      var vTrack = camStream.getVideoTracks()[0];
+                      if (!rtcLocalStream) rtcLocalStream = camStream;
+                      else if (vTrack) rtcLocalStream.addTrack(vTrack);
+                      Object.keys(rtcPeers).forEach(function (pid) {
+                        var sender = rtcPeers[pid].getSenders().find(function (s) { return s.track && s.track.kind === 'video'; });
+                        if (sender && vTrack) sender.replaceTrack(vTrack);
+                      });
+                      updateRtcControlsUi();
+                      renderRtcVideoTiles();
+                      sendRtcMediaState();
+                    })
+                    .catch(function () {
+                      rtcVideoOn = false;
+                      showRtcError('No camera permission or camera unavailable.');
+                    });
+                }
+              });
+              rtcShareScreenBtn.addEventListener('click', function () {
+                if (rtcScreenSharing) {
+                  if (rtcScreenStream) {
+                    rtcScreenStream.getTracks().forEach(function (t) { t.stop(); });
+                    rtcScreenStream = null;
+                  }
+                  rtcScreenSharing = false;
+                  var camTrack = rtcLocalStream ? rtcLocalStream.getVideoTracks()[0] : null;
+                  Object.keys(rtcPeers).forEach(function (pid) {
+                    var sender = rtcPeers[pid].getSenders().find(function (s) {
+                      var trans = rtcPeers[pid].getTransceivers().find(function (tr) { return tr.sender === s; });
+                      return trans && trans.receiver && trans.receiver.track && trans.receiver.track.kind === 'video';
+                    });
+                    if (sender) sender.replaceTrack(camTrack || null);
+                  });
+                  updateRtcControlsUi();
+                  renderRtcVideoTiles();
+                  sendRtcMediaState();
+                } else if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
+                  navigator.mediaDevices.getDisplayMedia({ video: true, audio: false })
+                    .then(function (screenStream) {
+                      rtcScreenStream = screenStream;
+                      rtcScreenSharing = true;
+                      var screenTrack = screenStream.getVideoTracks()[0];
+                      if (screenTrack) {
+                        screenTrack.onended = function () {
+                          if (rtcScreenSharing) rtcShareScreenBtn.click();
+                        };
+                        Object.keys(rtcPeers).forEach(function (pid) {
+                          var trans = rtcPeers[pid].getTransceivers().find(function (tr) {
+                            return tr.receiver && tr.receiver.track && tr.receiver.track.kind === 'video';
+                          });
+                          if (trans && trans.sender) trans.sender.replaceTrack(screenTrack);
+                        });
+                      }
+                      updateRtcControlsUi();
+                      renderRtcVideoTiles();
+                      sendRtcMediaState();
+                    })
+                    .catch(function () {
+                      showRtcError('Screen sharing permission cancelled or unavailable.');
+                    });
+                } else {
+                  showRtcError('Screen sharing requires Chrome/Desktop browser or native Android app.');
+                }
+              });
+              rtcLeaveBtn.addEventListener('click', leaveRtcSession);
+              rtcEndSessionBtn.addEventListener('click', function () {
+                if (rtcSocket && rtcSocket.readyState === 1) {
+                  rtcSocket.send(JSON.stringify({ type: 'end_session', roomId: rtcRoomId }));
+                }
+                leaveRtcSession();
+              });
+
               menuToggleBtn.addEventListener('click', openSidebar);
               closeSidebarBtn.addEventListener('click', closeSidebar);
               backdrop.addEventListener('click', closeSidebar);
@@ -2728,7 +4283,10 @@ class BitVoidLocalServer(
                 }
                 openDirectChat(mu, tu);
               });
-              exitChannelBtn.addEventListener('click', exitPrivateChannel);
+              exitChannelBtn.addEventListener('click', function () {
+                leaveRtcSession();
+                exitPrivateChannel();
+              });
               chatAttachBtn.addEventListener('click', function () {
                 if (!activeChannel && !activeDm) return;
                 chatFileInput.value = '';
@@ -3322,6 +4880,74 @@ class BitVoidLocalServer(
         override fun onSessionClosed() {
             try {
                 close(WebSocketFrame.CloseCode.NormalClosure, "Direct chat closed", false)
+            } catch (_: IOException) {
+            }
+        }
+    }
+
+    private inner class BitVoidSignalingWebSocket(
+        handshakeRequest: IHTTPSession,
+        private val roomId: String,
+        private val channelId: String,
+        private val requestedPeerId: String?,
+        private val displayName: String?,
+        private val mode: SignalingSessionMode,
+        private val role: ParticipantRole,
+        private val initialMuted: Boolean,
+        private val initialVideoOn: Boolean,
+        private val initialScreenSharing: Boolean
+    ) : WebSocket(handshakeRequest), BitVoidSignalingServer.SignalingSocketListener {
+
+        private var activePeer: SignalingPeer? = null
+
+        override fun onOpen() {
+            activePeer = BitVoidSignalingServer.joinRoom(
+                rawRoomId = roomId,
+                rawChannelId = channelId,
+                rawPeerId = requestedPeerId,
+                rawDisplayName = displayName,
+                mode = mode,
+                role = role,
+                isMuted = initialMuted,
+                isVideoOn = initialVideoOn,
+                isScreenSharing = initialScreenSharing,
+                listener = this
+            )
+        }
+
+        override fun onClose(
+            code: WebSocketFrame.CloseCode,
+            reason: String,
+            initiatedByRemote: Boolean
+        ) {
+            activePeer?.let { BitVoidSignalingServer.leaveRoom(it.roomId, it.peerId) }
+        }
+
+        override fun onMessage(message: WebSocketFrame) {
+            val peer = activePeer ?: return
+            val raw = message.textPayload ?: return
+            BitVoidSignalingServer.handleSignalingEnvelope(peer.roomId, peer.peerId, raw)
+        }
+
+        override fun onPong(pong: WebSocketFrame) {
+        }
+
+        override fun onException(exception: IOException) {
+            activePeer?.let { BitVoidSignalingServer.leaveRoom(it.roomId, it.peerId) }
+        }
+
+        override fun onSendJson(jsonPayload: String) {
+            synchronized(this) {
+                try {
+                    send(jsonPayload)
+                } catch (_: IOException) {
+                }
+            }
+        }
+
+        override fun onForceClose(reason: String) {
+            try {
+                close(WebSocketFrame.CloseCode.NormalClosure, reason, false)
             } catch (_: IOException) {
             }
         }

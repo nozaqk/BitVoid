@@ -1,22 +1,39 @@
 package com.bitvoid.network.client
 
+import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
+import com.bitvoid.network.call.BitVoidDocumentPreviewer
+import com.bitvoid.network.call.BitVoidSignalingServer
+import com.bitvoid.network.call.LiveClassMaterial
+import com.bitvoid.network.call.ParticipantRole
+import com.bitvoid.network.call.RenderedMaterialDeck
+import com.bitvoid.network.call.SignalingPeer
+import com.bitvoid.network.call.SignalingSessionMode
 import com.bitvoid.network.model.MediaCategory
+import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
@@ -51,7 +68,17 @@ data class ClientChannelSession(
     val isPublic: Boolean,
     val token: String,
     val callsign: String,
-    val mediaList: List<RemoteMediaItem>
+    val mediaList: List<RemoteMediaItem>,
+    val isLiveClassRoom: Boolean = false
+)
+
+data class ClientChatAttachment(
+    val id: String,
+    val name: String,
+    val size: Long,
+    val mimeType: String,
+    val streamUrl: String,
+    val downloadUrl: String
 )
 
 data class ClientChatMessage(
@@ -60,7 +87,8 @@ data class ClientChatMessage(
     val sender: String,
     val text: String,
     val time: String,
-    val isSystemNotice: Boolean = false
+    val isSystemNotice: Boolean = false,
+    val attachment: ClientChatAttachment? = null
 )
 
 data class ClientDirectSession(
@@ -68,6 +96,37 @@ data class ClientDirectSession(
     val myUsername: String,
     val peerUsername: String,
     val token: String
+)
+
+data class ChannelCallStatus(
+    val roomId: String = "",
+    val isActive: Boolean = false,
+    val mode: SignalingSessionMode = SignalingSessionMode.VOICE_VIDEO_CALL,
+    val hostPeerId: String = "",
+    val classCode: String? = null,
+    val participantCount: Int = 0,
+    val peers: List<SignalingPeer> = emptyList()
+)
+
+data class LiveClassJoinInfo(
+    val classCode: String,
+    val roomId: String,
+    val channelId: String,
+    val channelName: String,
+    val token: String,
+    val callsign: String,
+    val creatorUsername: String = "",
+    val isHidden: Boolean = false
+)
+
+data class RemoteLiveClassSummary(
+    val roomId: String,
+    val channelId: String,
+    val name: String,
+    val classCode: String,
+    val creatorUsername: String,
+    val isHidden: Boolean,
+    val participantCount: Int
 )
 
 enum class ClientWsStatus {
@@ -115,6 +174,10 @@ class BitVoidClientRepository {
 
     private var activeWebSocket: WebSocket? = null
     private var activeDirectWebSocket: WebSocket? = null
+    private var channelReconnectJob: Job? = null
+    private var directReconnectJob: Job? = null
+    private var callStatusPollJob: Job? = null
+    private var directCallStatusPollJob: Job? = null
 
     private val _gatewayBaseUrl = MutableStateFlow(DEFAULT_GATEWAY_URL)
     val gatewayBaseUrl: StateFlow<String> = _gatewayBaseUrl.asStateFlow()
@@ -172,6 +235,21 @@ class BitVoidClientRepository {
 
     private val _directChatError = MutableStateFlow<String?>(null)
     val directChatError: StateFlow<String?> = _directChatError.asStateFlow()
+
+    private val _isUploadingFile = MutableStateFlow(false)
+    val isUploadingFile: StateFlow<Boolean> = _isUploadingFile.asStateFlow()
+
+    private val _fileUploadError = MutableStateFlow<String?>(null)
+    val fileUploadError: StateFlow<String?> = _fileUploadError.asStateFlow()
+
+    private val _activeChannelCallStatus = MutableStateFlow<ChannelCallStatus?>(null)
+    val activeChannelCallStatus: StateFlow<ChannelCallStatus?> = _activeChannelCallStatus.asStateFlow()
+
+    private val _activeDirectCallStatus = MutableStateFlow<ChannelCallStatus?>(null)
+    val activeDirectCallStatus: StateFlow<ChannelCallStatus?> = _activeDirectCallStatus.asStateFlow()
+
+    private val _liveClasses = MutableStateFlow<List<RemoteLiveClassSummary>>(emptyList())
+    val liveClasses: StateFlow<List<RemoteLiveClassSummary>> = _liveClasses.asStateFlow()
 
     fun setGatewayBaseUrl(rawUrl: String): String? {
         val normalized = BitVoidClientManager.normalizeLocalPortalUrl(rawUrl)
@@ -327,8 +405,472 @@ class BitVoidClientRepository {
             _channelJoinError.value = null
             _channelPeersCount.value = 1
             connectChatWebSocket(targetBase, session)
+            startCallStatusPolling(targetBase, session)
         }.onFailure { err ->
             _channelJoinError.value = err.message ?: "Failed to unlock channel"
+        }
+    }
+
+    suspend fun fetchLiveClasses(username: String, urlOverride: String? = null) {
+        val targetBase = (urlOverride?.let { setGatewayBaseUrl(it) } ?: _gatewayBaseUrl.value)
+            .trimEnd('/')
+        val cleanUser = username.trim().removePrefix("@")
+        val encodedUser = URLEncoder.encode(cleanUser, StandardCharsets.UTF_8.name())
+            .replace("+", "%20")
+
+        val result = withContext(Dispatchers.IO) {
+            try {
+                val url = if (cleanUser.isNotEmpty()) {
+                    "$targetBase/api/live-classes?username=$encodedUser"
+                } else {
+                    "$targetBase/api/live-classes"
+                }
+                val request = Request.Builder().url(url).get().build()
+                okHttpClient.newCall(request).execute().use { resp ->
+                    val bodyStr = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful) {
+                        Result.failure(IOException("Gateway returned HTTP ${resp.code}"))
+                    } else {
+                        val json = JSONObject(bodyStr)
+                        val arr = json.optJSONArray("liveClasses") ?: JSONArray()
+                        val list = ArrayList<RemoteLiveClassSummary>(arr.length())
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.optJSONObject(i) ?: continue
+                            list.add(
+                                RemoteLiveClassSummary(
+                                    roomId = obj.optString("roomId"),
+                                    channelId = obj.optString("channelId", obj.optString("roomId")),
+                                    name = obj.optString("name", "Live Class"),
+                                    classCode = obj.optString("classCode"),
+                                    creatorUsername = obj.optString("creatorUsername"),
+                                    isHidden = obj.optBoolean("isHidden", false),
+                                    participantCount = obj.optInt("participantCount", 0)
+                                )
+                            )
+                        }
+                        Result.success(list)
+                    }
+                }
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+
+        result.onSuccess { list ->
+            _liveClasses.value = list
+        }
+    }
+
+    suspend fun startLiveClassSession(
+        name: String,
+        isHidden: Boolean,
+        creatorUsername: String,
+        urlOverride: String? = null
+    ): Result<LiveClassJoinInfo> {
+        val cleanName = name.trim()
+        if (cleanName.isEmpty()) {
+            return Result.failure(IllegalArgumentException("Enter a Live Class name."))
+        }
+        val targetBase = (urlOverride?.let { setGatewayBaseUrl(it) } ?: _gatewayBaseUrl.value)
+            .trimEnd('/')
+
+        _isJoiningChannel.value = true
+        _channelJoinError.value = null
+
+        val result = withContext(Dispatchers.IO) {
+            try {
+                val bodyJson = JSONObject().apply {
+                    put("name", cleanName)
+                    put("isHidden", isHidden)
+                    val cleanUser = creatorUsername.trim().removePrefix("@")
+                    if (cleanUser.isNotEmpty()) {
+                        put("username", cleanUser)
+                    }
+                }.toString()
+
+                val request = Request.Builder()
+                    .url("$targetBase/api/live-class/start")
+                    .post(bodyJson.toRequestBody(JSON_MEDIA_TYPE))
+                    .build()
+
+                okHttpClient.newCall(request).execute().use { resp ->
+                    val bodyStr = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful) {
+                        val detail = try {
+                            JSONObject(bodyStr).optString("detail", "")
+                        } catch (_: Exception) {
+                            ""
+                        }
+                        Result.failure(
+                            IOException(detail.ifBlank { "Unable to start Live Class (HTTP ${resp.code})" })
+                        )
+                    } else {
+                        parseLiveClassSessionResponse(JSONObject(bodyStr), isLiveClass = true)
+                    }
+                }
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+
+        _isJoiningChannel.value = false
+        return result.fold(
+            onSuccess = { (session, initialMessages, joinInfo) ->
+                leaveDirectChat()
+                closeSocketOnly()
+                _activeChannelSession.value = session
+                _channelMessages.value = initialMessages
+                _channelJoinError.value = null
+                _channelPeersCount.value = 1
+                connectChatWebSocket(targetBase, session)
+                startCallStatusPolling(targetBase, session)
+                scope.launch { fetchLiveClasses(creatorUsername, targetBase) }
+                Result.success(joinInfo)
+            },
+            onFailure = { err ->
+                _channelJoinError.value = err.message ?: "Unable to start Live Class"
+                Result.failure(err)
+            }
+        )
+    }
+
+    suspend fun joinLiveClassByRoomId(
+        roomId: String,
+        username: String,
+        urlOverride: String? = null
+    ): Result<LiveClassJoinInfo> {
+        val cleanRoomId = roomId.trim()
+        if (cleanRoomId.isEmpty()) {
+            return Result.failure(IllegalArgumentException("Missing Live Class room ID."))
+        }
+        val targetBase = (urlOverride?.let { setGatewayBaseUrl(it) } ?: _gatewayBaseUrl.value)
+            .trimEnd('/')
+
+        _isJoiningChannel.value = true
+        _channelJoinError.value = null
+
+        val result = withContext(Dispatchers.IO) {
+            try {
+                val bodyJson = JSONObject().apply {
+                    put("roomId", cleanRoomId)
+                    val cleanUser = username.trim().removePrefix("@")
+                    if (cleanUser.isNotEmpty()) {
+                        put("username", cleanUser)
+                    }
+                }.toString()
+
+                val request = Request.Builder()
+                    .url("$targetBase/api/live-class/join")
+                    .post(bodyJson.toRequestBody(JSON_MEDIA_TYPE))
+                    .build()
+
+                okHttpClient.newCall(request).execute().use { resp ->
+                    val bodyStr = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful) {
+                        val detail = try {
+                            JSONObject(bodyStr).optString("detail", "")
+                        } catch (_: Exception) {
+                            ""
+                        }
+                        Result.failure(
+                            IllegalArgumentException(
+                                detail.ifBlank { "Unable to join Live Class (HTTP ${resp.code})" }
+                            )
+                        )
+                    } else {
+                        parseLiveClassSessionResponse(JSONObject(bodyStr), isLiveClass = true)
+                    }
+                }
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+
+        _isJoiningChannel.value = false
+        return result.fold(
+            onSuccess = { (session, initialMessages, joinInfo) ->
+                leaveDirectChat()
+                closeSocketOnly()
+                _activeChannelSession.value = session
+                _channelMessages.value = initialMessages
+                _channelJoinError.value = null
+                _channelPeersCount.value = 1
+                connectChatWebSocket(targetBase, session)
+                startCallStatusPolling(targetBase, session)
+                Result.success(joinInfo)
+            },
+            onFailure = { err ->
+                _channelJoinError.value = err.message ?: "Unable to join Live Class"
+                Result.failure(err)
+            }
+        )
+    }
+
+    suspend fun joinLiveClassByCode(
+        rawClassCode: String,
+        username: String? = null,
+        urlOverride: String? = null
+    ): Result<LiveClassJoinInfo> {
+        val cleanCode = rawClassCode.trim().uppercase().replace(" ", "")
+        if (cleanCode.isEmpty()) {
+            val err = IllegalArgumentException("Enter a Live Class ID (e.g. CLS-ABCD-12).")
+            return Result.failure(err)
+        }
+        val targetBase = (urlOverride?.let { setGatewayBaseUrl(it) } ?: _gatewayBaseUrl.value)
+            .trimEnd('/')
+
+        _isJoiningChannel.value = true
+        _channelJoinError.value = null
+
+        val result = withContext(Dispatchers.IO) {
+            try {
+                val bodyJson = JSONObject().apply {
+                    put("classCode", cleanCode)
+                    val cleanUser = username?.trim()?.removePrefix("@")
+                    if (!cleanUser.isNullOrEmpty()) {
+                        put("username", cleanUser)
+                    }
+                }.toString()
+
+                val request = Request.Builder()
+                    .url("$targetBase/api/live-class/join")
+                    .post(bodyJson.toRequestBody(JSON_MEDIA_TYPE))
+                    .build()
+
+                okHttpClient.newCall(request).execute().use { resp ->
+                    val bodyStr = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful) {
+                        val detail = try {
+                            JSONObject(bodyStr).optString("detail", "")
+                        } catch (_: Exception) {
+                            ""
+                        }
+                        Result.failure(
+                            IllegalArgumentException(
+                                detail.ifBlank { "Invalid or inactive Live Class ID (HTTP ${resp.code})" }
+                            )
+                        )
+                    } else {
+                        parseLiveClassSessionResponse(
+                            JSONObject(bodyStr),
+                            fallbackCode = cleanCode,
+                            isLiveClass = true
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+
+        _isJoiningChannel.value = false
+        return result.fold(
+            onSuccess = { (session, initialMessages, joinInfo) ->
+                leaveDirectChat()
+                closeSocketOnly()
+                _activeChannelSession.value = session
+                _channelMessages.value = initialMessages
+                _channelJoinError.value = null
+                _channelPeersCount.value = 1
+                connectChatWebSocket(targetBase, session)
+                startCallStatusPolling(targetBase, session)
+                Result.success(joinInfo)
+            },
+            onFailure = { err ->
+                _channelJoinError.value = err.message ?: "Unable to join Live Class"
+                Result.failure(err)
+            }
+        )
+    }
+
+    private fun parseLiveClassSessionResponse(
+        json: JSONObject,
+        fallbackCode: String = "",
+        isLiveClass: Boolean = true
+    ): Result<Triple<ClientChannelSession, List<ClientChatMessage>, LiveClassJoinInfo>> {
+        val token = json.getString("token")
+        val resolvedChannelId = json.getString("channelId")
+        val resolvedRoomId = json.optString("roomId", resolvedChannelId)
+        val resolvedCode = json.optString("classCode", fallbackCode)
+        val name = json.optString("name", resolvedChannelId)
+        val isPublic = json.optBoolean("isPublic", false)
+        val callsign = json.optString("callsign", "Student")
+        val creatorUsername = json.optString("creatorUsername", "")
+        val isHidden = json.optBoolean("isHidden", false)
+        val mediaArr = json.optJSONArray("media") ?: json.optJSONArray("videos") ?: JSONArray()
+        val msgArr = json.optJSONArray("messages") ?: JSONArray()
+
+        val session = ClientChannelSession(
+            channelId = resolvedChannelId,
+            name = name,
+            isPublic = isPublic,
+            token = token,
+            callsign = callsign,
+            mediaList = parseMediaArray(mediaArr),
+            isLiveClassRoom = isLiveClass || resolvedRoomId.startsWith("LC-")
+        )
+        val joinInfo = LiveClassJoinInfo(
+            classCode = resolvedCode,
+            roomId = resolvedRoomId,
+            channelId = resolvedChannelId,
+            channelName = name,
+            token = token,
+            callsign = callsign,
+            creatorUsername = creatorUsername,
+            isHidden = isHidden
+        )
+        val messages = parseMessagesArray(msgArr)
+        return Result.success(Triple(session, messages, joinInfo))
+    }
+
+    suspend fun fetchChannelCallStatus(
+        channelId: String? = null,
+        token: String? = null,
+        urlOverride: String? = null
+    ) {
+        val session = _activeChannelSession.value
+        val targetChannelId = channelId?.trim()?.takeIf { it.isNotEmpty() }
+            ?: session?.channelId
+            ?: return
+        val effectiveToken = token ?: session?.token
+        val targetBase = (urlOverride?.let { setGatewayBaseUrl(it) } ?: _gatewayBaseUrl.value)
+            .trimEnd('/')
+        val encodedId = URLEncoder.encode(targetChannelId, StandardCharsets.UTF_8.name())
+            .replace("+", "%20")
+
+        withContext(Dispatchers.IO) {
+            try {
+                val reqBuilder = Request.Builder()
+                    .url("$targetBase/api/channels/$encodedId/call/status")
+                    .get()
+                if (!effectiveToken.isNullOrBlank()) {
+                    reqBuilder.header("X-Channel-Token", effectiveToken)
+                }
+                okHttpClient.newCall(reqBuilder.build()).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        val json = JSONObject(resp.body?.string().orEmpty())
+                        val modeStr = json.optString("mode", SignalingSessionMode.VOICE_VIDEO_CALL.name)
+                        val mode = runCatching { SignalingSessionMode.valueOf(modeStr) }
+                            .getOrDefault(SignalingSessionMode.VOICE_VIDEO_CALL)
+                        val peersArr = json.optJSONArray("peers") ?: JSONArray()
+                        val peers = ArrayList<SignalingPeer>(peersArr.length())
+                        for (i in 0 until peersArr.length()) {
+                            val p = peersArr.optJSONObject(i) ?: continue
+                            val role = runCatching {
+                                ParticipantRole.valueOf(p.optString("role", ParticipantRole.SPEAKER.name))
+                            }.getOrDefault(ParticipantRole.SPEAKER)
+                            peers.add(
+                                SignalingPeer(
+                                    peerId = p.optString("peerId"),
+                                    displayName = p.optString("displayName", "Peer"),
+                                    role = role,
+                                    roomId = p.optString("roomId", targetChannelId),
+                                    isMuted = p.optBoolean("isMuted", false),
+                                    isVideoOn = p.optBoolean("isVideoOn", false),
+                                    isScreenSharing = p.optBoolean("isScreenSharing", false),
+                                    joinedAtMs = p.optLong("joinedAtMs", 0L)
+                                )
+                            )
+                        }
+                        _activeChannelCallStatus.value = ChannelCallStatus(
+                            roomId = json.optString("roomId", targetChannelId),
+                            isActive = json.optBoolean("isActive", false),
+                            mode = mode,
+                            hostPeerId = json.optString("hostPeerId", ""),
+                            classCode = json.optString("classCode").takeIf { it.isNotBlank() },
+                            participantCount = json.optInt("participantCount", peers.size),
+                            peers = peers
+                        )
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    suspend fun fetchDirectCallStatus(
+        dmId: String? = null,
+        token: String? = null,
+        urlOverride: String? = null
+    ) {
+        val session = _activeDirectSession.value
+        val targetDmId = dmId?.trim()?.takeIf { it.isNotEmpty() } ?: session?.dmId ?: return
+        val effectiveToken = token ?: session?.token ?: return
+        val targetBase = (urlOverride?.let { setGatewayBaseUrl(it) } ?: _gatewayBaseUrl.value)
+            .trimEnd('/')
+        val encodedDm = URLEncoder.encode(targetDmId, StandardCharsets.UTF_8.name())
+            .replace("+", "%20")
+
+        withContext(Dispatchers.IO) {
+            try {
+                val req = Request.Builder()
+                    .url("$targetBase/api/dm/$encodedDm/call/status")
+                    .header("X-DM-Token", effectiveToken)
+                    .get()
+                    .build()
+                okHttpClient.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        val json = JSONObject(resp.body?.string().orEmpty())
+                        val mode = runCatching {
+                            SignalingSessionMode.valueOf(json.optString("mode", SignalingSessionMode.VOICE_VIDEO_CALL.name))
+                        }.getOrDefault(SignalingSessionMode.VOICE_VIDEO_CALL)
+                        val peersArr = json.optJSONArray("peers") ?: JSONArray()
+                        val peers = ArrayList<SignalingPeer>(peersArr.length())
+                        for (i in 0 until peersArr.length()) {
+                            val p = peersArr.optJSONObject(i) ?: continue
+                            val role = runCatching {
+                                ParticipantRole.valueOf(p.optString("role", ParticipantRole.SPEAKER.name))
+                            }.getOrDefault(ParticipantRole.SPEAKER)
+                            peers.add(
+                                SignalingPeer(
+                                    peerId = p.optString("peerId"),
+                                    displayName = p.optString("displayName", "Peer"),
+                                    role = role,
+                                    roomId = p.optString("roomId", targetDmId),
+                                    isMuted = p.optBoolean("isMuted", false),
+                                    isVideoOn = p.optBoolean("isVideoOn", false),
+                                    isScreenSharing = p.optBoolean("isScreenSharing", false),
+                                    joinedAtMs = p.optLong("joinedAtMs", 0L)
+                                )
+                            )
+                        }
+                        _activeDirectCallStatus.value = ChannelCallStatus(
+                            roomId = json.optString("roomId", targetDmId),
+                            isActive = json.optBoolean("isActive", false),
+                            mode = mode,
+                            hostPeerId = json.optString("hostPeerId", ""),
+                            classCode = null,
+                            participantCount = json.optInt("participantCount", peers.size),
+                            peers = peers
+                        )
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun startDirectCallStatusPolling(baseUrl: String, session: ClientDirectSession) {
+        directCallStatusPollJob?.cancel()
+        directCallStatusPollJob = scope.launch {
+            while (true) {
+                val cur = _activeDirectSession.value ?: break
+                if (cur.dmId != session.dmId) break
+                fetchDirectCallStatus(cur.dmId, cur.token, baseUrl)
+                delay(2800L)
+            }
+        }
+    }
+
+    private fun startCallStatusPolling(baseUrl: String, session: ClientChannelSession) {
+        callStatusPollJob?.cancel()
+        callStatusPollJob = scope.launch {
+            while (true) {
+                val cur = _activeChannelSession.value ?: break
+                if (cur.channelId != session.channelId) break
+                fetchChannelCallStatus(cur.channelId, cur.token, baseUrl)
+                delay(3500L)
+            }
         }
     }
 
@@ -404,15 +946,280 @@ class BitVoidClientRepository {
     }
 
     fun buildAbsoluteStreamUrl(item: RemoteMediaItem, channelToken: String? = null): String {
+        return buildAttachmentUrl(item.streamUrl, channelToken)
+    }
+
+    fun buildAttachmentUrl(pathOrUrl: String, token: String? = null): String {
+        if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
+            return if (!token.isNullOrBlank()) {
+                val encoded = URLEncoder.encode(token, StandardCharsets.UTF_8.name())
+                val separator = if (pathOrUrl.contains('?')) '&' else '?'
+                "$pathOrUrl${separator}token=$encoded"
+            } else {
+                pathOrUrl
+            }
+        }
         val base = _gatewayBaseUrl.value.trimEnd('/')
-        val path = if (item.streamUrl.startsWith("/")) item.streamUrl else "/${item.streamUrl}"
-        return if (!channelToken.isNullOrBlank()) {
-            val encoded = URLEncoder.encode(channelToken, StandardCharsets.UTF_8.name())
+        val path = if (pathOrUrl.startsWith("/")) pathOrUrl else "/$pathOrUrl"
+        return if (!token.isNullOrBlank()) {
+            val encoded = URLEncoder.encode(token, StandardCharsets.UTF_8.name())
             val separator = if (path.contains('?')) '&' else '?'
             "$base$path${separator}token=$encoded"
         } else {
             "$base$path"
         }
+    }
+
+    suspend fun uploadFileToChannel(
+        context: Context,
+        uri: Uri,
+        caption: String = ""
+    ): Result<Unit> {
+        val session = _activeChannelSession.value
+            ?: return Result.failure(IllegalStateException("Join a channel before uploading a file."))
+        val targetBase = _gatewayBaseUrl.value.trimEnd('/')
+        val encodedId = URLEncoder.encode(session.channelId, StandardCharsets.UTF_8.name())
+            .replace("+", "%20")
+
+        _isUploadingFile.value = true
+        _fileUploadError.value = null
+
+        val result = withContext(Dispatchers.IO) {
+            uploadUriMultipart(
+                context = context,
+                uri = uri,
+                uploadUrl = "$targetBase/api/channels/$encodedId/upload",
+                tokenHeaderName = "X-Channel-Token",
+                tokenValue = session.token,
+                caption = caption
+            )
+        }
+
+        _isUploadingFile.value = false
+        result.onSuccess { msgJson ->
+            if (msgJson != null) {
+                appendMessageIfNew(parseMessageObject(msgJson))
+            }
+            refreshActiveChannelMedia()
+        }.onFailure { err ->
+            _fileUploadError.value = err.message ?: "Channel upload failed"
+        }
+        return result.map { Unit }
+    }
+
+    suspend fun uploadFileToDirectChat(
+        context: Context,
+        uri: Uri,
+        caption: String = ""
+    ): Result<Unit> {
+        val session = _activeDirectSession.value
+            ?: return Result.failure(IllegalStateException("Open a direct chat before uploading a file."))
+        val targetBase = _gatewayBaseUrl.value.trimEnd('/')
+        val encodedDm = URLEncoder.encode(session.dmId, StandardCharsets.UTF_8.name())
+            .replace("+", "%20")
+
+        _isUploadingFile.value = true
+        _fileUploadError.value = null
+
+        val result = withContext(Dispatchers.IO) {
+            uploadUriMultipart(
+                context = context,
+                uri = uri,
+                uploadUrl = "$targetBase/api/dm/$encodedDm/upload",
+                tokenHeaderName = "X-DM-Token",
+                tokenValue = session.token,
+                caption = caption
+            )
+        }
+
+        _isUploadingFile.value = false
+        result.onSuccess { msgJson ->
+            if (msgJson != null) {
+                appendDirectMessageIfNew(parseMessageObject(msgJson))
+            }
+        }.onFailure { err ->
+            _fileUploadError.value = err.message ?: "Direct chat upload failed"
+        }
+        return result.map { Unit }
+    }
+
+    fun clearFileUploadError() {
+        _fileUploadError.value = null
+    }
+
+    suspend fun uploadLiveClassMaterial(
+        context: Context,
+        roomId: String,
+        uri: Uri,
+        isDirectRoom: Boolean
+    ): Result<LiveClassMaterial> {
+        val targetBase = _gatewayBaseUrl.value.trimEnd('/')
+        val encodedRoom = URLEncoder.encode(roomId.trim(), StandardCharsets.UTF_8.name())
+            .replace("+", "%20")
+        val headerName = if (isDirectRoom) "X-DM-Token" else "X-Channel-Token"
+        val tokenValue = if (isDirectRoom) {
+            _activeDirectSession.value?.token.orEmpty()
+        } else {
+            _activeChannelSession.value?.token.orEmpty()
+        }
+
+        _isUploadingFile.value = true
+        _fileUploadError.value = null
+
+        val result: Result<LiveClassMaterial> = withContext(Dispatchers.IO) {
+            var tempFile: File? = null
+            try {
+                val resolver = context.contentResolver
+                val fileName = resolveDisplayName(context, uri)
+                val mimeType = resolver.getType(uri)?.takeIf { it.isNotBlank() } ?: "application/octet-stream"
+                tempFile = File.createTempFile("bv_mat_", ".tmp", context.cacheDir)
+                resolver.openInputStream(uri)?.use { input ->
+                    FileOutputStream(tempFile).use { output ->
+                        input.copyTo(output, bufferSize = 64 * 1024)
+                    }
+                } ?: return@withContext Result.failure(IOException("Unable to read selected document."))
+
+                val multipartBody = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart(
+                        "file",
+                        fileName,
+                        tempFile.asRequestBody(mimeType.toMediaTypeOrNull())
+                    )
+                    .build()
+
+                val reqBuilder = Request.Builder()
+                    .url("$targetBase/api/live-class/$encodedRoom/materials")
+                    .post(multipartBody)
+                if (tokenValue.isNotBlank()) {
+                    reqBuilder.header(headerName, tokenValue)
+                }
+
+                okHttpClient.newCall(reqBuilder.build()).execute().use { resp ->
+                    val bodyStr = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful) {
+                        val detail = try {
+                            JSONObject(bodyStr).optString("detail", "")
+                        } catch (_: Exception) {
+                            ""
+                        }
+                        Result.failure(IOException(detail.ifBlank { "Document upload failed (HTTP ${resp.code})" }))
+                    } else {
+                        val json = JSONObject(bodyStr)
+                        val matObj = json.getJSONObject("material")
+                        Result.success(BitVoidSignalingServer.parseMaterialJson(matObj))
+                    }
+                }
+            } catch (e: Exception) {
+                Result.failure(e)
+            } finally {
+                tempFile?.delete()
+            }
+        }
+
+        _isUploadingFile.value = false
+        result.onFailure { err ->
+            _fileUploadError.value = err.message ?: "Unable to share document"
+        }
+        return result
+    }
+
+    suspend fun prepareLiveClassMaterialDeck(
+        context: Context,
+        material: LiveClassMaterial,
+        token: String?
+    ): Result<RenderedMaterialDeck> {
+        val rawPath = material.streamUrl.ifBlank { material.downloadUrl }
+        val absUrl = buildAttachmentUrl(rawPath, token)
+        return BitVoidDocumentPreviewer.downloadAndPrepareDeck(
+            okHttpClient = okHttpClient,
+            material = material,
+            downloadUrl = absUrl,
+            token = token,
+            cacheDir = context.cacheDir
+        )
+    }
+
+    private fun uploadUriMultipart(
+        context: Context,
+        uri: Uri,
+        uploadUrl: String,
+        tokenHeaderName: String,
+        tokenValue: String,
+        caption: String
+    ): Result<JSONObject?> {
+        var tempFile: File? = null
+        return try {
+            val resolver = context.contentResolver
+            val fileName = resolveDisplayName(context, uri)
+            val mimeType = resolver.getType(uri)?.takeIf { it.isNotBlank() } ?: "application/octet-stream"
+            tempFile = File.createTempFile("bv_upload_", ".tmp", context.cacheDir)
+            resolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(tempFile).use { output ->
+                    input.copyTo(output, bufferSize = 64 * 1024)
+                }
+            } ?: return Result.failure(IOException("Unable to read selected file."))
+
+            val multipartBuilder = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart(
+                    "file",
+                    fileName,
+                    tempFile.asRequestBody(mimeType.toMediaTypeOrNull())
+                )
+            val trimmedCaption = caption.trim()
+            if (trimmedCaption.isNotEmpty()) {
+                multipartBuilder.addFormDataPart("text", trimmedCaption)
+            }
+
+            val request = Request.Builder()
+                .url(uploadUrl)
+                .header(tokenHeaderName, tokenValue)
+                .post(multipartBuilder.build())
+                .build()
+
+            okHttpClient.newCall(request).execute().use { resp ->
+                val bodyStr = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    val detail = try {
+                        JSONObject(bodyStr).optString("detail", "")
+                    } catch (_: Exception) {
+                        ""
+                    }
+                    Result.failure(IOException(detail.ifBlank { "Upload failed (HTTP ${resp.code})" }))
+                } else {
+                    val json = JSONObject(bodyStr)
+                    Result.success(json.optJSONObject("message"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        } finally {
+            tempFile?.delete()
+        }
+    }
+
+    private fun resolveDisplayName(context: Context, uri: Uri): String {
+        try {
+            context.contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (idx >= 0) {
+                        val name = cursor.getString(idx)?.trim()
+                        if (!name.isNullOrEmpty()) return name
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+        return uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+            ?: "shared_file_${System.currentTimeMillis()}"
     }
 
     suspend fun registerUsername(username: String, urlOverride: String? = null) {
@@ -525,6 +1332,7 @@ class BitVoidClientRepository {
             _directMessages.value = initialMessages
             _directChatError.value = null
             connectDirectWebSocket(targetBase, session)
+            startDirectCallStatusPolling(targetBase, session)
             scope.launch { fetchKnownUsers(targetBase) }
         }.onFailure { err ->
             _directChatError.value = err.message ?: "Unable to start direct chat"
@@ -569,6 +1377,9 @@ class BitVoidClientRepository {
     }
 
     fun leaveChannel() {
+        callStatusPollJob?.cancel()
+        callStatusPollJob = null
+        _activeChannelCallStatus.value = null
         closeSocketOnly()
         _activeChannelSession.value = null
         _channelMessages.value = emptyList()
@@ -578,6 +1389,9 @@ class BitVoidClientRepository {
     }
 
     fun leaveDirectChat() {
+        directCallStatusPollJob?.cancel()
+        directCallStatusPollJob = null
+        _activeDirectCallStatus.value = null
         closeDirectSocketOnly()
         _activeDirectSession.value = null
         _directMessages.value = emptyList()
@@ -637,9 +1451,21 @@ class BitVoidClientRepository {
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                     _wsStatus.value = ClientWsStatus.ERROR
+                    scheduleChannelReconnect(baseUrl, session)
                 }
             }
         )
+    }
+
+    private fun scheduleChannelReconnect(baseUrl: String, session: ClientChannelSession) {
+        channelReconnectJob?.cancel()
+        channelReconnectJob = scope.launch {
+            delay(1800)
+            val current = _activeChannelSession.value ?: return@launch
+            if (current.channelId == session.channelId && current.token == session.token) {
+                connectChatWebSocket(baseUrl, current)
+            }
+        }
     }
 
     private fun handleWebSocketFrame(rawJson: String) {
@@ -721,9 +1547,21 @@ class BitVoidClientRepository {
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                     _directWsStatus.value = ClientWsStatus.ERROR
+                    scheduleDirectReconnect(baseUrl, session)
                 }
             }
         )
+    }
+
+    private fun scheduleDirectReconnect(baseUrl: String, session: ClientDirectSession) {
+        directReconnectJob?.cancel()
+        directReconnectJob = scope.launch {
+            delay(1800)
+            val current = _activeDirectSession.value ?: return@launch
+            if (current.dmId == session.dmId && current.token == session.token) {
+                connectDirectWebSocket(baseUrl, current)
+            }
+        }
     }
 
     private fun handleDirectWebSocketFrame(rawJson: String) {
@@ -756,6 +1594,8 @@ class BitVoidClientRepository {
     }
 
     private fun closeSocketOnly() {
+        channelReconnectJob?.cancel()
+        channelReconnectJob = null
         try {
             activeWebSocket?.close(1000, "Client exited channel")
         } catch (_: Exception) {
@@ -764,6 +1604,8 @@ class BitVoidClientRepository {
     }
 
     private fun closeDirectSocketOnly() {
+        directReconnectJob?.cancel()
+        directReconnectJob = null
         try {
             activeDirectWebSocket?.close(1000, "Client exited direct chat")
         } catch (_: Exception) {
@@ -833,13 +1675,27 @@ class BitVoidClientRepository {
     }
 
     private fun parseMessageObject(obj: JSONObject): ClientChatMessage {
+        val attObj = obj.optJSONObject("attachment")
+        val attachment = if (attObj != null && attObj.optString("id").isNotBlank()) {
+            ClientChatAttachment(
+                id = attObj.optString("id"),
+                name = attObj.optString("name", "Shared file"),
+                size = attObj.optLong("size", 0L),
+                mimeType = attObj.optString("mimeType", "application/octet-stream"),
+                streamUrl = attObj.optString("streamUrl"),
+                downloadUrl = attObj.optString("downloadUrl")
+            )
+        } else {
+            null
+        }
         return ClientChatMessage(
             id = obj.optString("id", "msg_${System.nanoTime()}"),
             channelId = obj.optString("channelId", obj.optString("roomId", "")),
             sender = obj.optString("sender", "Peer"),
             text = obj.optString("text", ""),
             time = obj.optString("time", ""),
-            isSystemNotice = false
+            isSystemNotice = false,
+            attachment = attachment
         )
     }
 }

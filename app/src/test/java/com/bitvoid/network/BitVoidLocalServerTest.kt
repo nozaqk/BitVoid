@@ -2,6 +2,7 @@ package com.bitvoid.network
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.bitvoid.network.call.BitVoidSignalingServer
 import com.bitvoid.network.channel.BitVoidChannelManager
 import com.bitvoid.network.client.BitVoidClientManager
 import com.bitvoid.network.client.BitVoidClientRepository
@@ -17,8 +18,14 @@ import java.net.HttpURLConnection
 import java.net.Socket
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -47,6 +54,7 @@ class BitVoidLocalServerTest {
         BitVoidRoomManager.clearAllForTests()
         BitVoidChannelManager.clearAllForTests()
         BitVoidDirectChatManager.clearAllForTests()
+        BitVoidSignalingServer.clearAllForTests()
         server = BitVoidLocalServer(context, port = testPort)
         server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
     }
@@ -59,6 +67,7 @@ class BitVoidLocalServerTest {
         BitVoidRoomManager.clearAllForTests()
         BitVoidChannelManager.clearAllForTests()
         BitVoidDirectChatManager.clearAllForTests()
+        BitVoidSignalingServer.clearAllForTests()
     }
 
     @Test
@@ -572,5 +581,771 @@ class BitVoidLocalServerTest {
                 com.bitvoid.network.model.HostState()
             }
         }
+    }
+
+    @Test
+    fun `portal html uses dynamic viewport height left upload button and responsive desktop split layout`() {
+        BitVoidChannelManager.ensureDefaultChannel()
+        val conn = URL("http://127.0.0.1:$testPort/").openConnection() as HttpURLConnection
+        assertEquals(200, conn.responseCode)
+        val html = String(conn.inputStream.readBytes())
+        conn.disconnect()
+
+        assertTrue("Portal should use 100dvh so mobile browser address bar does not hide composer", html.contains("height: 100dvh;"))
+        assertFalse("Portal must not override 100dvh with 100vh", html.contains("height: 100vh;"))
+        assertTrue("Portal should define PC desktop split-pane media query", html.contains("@media (min-width: 900px)"))
+        assertTrue("Portal should wrap workspace in wa-main-pane", html.contains("wa-main-pane"))
+        assertTrue("Portal should include left + upload button", html.contains("id=\"chat-attach-btn\""))
+        assertTrue("Portal should include arbitrary file input", html.contains("id=\"chat-file-input\""))
+    }
+
+    @Test
+    fun `channel multipart upload supports arbitrary files with private token isolation`() = runBlocking {
+        val prv = BitVoidChannelManager.createChannel(
+            rawName = "Docs Vault",
+            isPublic = false,
+            rawChannelId = "CH-DOCS77",
+            rawPrivateKey = null
+        ).getOrThrow()
+
+        val repo = BitVoidClientRepository()
+        try {
+            val baseUrl = "http://127.0.0.1:$testPort"
+            repo.joinChannel(prv.channelId, null, baseUrl, username = "uploader-1")
+            val session = repo.activeChannelSession.value
+            assertNotNull(session)
+
+            val fileBytes = "%PDF-1.4 BITVOID TEST PAYLOAD".toByteArray(StandardCharsets.UTF_8)
+            val boundary = "----BitVoidBoundary${System.currentTimeMillis()}"
+
+            // Unauthenticated upload returns 401
+            val unauthRespCode = postMultipartBytes(
+                url = "$baseUrl/api/channels/${prv.channelId}/upload",
+                tokenHeader = null,
+                tokenValue = null,
+                boundary = boundary,
+                fileName = "briefing.pdf",
+                mimeType = "application/pdf",
+                fileBytes = fileBytes,
+                caption = "Read this"
+            ).first
+            assertEquals(401, unauthRespCode)
+
+            // Authorized upload returns 200 with attachment metadata and makes file downloadable
+            val (code, body) = postMultipartBytes(
+                url = "$baseUrl/api/channels/${prv.channelId}/upload",
+                tokenHeader = "X-Channel-Token",
+                tokenValue = session!!.token,
+                boundary = boundary,
+                fileName = "briefing.pdf",
+                mimeType = "application/pdf",
+                fileBytes = fileBytes,
+                caption = "Read this PDF"
+            )
+            assertEquals(200, code)
+            val json = JSONObject(body)
+            val msgObj = json.getJSONObject("message")
+            assertEquals("Read this PDF", msgObj.getString("text"))
+            val attObj = msgObj.getJSONObject("attachment")
+            assertEquals("briefing.pdf", attObj.getString("name"))
+            val downloadUrl = attObj.getString("downloadUrl")
+
+            // Unauthorized download returns 401
+            val unauthDl = URL("$baseUrl$downloadUrl").openConnection() as HttpURLConnection
+            assertEquals(401, unauthDl.responseCode)
+            unauthDl.disconnect()
+
+            // Authorized download serves exact uploaded bytes
+            val authDl = URL("$baseUrl$downloadUrl?token=${session.token}").openConnection() as HttpURLConnection
+            assertEquals(200, authDl.responseCode)
+            assertEquals("%PDF-1.4 BITVOID TEST PAYLOAD", String(authDl.inputStream.readBytes(), StandardCharsets.UTF_8))
+            authDl.disconnect()
+
+            // Channel media list now includes the uploaded file
+            repo.refreshActiveChannelMedia()
+            assertTrue(repo.activeChannelSession.value!!.mediaList.any { it.title == "briefing.pdf" })
+        } finally {
+            repo.release()
+        }
+    }
+
+    @Test
+    fun `direct chat multipart upload isolates files to dm participants`() = runBlocking {
+        val baseUrl = "http://127.0.0.1:$testPort"
+        val aliceRepo = BitVoidClientRepository()
+        val bobRepo = BitVoidClientRepository()
+        try {
+            aliceRepo.registerUsername("alice-99", baseUrl)
+            bobRepo.registerUsername("bob-42", baseUrl)
+            aliceRepo.openDirectChat("alice-99", "bob-42", baseUrl)
+            bobRepo.openDirectChat("bob-42", "alice-99", baseUrl)
+
+            val aliceSession = aliceRepo.activeDirectSession.value!!
+            val bobSession = bobRepo.activeDirectSession.value!!
+
+            var attempts = 0
+            while (bobRepo.directWsStatus.value != ClientWsStatus.LIVE && attempts < 30) {
+                delay(50)
+                attempts++
+            }
+            assertEquals(ClientWsStatus.LIVE, bobRepo.directWsStatus.value)
+
+            val fileBytes = "CONFIDENTIAL DM ARCHIVE".toByteArray(StandardCharsets.UTF_8)
+            val (code, body) = postMultipartBytes(
+                url = "$baseUrl/api/dm/${aliceSession.dmId}/upload",
+                tokenHeader = "X-DM-Token",
+                tokenValue = aliceSession.token,
+                boundary = "----BitVoidDmBoundary",
+                fileName = "secret_notes.txt",
+                mimeType = "text/plain",
+                fileBytes = fileBytes,
+                caption = ""
+            )
+            assertEquals(200, code)
+            val attObj = JSONObject(body).getJSONObject("message").getJSONObject("attachment")
+            val dmDownloadPath = attObj.getString("downloadUrl")
+            assertTrue(dmDownloadPath.startsWith("/download/dm/"))
+
+            // Bob receives the attachment over live WS
+            attempts = 0
+            while (bobRepo.directMessages.value.none { it.attachment?.name == "secret_notes.txt" } && attempts < 30) {
+                delay(50)
+                attempts++
+            }
+            assertTrue(bobRepo.directMessages.value.any { it.attachment?.name == "secret_notes.txt" })
+
+            // Unauthorized access without DM token fails with 401
+            val unauthDl = URL("$baseUrl$dmDownloadPath").openConnection() as HttpURLConnection
+            assertEquals(401, unauthDl.responseCode)
+            unauthDl.disconnect()
+
+            // Bob's valid DM token downloads the exact file
+            val bobDl = URL("$baseUrl$dmDownloadPath?token=${bobSession.token}").openConnection() as HttpURLConnection
+            assertEquals(200, bobDl.responseCode)
+            assertEquals("CONFIDENTIAL DM ARCHIVE", String(bobDl.inputStream.readBytes(), StandardCharsets.UTF_8))
+            bobDl.disconnect()
+        } finally {
+            aliceRepo.release()
+            bobRepo.release()
+        }
+    }
+
+    @Test
+    fun `wifi qr payload uses WPA when OS passphrase is present`() {
+        val payload = com.bitvoid.network.ui.buildWifiQrPayload(
+            ssid = "DIRECT-BV-BitVoid_Net",
+            passphrase = "OSPASS1234",
+            isOpen = false
+        )
+        assertEquals("WIFI:T:WPA;S:DIRECT-BV-BitVoid_Net;P:OSPASS1234;H:false;;", payload)
+    }
+
+    @Test
+    fun `portal html includes live classroom webrtc signaling ui and permissive camera mic display headers`() {
+        BitVoidChannelManager.ensureDefaultChannel()
+        val conn = URL("http://127.0.0.1:$testPort/").openConnection() as HttpURLConnection
+        assertEquals(200, conn.responseCode)
+        val permissionsPolicy = conn.getHeaderField("Permissions-Policy").orEmpty()
+        assertTrue(permissionsPolicy.contains("camera=(self)"))
+        assertTrue(permissionsPolicy.contains("microphone=(self)"))
+        assertTrue(permissionsPolicy.contains("display-capture=(self)"))
+
+        val html = String(conn.inputStream.readBytes(), StandardCharsets.UTF_8)
+        conn.disconnect()
+        assertTrue(html.contains("/ws/signaling"))
+        assertTrue(html.contains("LIVE CLASS / CALL"))
+        assertTrue(html.contains("rtc-start-class-host-btn"))
+        assertTrue(html.contains("rtc-start-call-btn"))
+        assertTrue(html.contains("rtc-share-screen-btn"))
+    }
+
+    @Test
+    fun `webrtc signaling ws enforces private channel auth and relays sdp offers answers ice and screen share state`() = runBlocking {
+        val classChannel = BitVoidChannelManager.createChannel(
+            rawName = "Mesh Classroom",
+            isPublic = false,
+            rawChannelId = "CH-CLASS1",
+            rawPrivateKey = null
+        ).getOrThrow()
+
+        // 1. Unauthorized call status & signaling upgrade rejected with 401
+        val unauthStatus = URL("http://127.0.0.1:$testPort/api/channels/${classChannel.channelId}/call/status")
+            .openConnection() as HttpURLConnection
+        assertEquals(401, unauthStatus.responseCode)
+        unauthStatus.disconnect()
+
+        Socket("127.0.0.1", testPort).use { socket ->
+            val wsHandshake = buildString {
+                append("GET /ws/signaling?roomId=${classChannel.channelId}&peerId=intruder HTTP/1.1\r\n")
+                append("Host: 127.0.0.1:$testPort\r\n")
+                append("Upgrade: websocket\r\n")
+                append("Connection: Upgrade\r\n")
+                append("Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n")
+                append("Sec-WebSocket-Version: 13\r\n\r\n")
+            }
+            socket.getOutputStream().write(wsHandshake.toByteArray(StandardCharsets.UTF_8))
+            socket.getOutputStream().flush()
+            val statusLine = socket.getInputStream().bufferedReader().readLine()
+            assertNotNull(statusLine)
+            assertTrue("Expected 401 on unauthorized signaling WS, got $statusLine", statusLine!!.contains("401"))
+        }
+
+        // 2. Unlock channel to obtain valid BVC token
+        val repo = BitVoidClientRepository()
+        val okClient = OkHttpClient()
+        val teacherMessages = CopyOnWriteArrayList<JSONObject>()
+        val studentMessages = CopyOnWriteArrayList<JSONObject>()
+        var teacherWs: WebSocket? = null
+        var studentWs: WebSocket? = null
+
+        try {
+            val baseUrl = "http://127.0.0.1:$testPort"
+            repo.joinChannel(classChannel.channelId, null, baseUrl, username = "teacher-host")
+            val session = repo.activeChannelSession.value
+            assertNotNull(session)
+            val token = session!!.token
+
+            val teacherUrl = "ws://127.0.0.1:$testPort/ws/signaling?roomId=${classChannel.channelId}&channelId=${classChannel.channelId}&peerId=teacher_1&displayName=Prof&mode=LIVE_CLASSROOM&role=HOST_TEACHER&token=$token"
+            val studentUrl = "ws://127.0.0.1:$testPort/ws/signaling?roomId=${classChannel.channelId}&channelId=${classChannel.channelId}&peerId=student_1&displayName=Ada&mode=LIVE_CLASSROOM&role=STUDENT_VIEWER&token=$token"
+
+            teacherWs = okClient.newWebSocket(
+                Request.Builder().url(teacherUrl).build(),
+                object : WebSocketListener() {
+                    override fun onMessage(webSocket: WebSocket, text: String) {
+                        teacherMessages.add(JSONObject(text))
+                    }
+                }
+            )
+            var waitCount = 0
+            while (teacherMessages.none { it.optString("type") == "welcome" } && waitCount < 30) {
+                delay(40)
+                waitCount++
+            }
+            assertTrue(teacherMessages.any { it.optString("type") == "welcome" })
+
+            studentWs = okClient.newWebSocket(
+                Request.Builder().url(studentUrl).build(),
+                object : WebSocketListener() {
+                    override fun onMessage(webSocket: WebSocket, text: String) {
+                        studentMessages.add(JSONObject(text))
+                    }
+                }
+            )
+            waitCount = 0
+            while ((studentMessages.none { it.optString("type") == "welcome" } ||
+                        teacherMessages.none { it.optString("type") == "peer_joined" }) && waitCount < 30
+            ) {
+                delay(40)
+                waitCount++
+            }
+            assertTrue(studentMessages.any { it.optString("type") == "welcome" })
+            assertTrue(teacherMessages.any { it.optString("type") == "peer_joined" })
+
+            // 3. Call status API reports 2 active classroom peers
+            val statusConn = (URL("$baseUrl/api/channels/${classChannel.channelId}/call/status")
+                .openConnection() as HttpURLConnection).apply {
+                setRequestProperty("X-Channel-Token", token)
+            }
+            assertEquals(200, statusConn.responseCode)
+            val statusJson = JSONObject(String(statusConn.inputStream.readBytes(), StandardCharsets.UTF_8))
+            statusConn.disconnect()
+            assertTrue(statusJson.getBoolean("isActive"))
+            assertEquals(2, statusJson.getInt("participantCount"))
+            assertEquals("LIVE_CLASSROOM", statusJson.getString("mode"))
+
+            // 4. Relay SDP offer, answer, ICE candidate, and screen sharing state
+            teacherWs.send("""{"type":"offer","targetPeerId":"student_1","sdp":"v=0-offer"}""")
+            waitCount = 0
+            while (studentMessages.none { it.optString("type") == "offer" } && waitCount < 30) {
+                delay(40)
+                waitCount++
+            }
+            val offerMsg = studentMessages.first { it.optString("type") == "offer" }
+            assertEquals("teacher_1", offerMsg.getString("fromPeerId"))
+            assertEquals("v=0-offer", offerMsg.getString("sdp"))
+
+            studentWs.send("""{"type":"answer","targetPeerId":"teacher_1","sdp":"v=0-answer"}""")
+            studentWs.send("""{"type":"ice","targetPeerId":"teacher_1","candidate":"cand:1 1 udp 1 192.168.43.2 5000 typ host","sdpMid":"0","sdpMLineIndex":0}""")
+            waitCount = 0
+            while ((teacherMessages.none { it.optString("type") == "answer" } ||
+                        teacherMessages.none { it.optString("type") == "ice" }) && waitCount < 30
+            ) {
+                delay(40)
+                waitCount++
+            }
+            assertEquals("v=0-answer", teacherMessages.first { it.optString("type") == "answer" }.getString("sdp"))
+            assertTrue(teacherMessages.first { it.optString("type") == "ice" }.getString("candidate").contains("192.168.43.2"))
+
+            teacherWs.send("""{"type":"media_state","isMuted":false,"isVideoOn":true,"isScreenSharing":true}""")
+            waitCount = 0
+            while (studentMessages.none {
+                    it.optString("type") == "peers_update" &&
+                        it.optJSONObject("peer")?.optBoolean("isScreenSharing") == true
+                } && waitCount < 30
+            ) {
+                delay(40)
+                waitCount++
+            }
+            assertTrue(
+                studentMessages.any {
+                    it.optString("type") == "peers_update" &&
+                        it.optJSONObject("peer")?.optBoolean("isScreenSharing") == true
+                }
+            )
+
+            // 5. End session broadcasts session_ended and clears room
+            teacherWs.send("""{"type":"end_session"}""")
+            waitCount = 0
+            while (studentMessages.none { it.optString("type") == "session_ended" } && waitCount < 30) {
+                delay(40)
+                waitCount++
+            }
+            assertTrue(studentMessages.any { it.optString("type") == "session_ended" })
+
+            val afterEndConn = (URL("$baseUrl/api/channels/${classChannel.channelId}/call/status")
+                .openConnection() as HttpURLConnection).apply {
+                setRequestProperty("X-Channel-Token", token)
+            }
+            assertEquals(200, afterEndConn.responseCode)
+            val afterEndJson = JSONObject(String(afterEndConn.inputStream.readBytes(), StandardCharsets.UTF_8))
+            afterEndConn.disconnect()
+            assertFalse(afterEndJson.getBoolean("isActive"))
+            assertEquals(0, afterEndJson.getInt("participantCount"))
+        } finally {
+            teacherWs?.cancel()
+            studentWs?.cancel()
+            repo.release()
+            okClient.dispatcher.executorService.shutdown()
+            okClient.connectionPool.evictAll()
+        }
+    }
+
+    @Test
+    fun `live class generates CLS code validates join-by-id syncs uploaded documents and slides over signaling`() = runBlocking {
+        val classChannel = BitVoidChannelManager.createChannel(
+            rawName = "Physics 101",
+            isPublic = false,
+            rawChannelId = "CH-PHYS1",
+            rawPrivateKey = null
+        ).getOrThrow()
+
+        val baseUrl = "http://127.0.0.1:$testPort"
+
+        // 0. Portal HTML exposes Meet slide upload, Live Class code pill, and join-by-ID inputs
+        val portalConn = URL("$baseUrl/").openConnection() as HttpURLConnection
+        assertEquals(200, portalConn.responseCode)
+        val portalHtml = String(portalConn.inputStream.readBytes(), StandardCharsets.UTF_8)
+        portalConn.disconnect()
+        assertTrue(portalHtml.contains("rtc-upload-doc-btn"))
+        assertTrue(portalHtml.contains("live-class-code-pill"))
+        assertTrue(portalHtml.contains("sidebar-class-code-input"))
+        assertTrue(portalHtml.contains("live-join-id-row"))
+
+        // 1. Invalid Live Class ID returns 404 before any session starts
+        val invalidJoin = (URL("$baseUrl/api/live-class/join").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            outputStream.write("""{"classCode":"CLS-DEAD-99","username":"stu-1"}""".toByteArray(StandardCharsets.UTF_8))
+        }
+        assertEquals(404, invalidJoin.responseCode)
+        invalidJoin.disconnect()
+
+        val hostRepo = BitVoidClientRepository()
+        val studentRepo = BitVoidClientRepository()
+        val okClient = OkHttpClient()
+        val hostMessages = CopyOnWriteArrayList<JSONObject>()
+        val studentMessages = CopyOnWriteArrayList<JSONObject>()
+        var hostWs: WebSocket? = null
+        var studentWs: WebSocket? = null
+
+        try {
+            // Host unlocks private channel & starts LIVE_CLASSROOM session
+            hostRepo.joinChannel(classChannel.channelId, null, baseUrl, username = "prof-host")
+            val hostSession = hostRepo.activeChannelSession.value!!
+            val hostUrl = "ws://127.0.0.1:$testPort/ws/signaling?roomId=${classChannel.channelId}&channelId=${classChannel.channelId}&peerId=prof_1&displayName=Prof&mode=LIVE_CLASSROOM&role=HOST_TEACHER&token=${hostSession.token}"
+            hostWs = okClient.newWebSocket(
+                Request.Builder().url(hostUrl).build(),
+                object : WebSocketListener() {
+                    override fun onMessage(webSocket: WebSocket, text: String) {
+                        hostMessages.add(JSONObject(text))
+                    }
+                }
+            )
+            var waitCount = 0
+            while (hostMessages.none { it.optString("type") == "welcome" } && waitCount < 30) {
+                delay(40)
+                waitCount++
+            }
+            val welcome = hostMessages.first { it.optString("type") == "welcome" }
+            val generatedClassCode = welcome.optString("classCode")
+            assertTrue("Expected CLS-... Live Class ID, got '$generatedClassCode'", generatedClassCode.startsWith("CLS-"))
+
+            // 2. Unauthorized material upload on private classroom returns 401
+            val unauthUpload = postMultipartBytes(
+                url = "$baseUrl/api/live-class/${classChannel.channelId}/materials",
+                tokenHeader = null,
+                tokenValue = null,
+                boundary = "----BitVoidUnauthDoc",
+                fileName = "lecture1.pdf",
+                mimeType = "application/pdf",
+                fileBytes = "%PDF-1.4 LECTURE".toByteArray(StandardCharsets.UTF_8),
+                caption = ""
+            ).first
+            assertEquals(401, unauthUpload)
+
+            // 3. Student joins purely via generated Live Class ID without knowing private CH-ID
+            val joinRes = studentRepo.joinLiveClassByCode(generatedClassCode, "student-ada", baseUrl)
+            assertTrue("Student join-by-code should succeed: ${joinRes.exceptionOrNull()}", joinRes.isSuccess)
+            val joinInfo = joinRes.getOrThrow()
+            assertEquals(classChannel.channelId, joinInfo.roomId)
+            assertEquals(generatedClassCode, joinInfo.classCode)
+            assertTrue(joinInfo.token.startsWith("BVC."))
+
+            val studentUrl = "ws://127.0.0.1:$testPort/ws/signaling?roomId=${joinInfo.roomId}&channelId=${joinInfo.channelId}&peerId=stu_ada&displayName=${joinInfo.callsign}&mode=LIVE_CLASSROOM&role=STUDENT_VIEWER&token=${joinInfo.token}"
+            studentWs = okClient.newWebSocket(
+                Request.Builder().url(studentUrl).build(),
+                object : WebSocketListener() {
+                    override fun onMessage(webSocket: WebSocket, text: String) {
+                        studentMessages.add(JSONObject(text))
+                    }
+                }
+            )
+            waitCount = 0
+            while (studentMessages.none { it.optString("type") == "welcome" } && waitCount < 30) {
+                delay(40)
+                waitCount++
+            }
+            assertEquals(generatedClassCode, studentMessages.first { it.optString("type") == "welcome" }.optString("classCode"))
+
+            // 4. Host uploads PPTX slide deck into active room; Student receives material_shared over WS
+            val (uploadCode, uploadBody) = postMultipartBytes(
+                url = "$baseUrl/api/live-class/${classChannel.channelId}/materials",
+                tokenHeader = "X-Channel-Token",
+                tokenValue = hostSession.token,
+                boundary = "----BitVoidSlideBoundary",
+                fileName = "quantum_slides.pptx",
+                mimeType = "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                fileBytes = "PK\u0003\u0004MOCK-PPTX-PAYLOAD".toByteArray(StandardCharsets.UTF_8),
+                caption = ""
+            )
+            assertEquals(200, uploadCode)
+            val uploadedMaterialId = JSONObject(uploadBody).getJSONObject("material").getString("id")
+
+            waitCount = 0
+            while (studentMessages.none { it.optString("type") == "material_shared" } && waitCount < 30) {
+                delay(40)
+                waitCount++
+            }
+            val sharedEvent = studentMessages.first { it.optString("type") == "material_shared" }
+            assertEquals(uploadedMaterialId, sharedEvent.getString("activeMaterialId"))
+
+            // 5. Host advances slide page -> Student receives synchronized material_state
+            hostWs.send("""{"type":"slide_nav","materialId":"$uploadedMaterialId","pageIndex":4}""")
+            waitCount = 0
+            while (studentMessages.none {
+                    it.optString("type") == "material_state" && it.optInt("activePageIndex", -1) == 4
+                } && waitCount < 30
+            ) {
+                delay(40)
+                waitCount++
+            }
+            assertTrue(
+                studentMessages.any {
+                    it.optString("type") == "material_state" &&
+                        it.optString("activeMaterialId") == uploadedMaterialId &&
+                        it.optInt("activePageIndex") == 4
+                }
+            )
+        } finally {
+            hostWs?.cancel()
+            studentWs?.cancel()
+            hostRepo.release()
+            studentRepo.release()
+            okClient.dispatcher.executorService.shutdown()
+            okClient.connectionPool.evictAll()
+        }
+    }
+
+    @Test
+    fun `direct dm webrtc signaling isolates call room to participants and reports status`() = runBlocking {
+        val baseUrl = "http://127.0.0.1:$testPort"
+        val aliceRepo = BitVoidClientRepository()
+        val bobRepo = BitVoidClientRepository()
+        val eveRepo = BitVoidClientRepository()
+        val okClient = OkHttpClient()
+        val aliceSignals = CopyOnWriteArrayList<JSONObject>()
+        val bobSignals = CopyOnWriteArrayList<JSONObject>()
+        var aliceWs: WebSocket? = null
+        var bobWs: WebSocket? = null
+
+        try {
+            aliceRepo.registerUsername("alice-call", baseUrl)
+            bobRepo.registerUsername("bob-call", baseUrl)
+            eveRepo.registerUsername("eve-intruder", baseUrl)
+
+            aliceRepo.openDirectChat("alice-call", "bob-call", baseUrl)
+            bobRepo.openDirectChat("bob-call", "alice-call", baseUrl)
+            eveRepo.openDirectChat("eve-intruder", "bob-call", baseUrl)
+
+            val aliceSession = aliceRepo.activeDirectSession.value!!
+            val bobSession = bobRepo.activeDirectSession.value!!
+            val eveSession = eveRepo.activeDirectSession.value!!
+            val dmId = aliceSession.dmId
+
+            // Unauthorized call status without token or with wrong DM token returns 401
+            val unauthStatus = URL("$baseUrl/api/dm/$dmId/call/status").openConnection() as HttpURLConnection
+            assertEquals(401, unauthStatus.responseCode)
+            unauthStatus.disconnect()
+
+            val eveStatus = (URL("$baseUrl/api/dm/$dmId/call/status").openConnection() as HttpURLConnection).apply {
+                setRequestProperty("X-DM-Token", eveSession.token)
+            }
+            assertEquals(401, eveStatus.responseCode)
+            eveStatus.disconnect()
+
+            aliceWs = okClient.newWebSocket(
+                Request.Builder()
+                    .url("ws://127.0.0.1:$testPort/ws/signaling?roomId=$dmId&channelId=$dmId&peerId=alice_p&displayName=alice-call&mode=VOICE_VIDEO_CALL&role=SPEAKER&token=${aliceSession.token}")
+                    .build(),
+                object : WebSocketListener() {
+                    override fun onMessage(webSocket: WebSocket, text: String) {
+                        aliceSignals.add(JSONObject(text))
+                    }
+                }
+            )
+            bobWs = okClient.newWebSocket(
+                Request.Builder()
+                    .url("ws://127.0.0.1:$testPort/ws/signaling?roomId=$dmId&channelId=$dmId&peerId=bob_p&displayName=bob-call&mode=VOICE_VIDEO_CALL&role=SPEAKER&token=${bobSession.token}")
+                    .build(),
+                object : WebSocketListener() {
+                    override fun onMessage(webSocket: WebSocket, text: String) {
+                        bobSignals.add(JSONObject(text))
+                    }
+                }
+            )
+
+            var waitCount = 0
+            while ((aliceSignals.none { it.optString("type") == "welcome" } ||
+                        bobSignals.none { it.optString("type") == "welcome" }) && waitCount < 30
+            ) {
+                delay(40)
+                waitCount++
+            }
+            assertTrue(aliceSignals.any { it.optString("type") == "welcome" })
+            assertTrue(bobSignals.any { it.optString("type") == "welcome" })
+
+            // Valid participant receives active DM call status
+            bobRepo.fetchDirectCallStatus(dmId, bobSession.token, baseUrl)
+            val status = bobRepo.activeDirectCallStatus.value
+            assertNotNull(status)
+            assertTrue(status!!.isActive)
+            assertEquals(2, status.participantCount)
+
+            // Relay SDP offer directly from Alice to Bob inside DM call room
+            aliceWs.send("""{"type":"offer","targetPeerId":"bob_p","sdp":"v=0-dm-offer"}""")
+            waitCount = 0
+            while (bobSignals.none { it.optString("type") == "offer" } && waitCount < 30) {
+                delay(40)
+                waitCount++
+            }
+            assertEquals("v=0-dm-offer", bobSignals.first { it.optString("type") == "offer" }.getString("sdp"))
+        } finally {
+            aliceWs?.cancel()
+            bobWs?.cancel()
+            aliceRepo.release()
+            bobRepo.release()
+            eveRepo.release()
+            okClient.dispatcher.executorService.shutdown()
+            okClient.connectionPool.evictAll()
+        }
+    }
+
+    @Test
+    fun `named live class honors show vs hidden visibility creator always sees own hidden class and strict id access`() = runBlocking {
+        val baseUrl = "http://127.0.0.1:$testPort"
+        val hostRepo = BitVoidClientRepository()
+        val peerRepo = BitVoidClientRepository()
+        val okClient = OkHttpClient()
+        var creatorWs: WebSocket? = null
+        val creatorSignals = CopyOnWriteArrayList<JSONObject>()
+
+        try {
+            // 1. Creator starts a Hidden Live Class and a Visible (Show) Live Class
+            val hiddenStart = hostRepo.startLiveClassSession(
+                name = "Secret Seminar",
+                isHidden = true,
+                creatorUsername = "prof-creator",
+                urlOverride = baseUrl
+            )
+            assertTrue("Hidden start should succeed: ${hiddenStart.exceptionOrNull()}", hiddenStart.isSuccess)
+            val hiddenInfo = hiddenStart.getOrThrow()
+            assertTrue(hiddenInfo.roomId.startsWith("LC-"))
+            assertTrue(hiddenInfo.classCode.startsWith("CLS-"))
+            assertTrue(hiddenInfo.isHidden)
+            assertEquals("prof-creator", hiddenInfo.creatorUsername)
+
+            val showStart = hostRepo.startLiveClassSession(
+                name = "Open Lecture",
+                isHidden = false,
+                creatorUsername = "prof-creator",
+                urlOverride = baseUrl
+            )
+            assertTrue("Show start should succeed: ${showStart.exceptionOrNull()}", showStart.isSuccess)
+            val showInfo = showStart.getOrThrow()
+            assertFalse(showInfo.isHidden)
+
+            // 2. Peer (non-creator) sees ONLY the visible Live Class, never the hidden one, and does not receive creator's classCode
+            peerRepo.fetchLiveClasses("other-student", baseUrl)
+            val peerList = peerRepo.liveClasses.value
+            assertEquals(1, peerList.size)
+            assertEquals("Open Lecture", peerList.first().name)
+            assertEquals("", peerList.first().classCode)
+            assertFalse(peerList.any { it.roomId == hiddenInfo.roomId })
+
+            // 3. Creator ALWAYS sees BOTH visible and hidden Live Classes with their CLS codes
+            hostRepo.fetchLiveClasses("prof-creator", baseUrl)
+            val creatorList = hostRepo.liveClasses.value
+            assertEquals(2, creatorList.size)
+            val creatorHiddenEntry = creatorList.firstOrNull { it.roomId == hiddenInfo.roomId }
+            assertNotNull(creatorHiddenEntry)
+            assertTrue(creatorHiddenEntry!!.isHidden)
+            assertEquals(hiddenInfo.classCode, creatorHiddenEntry.classCode)
+
+            // 4. Hidden Live Class cannot be joined by roomId alone as non-creator -> 403
+            val hiddenByRoomForbidden = (URL("$baseUrl/api/live-class/join").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json")
+                outputStream.write("""{"roomId":"${hiddenInfo.roomId}","username":"other-student"}""".toByteArray(StandardCharsets.UTF_8))
+            }
+            assertEquals(403, hiddenByRoomForbidden.responseCode)
+            hiddenByRoomForbidden.disconnect()
+
+            // 5. Wrong Class ID returns 404
+            val wrongCodeConn = (URL("$baseUrl/api/live-class/join").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json")
+                outputStream.write("""{"classCode":"CLS-NOPE-00","username":"other-student"}""".toByteArray(StandardCharsets.UTF_8))
+            }
+            assertEquals(404, wrongCodeConn.responseCode)
+            wrongCodeConn.disconnect()
+
+            // 6. Visible Live Class can be joined by roomId on same local Wi-Fi node -> 200
+            val showJoinRes = peerRepo.joinLiveClassByRoomId(showInfo.roomId, "other-student", baseUrl)
+            assertTrue("Visible Live Class join on same node should succeed", showJoinRes.isSuccess)
+            assertTrue(showJoinRes.getOrThrow().token.startsWith("BVC."))
+
+            // 7. Hidden Live Class unlocks cleanly when exact CLS code is provided -> 200
+            val hiddenJoinRes = peerRepo.joinLiveClassByCode(hiddenInfo.classCode, "other-student", baseUrl)
+            assertTrue("Hidden Live Class join with exact code should succeed", hiddenJoinRes.isSuccess)
+            val joinedHidden = hiddenJoinRes.getOrThrow()
+            assertEquals(hiddenInfo.roomId, joinedHidden.roomId)
+            assertEquals(hiddenInfo.classCode, joinedHidden.classCode)
+            assertTrue(joinedHidden.token.startsWith("BVC."))
+
+            // 8. /ws/signaling on LC-* without token returns 401
+            Socket("127.0.0.1", testPort).use { socket ->
+                val wsHandshake = buildString {
+                    append("GET /ws/signaling?roomId=${hiddenInfo.roomId}&channelId=${hiddenInfo.channelId}&peerId=anon&mode=LIVE_CLASSROOM&role=STUDENT_VIEWER HTTP/1.1\r\n")
+                    append("Host: 127.0.0.1:$testPort\r\n")
+                    append("Upgrade: websocket\r\n")
+                    append("Connection: Upgrade\r\n")
+                    append("Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n")
+                    append("Sec-WebSocket-Version: 13\r\n\r\n")
+                }
+                socket.getOutputStream().write(wsHandshake.toByteArray(StandardCharsets.UTF_8))
+                socket.getOutputStream().flush()
+                val statusLine = socket.getInputStream().bufferedReader().readLine()
+                assertNotNull(statusLine)
+                assertTrue("Expected 401 on unauthorized LC-* signaling WS, got $statusLine", statusLine!!.contains("401"))
+            }
+
+            // 9. /ws/signaling with valid BVC token upgrades cleanly and includes class metadata in welcome
+            creatorWs = okClient.newWebSocket(
+                Request.Builder()
+                    .url("ws://127.0.0.1:$testPort/ws/signaling?roomId=${hiddenInfo.roomId}&channelId=${hiddenInfo.channelId}&peerId=prof_p&displayName=prof-creator&mode=LIVE_CLASSROOM&role=HOST_TEACHER&token=${hiddenInfo.token}")
+                    .build(),
+                object : WebSocketListener() {
+                    override fun onMessage(webSocket: WebSocket, text: String) {
+                        creatorSignals.add(JSONObject(text))
+                    }
+                }
+            )
+            var waitCount = 0
+            while (creatorSignals.none { it.optString("type") == "welcome" } && waitCount < 30) {
+                delay(40)
+                waitCount++
+            }
+            val welcome = creatorSignals.firstOrNull { it.optString("type") == "welcome" }
+            assertNotNull(welcome)
+            assertEquals(hiddenInfo.classCode, welcome!!.optString("classCode"))
+            assertEquals("Secret Seminar", welcome.optString("className"))
+            assertEquals("prof-creator", welcome.optString("creatorUsername"))
+            assertTrue(welcome.optBoolean("isHidden"))
+
+            // 10. endSession removes both signaling room and backing LC-* channel
+            BitVoidSignalingServer.endSession(hiddenInfo.roomId)
+            hostRepo.fetchLiveClasses("prof-creator", baseUrl)
+            assertFalse(hostRepo.liveClasses.value.any { it.roomId == hiddenInfo.roomId })
+            assertNull(BitVoidChannelManager.getChannel(hiddenInfo.roomId))
+
+            val afterEndJoin = (URL("$baseUrl/api/live-class/join").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json")
+                outputStream.write("""{"classCode":"${hiddenInfo.classCode}","username":"other-student"}""".toByteArray(StandardCharsets.UTF_8))
+            }
+            assertEquals(404, afterEndJoin.responseCode)
+            afterEndJoin.disconnect()
+        } finally {
+            creatorWs?.cancel()
+            hostRepo.release()
+            peerRepo.release()
+            okClient.dispatcher.executorService.shutdown()
+            okClient.connectionPool.evictAll()
+        }
+    }
+
+    private fun postMultipartBytes(
+        url: String,
+        tokenHeader: String?,
+        tokenValue: String?,
+        boundary: String,
+        fileName: String,
+        mimeType: String,
+        fileBytes: ByteArray,
+        caption: String
+    ): Pair<Int, String> {
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            doOutput = true
+            setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            if (tokenHeader != null && tokenValue != null) {
+                setRequestProperty(tokenHeader, tokenValue)
+            }
+        }
+        conn.outputStream.use { out ->
+            val header = buildString {
+                if (caption.isNotEmpty()) {
+                    append("--$boundary\r\n")
+                    append("Content-Disposition: form-data; name=\"text\"\r\n\r\n")
+                    append("$caption\r\n")
+                }
+                append("--$boundary\r\n")
+                append("Content-Disposition: form-data; name=\"file\"; filename=\"$fileName\"\r\n")
+                append("Content-Type: $mimeType\r\n\r\n")
+            }
+            out.write(header.toByteArray(StandardCharsets.UTF_8))
+            out.write(fileBytes)
+            out.write("\r\n--$boundary--\r\n".toByteArray(StandardCharsets.UTF_8))
+            out.flush()
+        }
+        val code = conn.responseCode
+        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+        val body = stream?.readBytes()?.let { String(it, StandardCharsets.UTF_8) }.orEmpty()
+        conn.disconnect()
+        return code to body
     }
 }

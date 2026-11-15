@@ -309,6 +309,38 @@ object BitVoidChannelManager {
         return session
     }
 
+    /**
+     * Issues a scoped [ChannelSession] token to a student who has provided a verified,
+     * active Live Class ID (`CLS-XXXX-XX`) issued by the host teacher.
+     */
+    fun issueLiveClassStudentSession(
+        rawChannelId: String,
+        rawUsername: String? = null
+    ): ChannelSession? {
+        val channelId = rawChannelId.trim()
+        val channel = channels[channelId] ?: return null
+        val issuedAt = System.currentTimeMillis()
+        val cleanUsername = rawUsername?.let {
+            com.bitvoid.network.direct.BitVoidUserPrefs.normalizeUsernameOrNull(it)
+        }
+        if (cleanUsername != null) {
+            com.bitvoid.network.direct.BitVoidDirectChatManager.registerUser(cleanUsername)
+        }
+        val callsign = cleanUsername ?: "Student-${randomHex(4).uppercase(Locale.US)}"
+        val encryptedToken = encryptSessionToken(channelId, callsign, issuedAt)
+        val session = ChannelSession(
+            token = encryptedToken,
+            channelId = channelId,
+            callsign = callsign,
+            isPublic = channel.isPublic,
+            issuedAt = issuedAt
+        )
+        sessionTokens[encryptedToken] = session
+        wsPresenceByToken[encryptedToken] = false
+        publishChannelsSnapshot()
+        return session
+    }
+
     fun validateToken(token: String?, requiredChannelId: String? = null): ChannelSession? {
         if (token.isNullOrBlank()) return null
         val trimmed = token.trim()

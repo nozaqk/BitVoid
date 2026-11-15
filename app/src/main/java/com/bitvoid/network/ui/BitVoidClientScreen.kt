@@ -1,8 +1,12 @@
 package com.bitvoid.network.ui
 
 import android.annotation.SuppressLint
+import android.content.Intent
+import android.net.Uri
 import android.view.ViewGroup
 import android.webkit.WebView
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
@@ -17,20 +21,24 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Forum
@@ -55,6 +63,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.TabRowDefaults.SecondaryIndicator
@@ -138,6 +147,11 @@ fun BitVoidClientHubContent(
     onDisconnectClient: () -> Unit,
     onOpenWifiSettings: () -> Unit,
     onRequestEvaluated: (Boolean) -> Unit,
+    isUploadingFile: Boolean = false,
+    onUploadChannelFile: (Uri, String) -> Unit = { _, _ -> },
+    onBuildAttachmentUrl: (String, String?) -> String = { path, _ -> path },
+    callUiState: BitVoidCallUiState = BitVoidCallUiState(),
+    callActions: BitVoidCallActions = BitVoidCallActions(),
     modifier: Modifier = Modifier
 ) {
     var selectedTab by rememberSaveable { mutableStateOf(ClientHubTab.CHANNELS) }
@@ -273,7 +287,12 @@ fun BitVoidClientHubContent(
                     onLeaveChannel = {
                         activeChannelStream = null
                         onLeaveChannel()
-                    }
+                    },
+                    isUploadingFile = isUploadingFile,
+                    onUploadChannelFile = onUploadChannelFile,
+                    onBuildAttachmentUrl = onBuildAttachmentUrl,
+                    callUiState = callUiState,
+                    callActions = callActions
                 )
             }
 
@@ -322,8 +341,14 @@ private fun ChannelsBrowserTabPanel(
     onPlayItem: (RemoteMediaItem) -> Unit,
     onStopPlayback: () -> Unit,
     onSendChatMessage: (String) -> Unit,
-    onLeaveChannel: () -> Unit
+    onLeaveChannel: () -> Unit,
+    isUploadingFile: Boolean = false,
+    onUploadChannelFile: (Uri, String) -> Unit = { _, _ -> },
+    onBuildAttachmentUrl: (String, String?) -> String = { path, _ -> path },
+    callUiState: BitVoidCallUiState = BitVoidCallUiState(),
+    callActions: BitVoidCallActions = BitVoidCallActions()
 ) {
+    val context = LocalContext.current
     val fieldColors = OutlinedTextFieldDefaults.colors(
         focusedBorderColor = VoidMint,
         unfocusedBorderColor = VoidBorder,
@@ -337,6 +362,14 @@ private fun ChannelsBrowserTabPanel(
     if (activeChannelSession != null) {
         var chatDraft by rememberSaveable { mutableStateOf("") }
         val chatListState = rememberLazyListState()
+        val filePickerLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.OpenDocument()
+        ) { uri ->
+            if (uri != null) {
+                onUploadChannelFile(uri, chatDraft)
+                chatDraft = ""
+            }
+        }
 
         LaunchedEffect(channelMessages.size) {
             if (channelMessages.isNotEmpty()) {
@@ -523,11 +556,55 @@ private fun ChannelsBrowserTabPanel(
                                                 )
                                             }
                                         }
-                                        Text(
-                                            text = msg.text,
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = VoidTextPrimary
-                                        )
+                                        msg.attachment?.let { att ->
+                                            val openUrl = onBuildAttachmentUrl(
+                                                att.downloadUrl.ifBlank { att.streamUrl },
+                                                activeChannelSession.token
+                                            )
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(top = 4.dp)
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .background(VoidSurfaceElevated)
+                                                    .border(1.dp, VoidCyan.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
+                                                    .clickable {
+                                                        try {
+                                                            context.startActivity(
+                                                                Intent(Intent.ACTION_VIEW, Uri.parse(openUrl)).apply {
+                                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                                }
+                                                            )
+                                                        } catch (_: Exception) {
+                                                        }
+                                                    }
+                                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Filled.Download,
+                                                    contentDescription = "Open ${att.name}",
+                                                    tint = VoidCyan,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Text(
+                                                    text = att.name,
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    color = VoidMint,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                            }
+                                        }
+                                        if (msg.text.isNotBlank()) {
+                                            Text(
+                                                text = msg.text,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = VoidTextPrimary
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -535,10 +612,42 @@ private fun ChannelsBrowserTabPanel(
                     }
 
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .imePadding(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Surface(
+                            onClick = {
+                                if (!isUploadingFile) {
+                                    filePickerLauncher.launch(arrayOf("*/*"))
+                                }
+                            },
+                            shape = CircleShape,
+                            color = VoidObsidian,
+                            border = BorderStroke(1.dp, if (isUploadingFile) VoidMint else VoidBorder),
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("native_chat_attach_button")
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                if (isUploadingFile) {
+                                    CircularProgressIndicator(
+                                        color = VoidMint,
+                                        strokeWidth = 2.dp,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Filled.Add,
+                                        contentDescription = "Upload any file",
+                                        tint = VoidMint,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            }
+                        }
                         OutlinedTextField(
                             value = chatDraft,
                             onValueChange = { chatDraft = it },

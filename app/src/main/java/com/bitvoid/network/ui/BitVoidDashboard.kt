@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -102,6 +103,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -194,6 +196,53 @@ fun BitVoidDashboard(
     val directWsStatus by viewModel.directWsStatus.collectAsStateWithLifecycle()
     val isOpeningDirectChat by viewModel.isOpeningDirectChat.collectAsStateWithLifecycle()
     val directChatError by viewModel.directChatError.collectAsStateWithLifecycle()
+    val isUploadingChatFile by viewModel.isUploadingChatFile.collectAsStateWithLifecycle()
+    val fileUploadError by viewModel.fileUploadError.collectAsStateWithLifecycle()
+    val callUiState by viewModel.callUiState.collectAsStateWithLifecycle()
+    val liveClasses by viewModel.liveClasses.collectAsStateWithLifecycle()
+
+    val callActions = remember(viewModel) {
+        BitVoidCallActions(
+            onStartVoiceVideoCall = { channelId, channelName, token ->
+                viewModel.startVoiceVideoCall(channelId, channelName, token)
+            },
+            onStartLiveClassHost = { channelId, channelName, token ->
+                viewModel.startLiveClassAsHost(channelId, channelName, token)
+            },
+            onJoinLiveClassStudent = { channelId, channelName, token ->
+                viewModel.joinLiveClassAsStudent(channelId, channelName, token)
+            },
+            onJoinLiveClassWithCode = { classCode, onDone ->
+                viewModel.joinLiveClassByCode(classCode, onDone)
+            },
+            onStartDirectCall = { dmId, peerUsername, token, withVideo ->
+                viewModel.startDirectCall(dmId, peerUsername, token, withVideo)
+            },
+            onUploadClassroomDocument = { roomId, uri, isDirect ->
+                viewModel.uploadClassroomDocument(roomId, uri, isDirect)
+            },
+            onSelectClassroomMaterial = { materialId ->
+                viewModel.selectClassroomMaterial(materialId)
+            },
+            onSetClassroomSlidePage = { pageIndex ->
+                viewModel.setClassroomSlidePage(pageIndex)
+            },
+            onOpenMaterialExternally = { material ->
+                viewModel.openMaterialExternally(material)
+            },
+            onToggleMicMute = { viewModel.toggleCallMicMute() },
+            onToggleCamera = { viewModel.toggleCallCamera() },
+            onSwitchCamera = { viewModel.switchCallCamera() },
+            onToggleSpeakerphone = { viewModel.toggleCallSpeakerphone() },
+            onStartScreenShare = { resultCode, data ->
+                viewModel.startScreenShare(resultCode, data)
+            },
+            onStopScreenShare = { viewModel.stopScreenShare() },
+            onLeaveSession = { viewModel.leaveCallSession() },
+            onEndClassroomSession = { viewModel.endLiveClassSession() },
+            onClearCallError = { viewModel.clearCallError() }
+        )
+    }
 
     var showChannelDialog by rememberSaveable { mutableStateOf(false) }
     var editingChannelId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -203,6 +252,13 @@ fun BitVoidDashboard(
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
+
+    LaunchedEffect(fileUploadError) {
+        fileUploadError?.let { err ->
+            snackbarHostState.showSnackbar(err)
+            viewModel.clearFileUploadError()
+        }
+    }
 
     fun copyToClipboard(label: String, value: String) {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -241,7 +297,12 @@ fun BitVoidDashboard(
             onConnectNode = { ssid, pass, url -> viewModel.connectToNode(ssid, pass, url) },
             onDisconnectClient = { viewModel.disconnectClient() },
             onOpenWifiSettings = { viewModel.openSystemWifiSettings() },
-            onRequestEvaluated = { allowed -> viewModel.recordSandboxRequest(allowed) }
+            onRequestEvaluated = { allowed -> viewModel.recordSandboxRequest(allowed) },
+            isUploadingFile = isUploadingChatFile,
+            onUploadChannelFile = { uri, caption -> viewModel.uploadFileToActiveChannel(uri, caption) },
+            onBuildAttachmentUrl = { path, token -> viewModel.buildAttachmentUrl(path, token) },
+            callUiState = callUiState,
+            callActions = callActions
         )
     }
 
@@ -278,7 +339,20 @@ fun BitVoidDashboard(
             onLeaveDirectChat = { viewModel.leaveDirectChat() },
             onClearDirectChatError = { viewModel.clearDirectChatError() },
             onCopyUsername = ::copyToClipboard,
-            onBuildStreamUrl = { item, token -> viewModel.buildClientStreamUrl(item, token) }
+            onBuildStreamUrl = { item, token -> viewModel.buildClientStreamUrl(item, token) },
+            isUploadingFile = isUploadingChatFile,
+            onUploadChannelFile = { uri, caption -> viewModel.uploadFileToActiveChannel(uri, caption) },
+            onUploadDirectFile = { uri, caption -> viewModel.uploadFileToActiveDirectChat(uri, caption) },
+            onBuildAttachmentUrl = { path, token -> viewModel.buildAttachmentUrl(path, token) },
+            callUiState = callUiState,
+            callActions = callActions,
+            liveClasses = liveClasses,
+            onStartLiveClass = { name, isHidden, onDone ->
+                viewModel.startNamedLiveClass(name, isHidden, onDone)
+            },
+            onOpenListedLiveClass = { liveClass ->
+                viewModel.openListedLiveClass(liveClass)
+            }
         )
     }
 
@@ -292,10 +366,15 @@ fun BitVoidDashboard(
         return
     }
 
+    val isInsideActiveHubChat = selectedBottomTab == AppBottomTab.HUB &&
+        (activeChannelSession != null ||
+            activeDirectSession != null ||
+            (callUiState.activeRoomId != null &&
+                !callUiState.activeRoomId!!.startsWith("dm__") &&
+                callUiState.callState != com.bitvoid.network.call.BitVoidCallState.IDLE))
+
     BackHandler(
-        enabled = selectedBottomTab != AppBottomTab.HOME &&
-            !(selectedBottomTab == AppBottomTab.HUB &&
-                (activeChannelSession != null || activeDirectSession != null))
+        enabled = selectedBottomTab != AppBottomTab.HOME && !isInsideActiveHubChat
     ) {
         viewModel.selectBottomTab(AppBottomTab.HOME)
     }
@@ -305,10 +384,12 @@ fun BitVoidDashboard(
         contentWindowInsets = WindowInsets.safeDrawing,
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         bottomBar = {
-            BitVoidBottomNavigationBar(
-                selectedTab = selectedBottomTab,
-                onSelectTab = { viewModel.selectBottomTab(it) }
-            )
+            if (!isInsideActiveHubChat) {
+                BitVoidBottomNavigationBar(
+                    selectedTab = selectedBottomTab,
+                    onSelectTab = { viewModel.selectBottomTab(it) }
+                )
+            }
         }
     ) { innerPadding ->
         BoxWithConstraints(
@@ -316,6 +397,7 @@ fun BitVoidDashboard(
                 .fillMaxSize()
                 .background(VoidObsidian)
                 .padding(innerPadding)
+                .consumeWindowInsets(innerPadding)
         ) {
             val isWideLayout = maxWidth >= 720.dp
 

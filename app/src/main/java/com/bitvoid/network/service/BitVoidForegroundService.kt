@@ -20,6 +20,7 @@ import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.bitvoid.network.MainActivity
+import com.bitvoid.network.call.BitVoidSignalingServer
 import com.bitvoid.network.channel.BitVoidChannelManager
 import com.bitvoid.network.media.BitVoidMediaManager
 import com.bitvoid.network.model.BitVoidNetworkConfig
@@ -770,6 +771,7 @@ class BitVoidForegroundService : Service() {
         } catch (_: Exception) {
         }
         localServer = null
+        BitVoidSignalingServer.closeAllRooms("Host node shut down")
 
         BitVoidNodeStateHolder.updateHostState { state ->
             state.copy(
