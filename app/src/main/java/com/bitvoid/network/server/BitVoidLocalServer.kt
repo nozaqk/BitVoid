@@ -222,9 +222,16 @@ class BitVoidLocalServer(
             if (roomId.isBlank() || !BitVoidSignalingServer.authorizeSignalingJoin(roomId, channelId, token)) {
                 throw SecurityException("Unauthorized WebRTC signaling WebSocket session")
             }
-            val mode = runCatching {
+            val requestedMode = runCatching {
                 SignalingSessionMode.valueOf(params["mode"].orEmpty())
             }.getOrDefault(SignalingSessionMode.VOICE_VIDEO_CALL)
+            // Direct Chat rooms are always ordinary voice calls. Do not let a modified or
+            // legacy client relabel a DM room as Live Class to recover camera/screen access.
+            val mode = if (roomId.startsWith("dm__", ignoreCase = false)) {
+                SignalingSessionMode.VOICE_VIDEO_CALL
+            } else {
+                requestedMode
+            }
             val role = runCatching {
                 ParticipantRole.valueOf(params["role"].orEmpty())
             }.getOrDefault(ParticipantRole.SPEAKER)
@@ -997,12 +1004,11 @@ class BitVoidLocalServer(
     ): Response {
         val directSession = BitVoidDirectChatManager.validateToken(authToken, requiredDmId = dmId)
             ?: return unauthorizedResponse(ephemeralToken)
-        val body = runCatching { JSONObject(readPostBody(session)) }.getOrDefault(JSONObject())
+        // Calls are intentionally audio-only. Ignore legacy `withVideo` request fields from
+        // older portals so a peer cannot re-enable camera calling through the API.
+        runCatching { readPostBody(session) }
         return try {
-            BitVoidSignalingServer.requestDirectCall(
-                session = directSession,
-                withVideo = body.optBoolean("withVideo", false)
-            )
+            BitVoidSignalingServer.requestDirectCall(session = directSession)
             buildPaddedTextResponse(
                 status = Response.Status.OK,
                 mimeType = "application/json; charset=utf-8",
@@ -1304,9 +1310,14 @@ class BitVoidLocalServer(
         var targetChannelId: String? = null
 
         if (isDm) {
-            val dmValidated = BitVoidDirectChatManager.validateToken(authToken, requiredDmId = cleanRoom)
+            BitVoidDirectChatManager.validateToken(authToken, requiredDmId = cleanRoom)
                 ?: return unauthorizedResponse(ephemeralToken)
-            uploaderName = dmValidated.myUsername
+            return buildPaddedTextResponse(
+                status = Response.Status.CONFLICT,
+                mimeType = "application/json; charset=utf-8",
+                body = """{"error":"live_class_only","detail":"Document presentation is available only in Live Class."}""",
+                token = ephemeralToken
+            )
         } else {
             val channel = BitVoidChannelManager.getChannel(cleanRoom)
                 ?: BitVoidSignalingServer.getRoomState(cleanRoom)?.let { BitVoidChannelManager.getChannel(it.channelId) }
@@ -1324,6 +1335,15 @@ class BitVoidLocalServer(
             uploaderName = validated?.callsign ?: "Host-${ephemeralToken.takeLast(4).uppercase(Locale.US)}"
         }
 
+        if (BitVoidSignalingServer.getRoomState(cleanRoom)?.mode != SignalingSessionMode.LIVE_CLASSROOM) {
+            return buildPaddedTextResponse(
+                status = Response.Status.CONFLICT,
+                mimeType = "application/json; charset=utf-8",
+                body = """{"error":"live_class_only","detail":"Document presentation is available only in Live Class."}""",
+                token = ephemeralToken
+            )
+        }
+
         val (importedItem, _) = parseAndImportUploadedFile(session)
             ?: return buildPaddedTextResponse(
                 status = Response.Status.BAD_REQUEST,
@@ -1333,30 +1353,16 @@ class BitVoidLocalServer(
             )
 
         val encodedMediaId = urlEncode(importedItem.id)
-        val streamUrl: String
-        val downloadUrl: String
-        if (isDm) {
-            val encodedDm = urlEncode(cleanRoom)
-            streamUrl = "/stream/dm/$encodedDm/$encodedMediaId"
-            downloadUrl = "/download/dm/$encodedDm/$encodedMediaId"
-            BitVoidDirectChatManager.appendMessage(
-                dmId = cleanRoom,
-                senderUsername = uploaderName,
-                rawText = "Shared document in call: ${importedItem.title}",
-                attachment = importedItem
-            )
-        } else {
-            val chId = targetChannelId!!
-            streamUrl = "/stream/$encodedMediaId"
-            downloadUrl = "/download/$encodedMediaId"
-            BitVoidChannelManager.addMediaToChannel(chId, importedItem.id)
-            BitVoidChannelManager.appendChatMessage(
-                channelId = chId,
-                callsign = uploaderName,
-                rawText = "Presented Live Class document: ${importedItem.title}",
-                attachment = importedItem
-            )
-        }
+        val streamUrl = "/stream/$encodedMediaId"
+        val downloadUrl = "/download/$encodedMediaId"
+        val chId = targetChannelId!!
+        BitVoidChannelManager.addMediaToChannel(chId, importedItem.id)
+        BitVoidChannelManager.appendChatMessage(
+            channelId = chId,
+            callsign = uploaderName,
+            rawText = "Presented Live Class document: ${importedItem.title}",
+            attachment = importedItem
+        )
 
         val material = LiveClassMaterial(
             id = importedItem.id,
@@ -2512,11 +2518,6 @@ class BitVoidLocalServer(
               transform: translateY(-1px);
               outline: none;
             }
-            .call-icon-btn.video-call:hover, .call-icon-btn.video-call:focus-visible {
-              border-color: var(--cyan);
-              color: var(--cyan);
-              background: rgba(0, 209, 255, 0.1);
-            }
             .call-icon-btn.active {
               border-color: var(--mint);
               color: var(--mint);
@@ -3077,7 +3078,7 @@ class BitVoidLocalServer(
             }
             .empty-title { color: var(--mint); font-weight: 700; margin-bottom: 4px; }
 
-            /* Live Class & Voice/Video Call Stage */
+            /* Live Class & Voice Call Stage */
             .live-stage-panel {
               flex-shrink: 0;
               max-height: 52vh;
@@ -3424,7 +3425,7 @@ class BitVoidLocalServer(
                 <div class="pchat-head">
                   <div class="pchat-head-copy">
                     <div id="pchat-title" class="section-title">P.CHAT</div>
-                    <p>PRIVATE USER CHAT · VOICE · VIDEO</p>
+                    <p>PRIVATE USER CHAT · VOICE CALLS</p>
                   </div>
                   <button id="pchat-add-user-btn" class="pchat-add-btn" type="button" title="Add user by exact User ID" aria-label="Add user by exact User ID">+</button>
                 </div>
@@ -3487,9 +3488,6 @@ class BitVoidLocalServer(
                   <button id="voice-call-btn" class="call-icon-btn hidden" type="button" title="Start voice call" aria-label="Start voice call">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.2 3.5 9.7 7.9 7.9 10c1.3 2.8 3.4 4.9 6.2 6.2l2.1-1.8 4.4 2.5-.7 3.1c-.2.8-.9 1.4-1.8 1.4C9.6 20.9 3.1 14.4 2.6 5.9c0-.9.6-1.6 1.4-1.8l3.2-.6Z"/></svg>
                   </button>
-                  <button id="video-call-btn" class="call-icon-btn video-call hidden" type="button" title="Start video call" aria-label="Start video call">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="12" height="12" rx="2"/><path d="m15 10 6-3v10l-6-3z"/></svg>
-                  </button>
                   <button id="exit-channel-btn" class="btn-danger hidden" type="button">EXIT</button>
                 </div>
               </header>
@@ -3508,7 +3506,7 @@ class BitVoidLocalServer(
                 </div>
               </section>
 
-              <!-- Live Class & Voice/Video Call WebRTC Stage -->
+              <!-- Live Class & Voice Call WebRTC Stage -->
               <section id="live-stage-panel" class="live-stage-panel hidden">
                 <div class="live-head">
                   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -3525,7 +3523,7 @@ class BitVoidLocalServer(
                 <div id="live-launcher-controls" class="live-controls-bar">
                   <button id="rtc-start-class-host-btn" class="btn-primary" type="button">START LIVE CLASS (TEACHER)</button>
                   <button id="rtc-join-class-student-btn" class="btn-cyan" type="button">JOIN LIVE CLASS (STUDENT)</button>
-                  <button id="rtc-start-call-btn" class="btn-amber" type="button">START VOICE / VIDEO CALL</button>
+                  <button id="rtc-start-call-btn" class="btn-amber" type="button">START VOICE CALL</button>
                 </div>
 
                 <div id="live-join-id-row" class="live-join-id-row hidden">
@@ -3628,7 +3626,6 @@ class BitVoidLocalServer(
               var exitChannelBtn = document.getElementById('exit-channel-btn');
               var liveClassBtn = document.getElementById('live-class-btn');
               var voiceCallBtn = document.getElementById('voice-call-btn');
-              var videoCallBtn = document.getElementById('video-call-btn');
               var mainPane = document.getElementById('wa-main-pane');
               var liveStagePanel = document.getElementById('live-stage-panel');
               var closeLiveStageBtn = document.getElementById('close-live-stage-btn');
@@ -3713,7 +3710,6 @@ class BitVoidLocalServer(
               var directCallPromptOpen = false;
               var directCallConnecting = false;
               var directCallIncomingOpenPending = false;
-              var directCallIncomingWithVideo = false;
               var directCallLastPhase = 'IDLE';
               try {
                 var queryUser = new URLSearchParams(location.search).get('username');
@@ -3827,14 +3823,12 @@ class BitVoidLocalServer(
                     var available = !!data.available;
                     if (activeDm && String(activeDm.peerUsername).toLowerCase() === target.toLowerCase()) {
                       voiceCallBtn.disabled = !available;
-                      videoCallBtn.disabled = !available;
                     }
                     return available;
                   })
                   .catch(function () {
                     if (activeDm && String(activeDm.peerUsername).toLowerCase() === target.toLowerCase()) {
                       voiceCallBtn.disabled = true;
-                      videoCallBtn.disabled = true;
                     }
                     return false;
                   });
@@ -4054,7 +4048,6 @@ class BitVoidLocalServer(
                 var isGeneralChannel = data.channelId === '${BitVoidChannelManager.DEFAULT_PUBLIC_CHANNEL_ID}';
                 liveClassBtn.classList.toggle('hidden', isGeneralChannel);
                 voiceCallBtn.classList.add('hidden');
-                videoCallBtn.classList.add('hidden');
                 rtcStartCallBtn.classList.toggle('hidden', isGeneralChannel);
                 if (isGeneralChannel && !rtcSocket) {
                   liveStagePanel.classList.add('hidden');
@@ -4199,17 +4192,15 @@ class BitVoidLocalServer(
                     peersEl.textContent = '2';
                     liveClassBtn.classList.add('hidden');
                     voiceCallBtn.classList.remove('hidden');
-                    videoCallBtn.classList.remove('hidden');
                     rtcStartCallBtn.classList.add('hidden');
                     voiceCallBtn.classList.remove('active');
-                    videoCallBtn.classList.remove('active');
                     refreshPeerPresence(data.peerUsername);
                     exitChannelBtn.classList.remove('hidden');
                     pchatAddDialog.classList.add('hidden');
                     refreshPchatUsers();
                     var banner = document.createElement('div');
                     banner.className = 'wa-welcome-pill';
-                    banner.innerHTML = '<strong>Direct Chat with @' + esc(data.peerUsername) + '</strong> · You: <strong>@' + esc(data.myUsername) + '</strong> · Use the phone or camera icons above to call.';
+                    banner.innerHTML = '<strong>Direct Chat with @' + esc(data.peerUsername) + '</strong> · You: <strong>@' + esc(data.myUsername) + '</strong> · Use the phone icon above to start a voice call.';
                     chatBox.appendChild(banner);
                     (data.messages || []).forEach(appendChatMessage);
                     connectDirectWs(data.dmId, data.token);
@@ -4273,17 +4264,15 @@ class BitVoidLocalServer(
                       directCallLastPhase = phase;
                       if (phase === 'RINGING' && st.isOutgoing) {
                         voiceCallBtn.classList.add('active');
-                        videoCallBtn.classList.toggle('active', !!st.withVideo);
                         liveStagePanel.classList.remove('hidden');
                         setMeetingStageActive(true);
                         liveRoomStatusEl.textContent = 'Ringing @' + activeDm.peerUsername + ' · your meeting stage is ready';
                         renderRtcVideoTiles();
                       } else if (phase === 'RINGING' && st.isIncoming && !rtcSocket) {
                         directCallPromptOpen = true;
-                        directCallIncomingWithVideo = !!st.withVideo;
                         liveStagePanel.classList.remove('hidden');
                         setMeetingStageActive(true);
-                        liveRoomStatusEl.textContent = 'Incoming ' + (st.withVideo ? 'video' : 'voice') + ' call from @' + st.callerUsername;
+                        liveRoomStatusEl.textContent = 'Incoming voice call from @' + st.callerUsername;
                         updateRtcControlsUi();
                         renderRtcVideoTiles();
                       } else if (phase === 'ACCEPTED') {
@@ -4292,7 +4281,7 @@ class BitVoidLocalServer(
                         if (!rtcSocket && !directCallConnecting &&
                             st.callerUsername && st.callerUsername.toLowerCase() === String(activeDm.myUsername).toLowerCase()) {
                           directCallConnecting = true;
-                          joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true, null, null, !!st.withVideo);
+                          joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true, null, null, false);
                         } else if (rtcSocket) {
                           liveRoomStatusEl.textContent = 'CALL WITH @' + activeDm.peerUsername + ' · Local P2P';
                         }
@@ -4301,7 +4290,6 @@ class BitVoidLocalServer(
                         directCallConnecting = false;
                         if (rtcSocket) leaveRtcSession();
                         voiceCallBtn.classList.remove('active');
-                        videoCallBtn.classList.remove('active');
                         setMeetingStageActive(false);
                         liveStagePanel.classList.add('hidden');
                         showPchatError('@' + activeDm.peerUsername + ' declined the call.', false);
@@ -4310,9 +4298,7 @@ class BitVoidLocalServer(
                         directCallConnecting = false;
                         if (rtcSocket) leaveRtcSession();
                         voiceCallBtn.classList.remove('active');
-                        videoCallBtn.classList.remove('active');
                         voiceCallBtn.title = 'Start voice call';
-                        videoCallBtn.title = 'Start video call';
                         if (phase !== 'IDLE') {
                           setMeetingStageActive(false);
                           liveStagePanel.classList.add('hidden');
@@ -4654,20 +4640,24 @@ class BitVoidLocalServer(
                   rtcStartClassHostBtn.classList.remove('hidden');
                   rtcJoinClassStudentBtn.classList.remove('hidden');
                   rtcStartCallBtn.classList.remove('hidden');
-                  rtcStartCallBtn.textContent = 'START VOICE / VIDEO CALL';
+                  rtcStartCallBtn.textContent = 'START VOICE CALL';
                 }
                 directIncomingControls.classList.toggle(
                   'hidden',
                   !(activeDm && directCallPromptOpen && directCallLastPhase === 'RINGING' && !joined)
                 );
                 if (joined) {
+                  var liveClassMode = rtcMode === 'LIVE_CLASSROOM';
                   liveLauncherControls.classList.add('hidden');
                   liveJoinIdRow.classList.add('hidden');
                   liveActiveControls.classList.remove('hidden');
                   rtcMuteBtn.textContent = rtcMuted ? 'MIC MUTED' : 'MIC ON';
+                  rtcCamBtn.classList.toggle('hidden', !liveClassMode);
+                  rtcShareScreenBtn.classList.toggle('hidden', !liveClassMode);
+                  rtcUploadDocBtn.classList.toggle('hidden', !liveClassMode);
                   rtcCamBtn.textContent = rtcVideoOn ? 'CAM ON' : 'CAM OFF';
                   rtcShareScreenBtn.textContent = rtcScreenSharing ? 'STOP SHARE' : 'SHARE SCREEN';
-                  if (rtcRole === 'HOST_TEACHER') {
+                  if (liveClassMode && rtcRole === 'HOST_TEACHER') {
                     rtcEndSessionBtn.classList.remove('hidden');
                   } else {
                     rtcEndSessionBtn.classList.add('hidden');
@@ -4688,8 +4678,8 @@ class BitVoidLocalServer(
                   var statusBits = [];
                   if (isTeacher) statusBits.push('TEACHER');
                   else if (p.role === 'STUDENT_VIEWER') statusBits.push('STUDENT');
-                  if (p.isScreenSharing) statusBits.push('SCREEN');
-                  else if (p.isVideoOn) statusBits.push('CAM');
+                  if (rtcMode === 'LIVE_CLASSROOM' && p.isScreenSharing) statusBits.push('SCREEN');
+                  else if (rtcMode === 'LIVE_CLASSROOM' && p.isVideoOn) statusBits.push('CAM');
                   if (p.isMuted) statusBits.push('MUTED');
                   chip.textContent = (p.displayName || p.peerId) + (statusBits.length ? (' · ' + statusBits.join('/')) : '');
                   liveParticipantsGrid.appendChild(chip);
@@ -4716,7 +4706,7 @@ class BitVoidLocalServer(
               function renderRtcVideoTiles() {
                 liveVideoGrid.innerHTML = '';
                 var localStream = rtcScreenSharing && rtcScreenStream ? rtcScreenStream : rtcLocalStream;
-                if (localStream && (rtcVideoOn || rtcScreenSharing)) {
+                if (rtcMode === 'LIVE_CLASSROOM' && localStream && (rtcVideoOn || rtcScreenSharing)) {
                   var localTile = document.createElement('div');
                   localTile.className = 'live-video-tile' +
                     (rtcScreenSharing ? ' presenter-tile' : (rtcRole === 'HOST_TEACHER' ? ' teacher-tile' : ''));
@@ -4742,20 +4732,20 @@ class BitVoidLocalServer(
                   if (!stream) return;
                   var peerMeta = rtcParticipantList.find(function (p) { return p.peerId === pid; });
                   var tile = document.createElement('div');
-                  var isTeacher = peerMeta && peerMeta.role === 'HOST_TEACHER';
-                  var isPresenting = peerMeta && peerMeta.isScreenSharing;
+                  var isTeacher = rtcMode === 'LIVE_CLASSROOM' && peerMeta && peerMeta.role === 'HOST_TEACHER';
+                  var isPresenting = rtcMode === 'LIVE_CLASSROOM' && peerMeta && peerMeta.isScreenSharing;
                   tile.className = 'live-video-tile' +
                     (isPresenting ? ' presenter-tile' : (isTeacher ? ' teacher-tile' : ''));
                   var v = document.createElement('video');
                   v.autoplay = true;
                   v.playsInline = true;
                   v.srcObject = stream;
-                  if (stream.getVideoTracks().length === 0) {
+                  if (rtcMode !== 'LIVE_CLASSROOM' || stream.getVideoTracks().length === 0) {
                     v.style.display = 'none';
                     appendRtcWaitingState(
                       tile,
                       peerMeta ? peerMeta.displayName : pid,
-                      'Audio connected · camera is off',
+                      rtcMode === 'LIVE_CLASSROOM' ? 'Audio connected · camera is off' : 'Voice connected · video is disabled',
                       peerMeta ? peerMeta.displayName : pid
                     );
                   }
@@ -4774,7 +4764,9 @@ class BitVoidLocalServer(
                   var waitingName = activeDm ? ('@' + activeDm.peerUsername) : 'Meeting participants';
                   var waitingText = activeDm && directCallLastPhase === 'RINGING'
                     ? 'Calling on this local Wi-Fi node…'
-                    : 'Camera is off · audio meeting stage is ready';
+                    : (rtcMode === 'LIVE_CLASSROOM'
+                      ? 'Camera is off · audio meeting stage is ready'
+                      : 'Voice-only call · camera and video are disabled');
                   appendRtcWaitingState(waitingTile, waitingName, waitingText, activeDm ? activeDm.peerUsername : 'BV');
                   liveVideoGrid.appendChild(waitingTile);
                 }
@@ -4786,8 +4778,8 @@ class BitVoidLocalServer(
                   type: 'media_state',
                   roomId: rtcRoomId,
                   isMuted: rtcMuted,
-                  isVideoOn: rtcVideoOn,
-                  isScreenSharing: rtcScreenSharing,
+                  isVideoOn: rtcMode === 'LIVE_CLASSROOM' && rtcVideoOn,
+                  isScreenSharing: rtcMode === 'LIVE_CLASSROOM' && rtcScreenSharing,
                   role: rtcRole
                 }));
               }
@@ -4803,15 +4795,19 @@ class BitVoidLocalServer(
                 var pc = new RTCPeerConnection({ iceServers: [] });
                 rtcPeers[remotePeerId] = pc;
 
-                var activeOutVideo = (rtcScreenSharing && rtcScreenStream)
-                  ? rtcScreenStream.getVideoTracks()[0]
-                  : (rtcLocalStream ? rtcLocalStream.getVideoTracks()[0] : null);
+                var activeOutVideo = rtcMode === 'LIVE_CLASSROOM'
+                  ? ((rtcScreenSharing && rtcScreenStream)
+                    ? rtcScreenStream.getVideoTracks()[0]
+                    : (rtcLocalStream ? rtcLocalStream.getVideoTracks()[0] : null))
+                  : null;
                 var activeOutAudio = rtcLocalStream ? rtcLocalStream.getAudioTracks()[0] : null;
 
                 var audioT = pc.addTransceiver('audio', { direction: 'sendrecv' });
                 if (activeOutAudio) audioT.sender.replaceTrack(activeOutAudio);
-                var videoT = pc.addTransceiver('video', { direction: 'sendrecv' });
-                if (activeOutVideo) videoT.sender.replaceTrack(activeOutVideo);
+                if (rtcMode === 'LIVE_CLASSROOM') {
+                  var videoT = pc.addTransceiver('video', { direction: 'sendrecv' });
+                  if (activeOutVideo) videoT.sender.replaceTrack(activeOutVideo);
+                }
 
                 pc.onicecandidate = function (ev) {
                   if (ev.candidate && rtcSocket && rtcSocket.readyState === 1) {
@@ -4829,6 +4825,10 @@ class BitVoidLocalServer(
                 };
 
                 pc.ontrack = function (ev) {
+                  if (rtcMode !== 'LIVE_CLASSROOM' && ev.track && ev.track.kind === 'video') {
+                    ev.track.stop();
+                    return;
+                  }
                   var stream = (ev.streams && ev.streams[0]) ? ev.streams[0] : new MediaStream([ev.track]);
                   rtcRemoteStreams[remotePeerId] = stream;
                   renderRtcVideoTiles();
@@ -4838,7 +4838,10 @@ class BitVoidLocalServer(
 
               function sendRtcOffer(remotePeerId) {
                 var pc = createOrGetRtcPeer(remotePeerId);
-                pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true })
+                pc.createOffer({
+                  offerToReceiveAudio: true,
+                  offerToReceiveVideo: rtcMode === 'LIVE_CLASSROOM'
+                })
                   .then(function (offer) {
                     return pc.setLocalDescription(offer).then(function () { return offer; });
                   })
@@ -4931,7 +4934,7 @@ class BitVoidLocalServer(
               function mediaPermissionMessage(err) {
                 var name = err && err.name ? err.name : '';
                 if (name === 'NotAllowedError' || name === 'SecurityError') {
-                  return 'Camera or microphone permission was blocked. Use the browser site controls to allow both, then try again.';
+                  return 'Microphone or Live Class camera permission was blocked. Update the browser site permissions, then try again.';
                 }
                 if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
                   return 'No usable camera or microphone was found. Connect a device and check operating-system privacy settings.';
@@ -4951,7 +4954,7 @@ class BitVoidLocalServer(
                   return;
                 }
                 if (!activeDm && mode === 'VOICE_VIDEO_CALL' && isGeneralChatActive()) {
-                  showRtcError('Voice and video calls are unavailable in General Chat. Open P.Chat or another channel.');
+                  showRtcError('Voice calls are unavailable in General Chat. Open P.Chat or another channel.');
                   liveStagePanel.classList.add('hidden');
                   setMeetingStageActive(false);
                   return;
@@ -4962,7 +4965,7 @@ class BitVoidLocalServer(
                   return;
                 }
                 if (startWithMedia && !window.isSecureContext) {
-                  showRtcError('Camera and microphone require trusted HTTPS. Open /secure-setup, install the BitVoid local CA, then use the secure portal URL.');
+                  showRtcError((mode === 'LIVE_CLASSROOM' ? 'Camera and microphone' : 'Microphone') + ' access requires trusted HTTPS. Open /secure-setup, install the BitVoid local CA, then use the secure portal URL.');
                   liveStagePanel.classList.remove('hidden');
                   setMeetingStageActive(true);
                   liveRoomStatusEl.innerHTML = 'Secure browser setup required · <a href="/secure-setup?username=' + encodeURIComponent(activeDm ? activeDm.myUsername : portalUsername) + '">OPEN SETUP</a>';
@@ -4970,7 +4973,7 @@ class BitVoidLocalServer(
                   return;
                 }
                 if (startWithMedia && (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)) {
-                  showRtcError('This browser does not expose camera/microphone controls. Use a current Chrome, Edge, Firefox, or Safari over the secure portal URL.');
+                  showRtcError('This browser does not expose microphone/media controls. Use a current Chrome, Edge, Firefox, or Safari over the secure portal URL.');
                   directCallConnecting = false;
                   return;
                 }
@@ -4986,7 +4989,8 @@ class BitVoidLocalServer(
                 rtcMuted = (role === 'STUDENT_VIEWER');
                 renderRtcVideoTiles();
 
-                var wantsVideo = startWithVideo !== false && role !== 'STUDENT_VIEWER';
+                var wantsVideo = mode === 'LIVE_CLASSROOM' &&
+                  startWithVideo !== false && role !== 'STUDENT_VIEWER';
                 var mediaPromise = startWithMedia
                   ? navigator.mediaDevices.getUserMedia({ audio: true, video: wantsVideo })
                       .catch(function (err) {
@@ -5002,7 +5006,8 @@ class BitVoidLocalServer(
                   rtcLocalStream = stream;
                   if (stream) {
                     stream.getAudioTracks().forEach(function (t) { t.enabled = !rtcMuted; });
-                    rtcVideoOn = stream.getVideoTracks().length > 0 && role !== 'STUDENT_VIEWER';
+                    rtcVideoOn = mode === 'LIVE_CLASSROOM' &&
+                      stream.getVideoTracks().length > 0 && role !== 'STUDENT_VIEWER';
                     stream.getVideoTracks().forEach(function (t) { t.enabled = rtcVideoOn; });
                   } else {
                     rtcVideoOn = false;
@@ -5032,7 +5037,7 @@ class BitVoidLocalServer(
                   rtcSocket.onopen = function () {
                     var callLabel = activeDm && directCallLastPhase === 'RINGING'
                       ? ('RINGING @' + activeDm.peerUsername + ' · your meeting stage is ready')
-                      : (activeDm ? ('CALL WITH @' + activeDm.peerUsername) : 'VOICE/VIDEO CALL LIVE');
+                      : (activeDm ? ('VOICE CALL WITH @' + activeDm.peerUsername) : 'VOICE CALL LIVE');
                     liveRoomStatusEl.textContent = (rtcMode === 'LIVE_CLASSROOM' ? 'LIVE CLASS ACTIVE' : callLabel) + ' · Local P2P';
                   };
                   rtcSocket.onerror = function () {
@@ -5090,7 +5095,21 @@ class BitVoidLocalServer(
                       } else if (msg.type === 'offer' && msg.fromPeerId && msg.sdp) {
                         var pc = createOrGetRtcPeer(msg.fromPeerId);
                         pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp })
-                          .then(function () { return pc.createAnswer(); })
+                          .then(function () {
+                            if (rtcMode !== 'LIVE_CLASSROOM') {
+                              pc.getTransceivers().forEach(function (transceiver) {
+                                var receiverTrack = transceiver.receiver && transceiver.receiver.track;
+                                if (receiverTrack && receiverTrack.kind === 'video') {
+                                  receiverTrack.enabled = false;
+                                  transceiver.direction = 'inactive';
+                                }
+                              });
+                            }
+                            return pc.createAnswer({
+                              offerToReceiveAudio: true,
+                              offerToReceiveVideo: rtcMode === 'LIVE_CLASSROOM'
+                            });
+                          })
                           .then(function (ans) {
                             return pc.setLocalDescription(ans).then(function () { return ans; });
                           })
@@ -5126,7 +5145,7 @@ class BitVoidLocalServer(
                 });
               }
 
-              function startDirectCall(withVideo) {
+              function startDirectVoiceCall() {
                 if (!activeDm) return;
                 if (!window.isSecureContext) {
                   liveStagePanel.classList.remove('hidden');
@@ -5145,7 +5164,7 @@ class BitVoidLocalServer(
                   fetch('/api/dm/' + encodeURIComponent(activeDm.dmId) + '/call/invite', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-DM-Token': activeDm.token },
-                    body: JSON.stringify({ withVideo: !!withVideo })
+                    body: JSON.stringify({ withVideo: false })
                   }).then(function (r) {
                     if (!r.ok) {
                       return r.json().then(function (d) {
@@ -5159,9 +5178,8 @@ class BitVoidLocalServer(
                     liveStagePanel.classList.remove('hidden');
                     setMeetingStageActive(true);
                     voiceCallBtn.classList.add('active');
-                    videoCallBtn.classList.toggle('active', !!withVideo);
-                    liveRoomStatusEl.textContent = 'Ringing @' + activeDm.peerUsername + ' · opening your meeting stage';
-                    joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true, null, null, !!withVideo);
+                    liveRoomStatusEl.textContent = 'Ringing @' + activeDm.peerUsername + ' · opening your voice call';
+                    joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true, null, null, false);
                   }).catch(function (err) {
                     showRtcError(err.message || 'Unable to ring this user.');
                   });
@@ -5196,7 +5214,7 @@ class BitVoidLocalServer(
                       true,
                       null,
                       null,
-                      directCallIncomingWithVideo
+                      false
                     );
                   } else {
                     directCallLastPhase = 'DECLINED';
@@ -5215,8 +5233,7 @@ class BitVoidLocalServer(
                 liveStagePanel.classList.toggle('hidden');
                 updateRtcControlsUi();
               });
-              voiceCallBtn.addEventListener('click', function () { startDirectCall(false); });
-              videoCallBtn.addEventListener('click', function () { startDirectCall(true); });
+              voiceCallBtn.addEventListener('click', startDirectVoiceCall);
               directAcceptCallBtn.addEventListener('click', function () { respondToIncomingDirectCall(true); });
               directDeclineCallBtn.addEventListener('click', function () { respondToIncomingDirectCall(false); });
               closeLiveStageBtn.addEventListener('click', function () {
@@ -5264,10 +5281,10 @@ class BitVoidLocalServer(
                   setMeetingStageActive(false);
                   return;
                 }
-                joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true);
+                joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true, null, null, false);
               });
               rtcUploadDocBtn.addEventListener('click', function () {
-                if (!rtcRoomId) return;
+                if (!rtcRoomId || rtcMode !== 'LIVE_CLASSROOM') return;
                 rtcDocInput.value = '';
                 rtcDocInput.click();
               });
@@ -5330,6 +5347,7 @@ class BitVoidLocalServer(
                 sendRtcMediaState();
               });
               rtcCamBtn.addEventListener('click', function () {
+                if (rtcMode !== 'LIVE_CLASSROOM') return;
                 rtcVideoOn = !rtcVideoOn;
                 if (rtcLocalStream && rtcLocalStream.getVideoTracks().length > 0) {
                   rtcLocalStream.getVideoTracks().forEach(function (t) { t.enabled = rtcVideoOn; });
@@ -5356,6 +5374,7 @@ class BitVoidLocalServer(
                 }
               });
               rtcShareScreenBtn.addEventListener('click', function () {
+                if (rtcMode !== 'LIVE_CLASSROOM') return;
                 if (rtcScreenSharing) {
                   stopRtcScreenShare();
                 } else if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {

@@ -13,7 +13,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 enum class SignalingSessionMode(val label: String) {
-    VOICE_VIDEO_CALL("Voice / Video Call"),
+    // Protocol name retained for compatibility with already-installed nodes; calls are audio-only.
+    VOICE_VIDEO_CALL("Voice Call"),
     LIVE_CLASSROOM("Live Class & Presentation")
 }
 
@@ -92,8 +93,8 @@ data class SignalingRoomState(
 
 /**
  * Thread-safe local WebRTC signaling registry and message router for `/ws/signaling`.
- * Coordinates peer handshakes (SDP offer, answer, ICE candidates), Direct 1-on-1 Voice/Video
- * calls, Live Classrooms with generated shareable Class IDs (`CLS-XXXX-XX`), and synchronized
+ * Coordinates peer handshakes (SDP offer, answer, ICE candidates), direct 1-on-1 Voice Calls,
+ * Live Classrooms with generated shareable Class IDs (`CLS-XXXX-XX`), and synchronized
  * live presentation materials (PDF, PPT/PPTX, DOC/DOCX, Images, Text) over local Wi-Fi.
  */
 object BitVoidSignalingServer {
@@ -320,7 +321,7 @@ object BitVoidSignalingServer {
     }
 
     @Synchronized
-    fun requestDirectCall(session: com.bitvoid.network.direct.DirectSession, withVideo: Boolean): DirectCallInvitation {
+    fun requestDirectCall(session: com.bitvoid.network.direct.DirectSession): DirectCallInvitation {
         val now = System.currentTimeMillis()
         val current = currentDirectCallInvitation(session.dmId)
         if (current != null && current.phase in setOf(DirectCallPhase.RINGING, DirectCallPhase.ACCEPTED)) {
@@ -333,7 +334,7 @@ object BitVoidSignalingServer {
             dmId = session.dmId,
             callerUsername = session.myUsername,
             calleeUsername = session.peerUsername,
-            withVideo = withVideo,
+            withVideo = false,
             phase = DirectCallPhase.RINGING,
             createdAtMs = now,
             updatedAtMs = now
@@ -466,12 +467,17 @@ object BitVoidSignalingServer {
         val channelId = rawChannelId?.trim()?.takeIf { it.isNotEmpty() } ?: roomId
         val peerId = rawPeerId?.trim()?.takeIf { it.isNotEmpty() } ?: generatePeerId("bv")
         val displayName = rawDisplayName?.trim()?.takeIf { it.isNotEmpty() } ?: peerId
+        val effectiveMode = if (roomId.startsWith("dm__", ignoreCase = false)) {
+            SignalingSessionMode.VOICE_VIDEO_CALL
+        } else {
+            mode
+        }
 
         val room = rooms.computeIfAbsent(roomId) {
             InternalRoom(
                 roomId = roomId,
                 channelId = channelId,
-                mode = mode,
+                mode = effectiveMode,
                 hostPeerId = if (role == ParticipantRole.HOST_TEACHER) peerId else null,
                 className = BitVoidChannelManager.getChannel(channelId)?.name ?: channelId,
                 keepAliveUntilEnded = roomId.startsWith("LC-", ignoreCase = false)
@@ -479,13 +485,12 @@ object BitVoidSignalingServer {
         }
 
         synchronized(room) {
-            if (mode == SignalingSessionMode.LIVE_CLASSROOM) {
-                room.mode = SignalingSessionMode.LIVE_CLASSROOM
-                if (room.classCode == null) {
-                    val code = generateClassCode()
-                    room.classCode = code
-                    classCodeToRoomId[code] = room.roomId
-                }
+            // A room's purpose is fixed when it is created. In particular, a later peer cannot
+            // promote an active voice-call room to Live Class and thereby re-enable video.
+            if (room.mode == SignalingSessionMode.LIVE_CLASSROOM && room.classCode == null) {
+                val code = generateClassCode()
+                room.classCode = code
+                classCodeToRoomId[code] = room.roomId
             }
             if (role == ParticipantRole.HOST_TEACHER || room.hostPeerId == null) {
                 room.hostPeerId = peerId
@@ -500,14 +505,15 @@ object BitVoidSignalingServer {
                 }
             }
 
+            val allowsVideo = room.mode == SignalingSessionMode.LIVE_CLASSROOM
             val peer = SignalingPeer(
                 peerId = peerId,
                 displayName = displayName,
                 role = role,
                 roomId = roomId,
                 isMuted = isMuted,
-                isVideoOn = isVideoOn,
-                isScreenSharing = isScreenSharing,
+                isVideoOn = allowsVideo && isVideoOn,
+                isScreenSharing = allowsVideo && isScreenSharing,
                 joinedAtMs = System.currentTimeMillis()
             )
             room.peers[peerId] = PeerEntry(peer = peer, listener = listener)
@@ -595,10 +601,11 @@ object BitVoidSignalingServer {
         val room = rooms[roomId] ?: return
         synchronized(room) {
             val entry = room.peers[peerId] ?: return
+            val allowsVideo = room.mode == SignalingSessionMode.LIVE_CLASSROOM
             val updated = entry.peer.copy(
                 isMuted = isMuted ?: entry.peer.isMuted,
-                isVideoOn = isVideoOn ?: entry.peer.isVideoOn,
-                isScreenSharing = isScreenSharing ?: entry.peer.isScreenSharing,
+                isVideoOn = allowsVideo && (isVideoOn ?: entry.peer.isVideoOn),
+                isScreenSharing = allowsVideo && (isScreenSharing ?: entry.peer.isScreenSharing),
                 role = role ?: entry.peer.role
             )
             entry.peer = updated
@@ -624,19 +631,17 @@ object BitVoidSignalingServer {
 
     /**
      * Adds a shared document/presentation (PDF, PPT/PPTX, DOC/DOCX, image, text, etc.)
-     * into an active call/classroom room and notifies all connected participants in real time.
+     * to an active Live Class and notifies all connected participants in real time.
      */
     fun addMaterialToRoom(
         roomId: String,
         material: LiveClassMaterial,
         setAsActive: Boolean = true
     ): LiveClassMaterial {
-        val room = rooms.computeIfAbsent(roomId) {
-            InternalRoom(
-                roomId = roomId,
-                channelId = roomId,
-                mode = SignalingSessionMode.LIVE_CLASSROOM
-            )
+        val room = rooms[roomId]
+            ?: throw IllegalStateException("Live Class is not active")
+        if (room.mode != SignalingSessionMode.LIVE_CLASSROOM) {
+            throw IllegalStateException("Document presentation is available only in Live Class")
         }
         synchronized(room) {
             room.materials.removeAll { it.id == material.id }
@@ -667,6 +672,7 @@ object BitVoidSignalingServer {
         pageIndex: Int
     ) {
         val room = rooms[roomId] ?: return
+        if (room.mode != SignalingSessionMode.LIVE_CLASSROOM) return
         synchronized(room) {
             if (!materialId.isNullOrBlank()) {
                 room.activeMaterialId = materialId

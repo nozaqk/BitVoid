@@ -36,7 +36,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.CallEnd
-import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
@@ -45,8 +44,6 @@ import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.UploadFile
-import androidx.compose.material.icons.filled.Videocam
-import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -829,24 +826,19 @@ fun DirectCallStagePanel(
         pendingPermissionAction = null
     }
 
-    fun runWithAvPermissions(action: () -> Unit) {
+    fun runWithAudioPermission(action: () -> Unit) {
         val hasAudio = ContextCompat.checkSelfPermission(
             context,
             Manifest.permission.RECORD_AUDIO
         ) == PackageManager.PERMISSION_GRANTED
-        val hasCam = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.CAMERA
-        ) == PackageManager.PERMISSION_GRANTED
-        if (hasAudio && hasCam) {
+        if (hasAudio) {
             action()
         } else {
             pendingPermissionAction = action
-            permLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA))
+            permLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
         }
     }
 
-    val remoteTrackEntry = callUiState.remoteVideoTracks.entries.firstOrNull()
     val remotePeer = callUiState.participants.firstOrNull { it.peerId != callUiState.myPeerId }
 
     Card(
@@ -919,76 +911,41 @@ fun DirectCallStagePanel(
                     .background(Color(0xFF05070A))
                     .border(1.dp, VoidBorder, RoundedCornerShape(12.dp))
             ) {
-                when {
-                    remoteTrackEntry != null -> {
-                        WebRtcVideoSurface(
-                            videoTrack = remoteTrackEntry.value,
-                            eglBaseContext = callUiState.eglBaseContext,
-                            mirror = false,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-
-                    callUiState.localVideoTrack != null && callUiState.isCameraEnabled -> {
-                        WebRtcVideoSurface(
-                            videoTrack = callUiState.localVideoTrack,
-                            eglBaseContext = callUiState.eglBaseContext,
-                            mirror = callUiState.isUsingFrontCamera,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-
-                    else -> {
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(56.dp)
-                                    .clip(CircleShape)
-                                    .background(VoidCyan.copy(alpha = 0.16f))
-                                    .border(1.5.dp, VoidCyan, CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = peerUsername.take(2).uppercase(Locale.US),
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = VoidCyan,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = if (remotePeer != null) {
-                                    "@$peerUsername connected · ${if (remotePeer.isMuted) "Muted" else "Audio Live"}"
-                                } else {
-                                    "Waiting for @$peerUsername to join call..."
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = VoidTextSecondary
-                            )
-                        }
-                    }
-                }
-
-                if (remoteTrackEntry != null && callUiState.localVideoTrack != null && callUiState.isCameraEnabled) {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
                     Box(
                         modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(8.dp)
-                            .size(width = 76.dp, height = 98.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .border(1.dp, VoidMint, RoundedCornerShape(8.dp))
+                            .size(64.dp)
+                            .clip(CircleShape)
+                            .background(VoidCyan.copy(alpha = 0.16f))
+                            .border(1.5.dp, VoidCyan, CircleShape),
+                        contentAlignment = Alignment.Center
                     ) {
-                        WebRtcVideoSurface(
-                            videoTrack = callUiState.localVideoTrack,
-                            eglBaseContext = callUiState.eglBaseContext,
-                            mirror = callUiState.isUsingFrontCamera,
-                            modifier = Modifier.fillMaxSize()
+                        Text(
+                            text = peerUsername.take(2).uppercase(Locale.US),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = VoidCyan,
+                            fontWeight = FontWeight.Bold
                         )
                     }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = if (remotePeer != null) {
+                            "@$peerUsername connected · ${if (remotePeer.isMuted) "Muted" else "Audio Live"}"
+                        } else {
+                            "Waiting for @$peerUsername to join voice call..."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = VoidTextSecondary
+                    )
+                    Text(
+                        text = "Voice only · camera and video are disabled",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = VoidMint
+                    )
                 }
             }
 
@@ -999,7 +956,7 @@ fun DirectCallStagePanel(
             ) {
                 Surface(
                     onClick = {
-                        if (callUiState.isMicMuted) runWithAvPermissions { callActions.onToggleMicMute() }
+                        if (callUiState.isMicMuted) runWithAudioPermission { callActions.onToggleMicMute() }
                         else callActions.onToggleMicMute()
                     },
                     shape = CircleShape,
@@ -1014,45 +971,6 @@ fun DirectCallStagePanel(
                             imageVector = if (callUiState.isMicMuted) Icons.Filled.MicOff else Icons.Filled.Mic,
                             contentDescription = "Toggle mic mute",
                             tint = if (callUiState.isMicMuted) VoidCrimson else VoidMint
-                        )
-                    }
-                }
-
-                Surface(
-                    onClick = {
-                        if (!callUiState.isCameraEnabled) runWithAvPermissions { callActions.onToggleCamera() }
-                        else callActions.onToggleCamera()
-                    },
-                    shape = CircleShape,
-                    color = if (callUiState.isCameraEnabled) VoidMintContainer else VoidObsidian,
-                    border = BorderStroke(1.dp, if (callUiState.isCameraEnabled) VoidMint else VoidBorder),
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("dm_call_camera_button")
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = if (callUiState.isCameraEnabled) Icons.Filled.Videocam else Icons.Filled.VideocamOff,
-                            contentDescription = "Toggle camera",
-                            tint = if (callUiState.isCameraEnabled) VoidMint else VoidTextSecondary
-                        )
-                    }
-                }
-
-                Surface(
-                    onClick = callActions.onSwitchCamera,
-                    shape = CircleShape,
-                    color = VoidObsidian,
-                    border = BorderStroke(1.dp, VoidCyan.copy(alpha = 0.6f)),
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("dm_call_flip_button")
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Filled.Cameraswitch,
-                            contentDescription = "Switch camera",
-                            tint = VoidCyan
                         )
                     }
                 }

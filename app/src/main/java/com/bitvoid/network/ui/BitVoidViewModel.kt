@@ -127,7 +127,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     private val _currentMaterialBitmap = MutableStateFlow<ImageBitmap?>(null)
     private val _isLoadingMaterialPreview = MutableStateFlow(false)
     private val _materialPreviewError = MutableStateFlow<String?>(null)
-    private var pendingOutgoingDirectCall: Triple<String, String, Boolean>? = null
+    private var pendingOutgoingDirectCall: Pair<String, String>? = null
     private var openingIncomingCallDmId: String? = null
 
     private data class CallSessionMeta(
@@ -433,7 +433,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                         if (session != null && session.dmId == pending.first &&
                             callManager.activeRoomId.value != session.dmId
                         ) {
-                            connectDirectCall(session, pending.third)
+                            connectDirectCall(session)
                         }
                     }
                     DirectCallPhase.DECLINED -> {
@@ -986,7 +986,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun startVoiceVideoCall(channelId: String, channelName: String, token: String?) {
+    fun startVoiceCall(channelId: String, channelName: String, token: String?) {
         viewModelScope.launch {
             ensureLocalGatewayReadyIfNeeded()
             syncGatewayToLocalIfAvailable()
@@ -998,7 +998,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                 channelToken = token,
                 mode = SignalingSessionMode.VOICE_VIDEO_CALL,
                 role = ParticipantRole.SPEAKER,
-                startWithVideo = true
+                startWithVideo = false
             )
         }
     }
@@ -1155,21 +1155,21 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun startDirectCall(dmId: String, peerUsername: String, token: String, withVideo: Boolean) {
+    fun startDirectCall(dmId: String, peerUsername: String, token: String) {
         viewModelScope.launch {
             _extraCallError.value = null
             ensureLocalGatewayReadyIfNeeded()
             syncGatewayToLocalIfAvailable()
-            clientRepository.requestDirectCall(dmId, token, withVideo)
+            // The repository retains the legacy wire field for mixed-version compatibility,
+            // but every new direct call explicitly requests audio only.
+            clientRepository.requestDirectCall(dmId, token, withVideo = false)
                 .onSuccess {
-                    pendingOutgoingDirectCall = Triple(dmId, peerUsername, withVideo)
+                    pendingOutgoingDirectCall = dmId to peerUsername
                     val session = activeDirectSession.value
                     if (session != null && session.dmId == dmId &&
                         callManager.activeRoomId.value != dmId
                     ) {
-                        // The caller deliberately selected media, so open the full meeting
-                        // stage immediately while the recipient is still deciding whether to answer.
-                        connectDirectCall(session, withVideo)
+                        connectDirectCall(session)
                     }
                 }
                 .onFailure { error ->
@@ -1178,14 +1178,14 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun acceptDirectCall(dmId: String, peerUsername: String, token: String, withVideo: Boolean) {
+    fun acceptDirectCall(dmId: String, peerUsername: String, token: String) {
         viewModelScope.launch {
             _extraCallError.value = null
             clientRepository.acceptDirectCall(dmId, token)
                 .onSuccess {
                     val session = activeDirectSession.value
                     if (session != null && session.dmId == dmId) {
-                        connectDirectCall(session, withVideo)
+                        connectDirectCall(session)
                     }
                 }
                 .onFailure { error ->
@@ -1213,7 +1213,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    private fun connectDirectCall(session: ClientDirectSession, withVideo: Boolean) {
+    private fun connectDirectCall(session: ClientDirectSession) {
         callManager.startOrJoinSession(
             gatewayBaseUrl = clientRepository.gatewayBaseUrl.value,
             channelId = session.dmId,
@@ -1222,7 +1222,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             channelToken = session.token,
             mode = SignalingSessionMode.VOICE_VIDEO_CALL,
             role = ParticipantRole.SPEAKER,
-            startWithVideo = withVideo
+            startWithVideo = false
         )
     }
 
