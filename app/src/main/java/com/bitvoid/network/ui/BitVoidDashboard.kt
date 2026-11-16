@@ -273,6 +273,7 @@ fun BitVoidDashboard(
     val clientHubContent: @Composable () -> Unit = {
         BitVoidClientHubContent(
             clientState = clientState,
+            onBack = { viewModel.selectMode(NodeMode.HOST) },
             onScanNetworks = { viewModel.scanNearbyNodes() },
             onConnectNode = { ssid -> viewModel.connectToNode(ssid) },
             onOpenWifiSettings = { viewModel.openSystemWifiSettings() }
