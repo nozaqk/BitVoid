@@ -57,6 +57,8 @@ data class RemoteChannelSummary(
     val channelId: String?,
     val name: String,
     val isPublic: Boolean,
+    val isHidden: Boolean = false,
+    val isOwner: Boolean = false,
     val hasPrivateKey: Boolean,
     val mediaCount: Int,
     val activePeers: Int,
@@ -304,7 +306,10 @@ class BitVoidClientRepository {
         }
     }
 
-    suspend fun fetchChannels(urlOverride: String? = null) {
+    suspend fun fetchChannels(
+        urlOverride: String? = null,
+        username: String? = null
+    ) {
         val targetBase = (urlOverride?.let { setGatewayBaseUrl(it) } ?: _gatewayBaseUrl.value)
             .trimEnd('/')
         _isLoadingChannels.value = true
@@ -312,8 +317,16 @@ class BitVoidClientRepository {
 
         val result = withContext(Dispatchers.IO) {
             try {
+                val cleanUsername = username?.trim()?.removePrefix("@").orEmpty()
+                val channelsUrl = if (cleanUsername.isNotEmpty()) {
+                    val encoded = URLEncoder.encode(cleanUsername, StandardCharsets.UTF_8.name())
+                        .replace("+", "%20")
+                    "$targetBase/api/channels?username=$encoded"
+                } else {
+                    "$targetBase/api/channels"
+                }
                 val request = Request.Builder()
-                    .url("$targetBase/api/channels")
+                    .url(channelsUrl)
                     .get()
                     .build()
                 okHttpClient.newCall(request).execute().use { resp ->
@@ -1304,14 +1317,21 @@ class BitVoidClientRepository {
             ?: "shared_file_${System.currentTimeMillis()}"
     }
 
-    suspend fun registerUsername(username: String, urlOverride: String? = null) {
+    suspend fun registerUsername(
+        username: String,
+        urlOverride: String? = null,
+        discoverable: Boolean = true
+    ) {
         val clean = username.trim()
         if (clean.isEmpty()) return
         val targetBase = (urlOverride?.let { setGatewayBaseUrl(it) } ?: _gatewayBaseUrl.value)
             .trimEnd('/')
         withContext(Dispatchers.IO) {
             try {
-                val payload = JSONObject().put("username", clean).toString()
+                val payload = JSONObject()
+                    .put("username", clean)
+                    .put("discoverable", discoverable)
+                    .toString()
                 val request = Request.Builder()
                     .url("$targetBase/api/users/register")
                     .post(payload.toRequestBody(JSON_MEDIA_TYPE))
@@ -1743,12 +1763,19 @@ class BitVoidClientRepository {
         for (i in 0 until arr.length()) {
             val obj = arr.optJSONObject(i) ?: continue
             val isPublic = obj.optBoolean("isPublic", false)
-            val id = if (isPublic) obj.optString("channelId").takeIf { it.isNotBlank() } else null
+            val isOwner = obj.optBoolean("isOwner", false)
+            val id = if (isPublic || isOwner) {
+                obj.optString("channelId").takeIf { it.isNotBlank() }
+            } else {
+                null
+            }
             list.add(
                 RemoteChannelSummary(
                     channelId = id,
                     name = obj.optString("name", "Channel"),
                     isPublic = isPublic,
+                    isHidden = obj.optBoolean("isHidden", false),
+                    isOwner = isOwner,
                     hasPrivateKey = obj.optBoolean("hasPrivateKey", false),
                     mediaCount = obj.optInt("mediaCount", 0),
                     activePeers = obj.optInt("activePeers", 0),

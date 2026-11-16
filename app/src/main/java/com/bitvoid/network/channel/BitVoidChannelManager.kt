@@ -51,6 +51,7 @@ data class BitVoidChannel(
     val mediaList: List<BitVoidMediaItem> = emptyList(),
     val activeParticipants: List<ChannelParticipant> = emptyList(),
     val messageCount: Int = 0,
+    val creatorUsername: String = "",
     val createdTimestamp: Long = System.currentTimeMillis()
 )
 
@@ -91,6 +92,7 @@ object BitVoidChannelManager {
         var isHidden: Boolean,
         var privateKey: String?,
         val mediaIds: MutableSet<String>,
+        val creatorUsername: String,
         val createdTimestamp: Long
     )
 
@@ -116,6 +118,7 @@ object BitVoidChannelManager {
             isHidden = false,
             privateKey = null,
             mediaIds = ConcurrentHashMap.newKeySet(),
+            creatorUsername = "",
             createdTimestamp = System.currentTimeMillis()
         )
         channels.putIfAbsent(DEFAULT_PUBLIC_CHANNEL_ID, defaultChannel)
@@ -130,7 +133,8 @@ object BitVoidChannelManager {
         rawChannelId: String? = null,
         rawPrivateKey: String? = null,
         mediaIds: Set<String> = emptySet(),
-        isHidden: Boolean = false
+        isHidden: Boolean = false,
+        creatorUsername: String? = null
     ): Result<BitVoidChannel> {
         val cleanName = rawName.trim()
         if (cleanName.isEmpty() || cleanName.length > 48) {
@@ -167,6 +171,9 @@ object BitVoidChannelManager {
             rawPrivateKey?.trim()?.takeIf { it.isNotEmpty() }
         }
 
+        val cleanCreator = creatorUsername?.let {
+            com.bitvoid.network.direct.BitVoidUserPrefs.normalizeUsernameOrNull(it)
+        }.orEmpty()
         val storedChannel = InternalChannel(
             channelId = resolvedId,
             name = cleanName,
@@ -174,6 +181,7 @@ object BitVoidChannelManager {
             isHidden = isHidden,
             privateKey = cleanKey,
             mediaIds = ConcurrentHashMap.newKeySet<String>().apply { addAll(mediaIds) },
+            creatorUsername = cleanCreator,
             createdTimestamp = System.currentTimeMillis()
         )
         channels[resolvedId] = storedChannel
@@ -211,6 +219,63 @@ object BitVoidChannelManager {
             if (effectivePublic) "Channel switched to PUBLIC broadcast." else "Channel locked to PRIVATE mode."
         )
         return Result.success(toPublicChannel(storedChannel))
+    }
+
+    fun updateChannel(
+        channelId: String,
+        rawName: String,
+        isPublic: Boolean,
+        rawPrivateKey: String?,
+        mediaIds: Set<String>,
+        isHidden: Boolean,
+        requesterUsername: String
+    ): Result<BitVoidChannel> {
+        val storedChannel = channels[channelId]
+            ?: return Result.failure(IllegalArgumentException("Channel '$channelId' not found."))
+        if (channelId == DEFAULT_PUBLIC_CHANNEL_ID) {
+            return Result.failure(IllegalArgumentException("General Chat cannot be edited."))
+        }
+        if (!isCreator(storedChannel, requesterUsername)) {
+            return Result.failure(IllegalAccessException("Only the channel creator can edit this channel."))
+        }
+        val cleanName = rawName.trim()
+        if (cleanName.isEmpty() || cleanName.length > 48) {
+            return Result.failure(IllegalArgumentException("Channel name must be 1–48 characters."))
+        }
+        val effectivePublic = isPublic && !isHidden
+        val wasPublic = storedChannel.isPublic
+        storedChannel.name = cleanName
+        storedChannel.isPublic = effectivePublic
+        storedChannel.isHidden = isHidden
+        storedChannel.privateKey = if (effectivePublic) {
+            null
+        } else {
+            rawPrivateKey?.trim()?.takeIf { it.isNotEmpty() }
+        }
+        storedChannel.mediaIds.clear()
+        storedChannel.mediaIds.addAll(mediaIds)
+        if (wasPublic && !effectivePublic) revokeChannelTokens(channelId)
+        publishChannelsSnapshot()
+        broadcastSystemNotice(channelId, "Channel settings updated by its creator.")
+        return Result.success(toPublicChannel(storedChannel))
+    }
+
+    fun canManageChannel(channelId: String, username: String): Boolean {
+        val channel = channels[channelId] ?: return false
+        return channelId != DEFAULT_PUBLIC_CHANNEL_ID && isCreator(channel, username)
+    }
+
+    fun deleteChannelByCreator(channelId: String, requesterUsername: String): Result<Unit> {
+        val channel = channels[channelId]
+            ?: return Result.failure(IllegalArgumentException("Channel '$channelId' not found."))
+        if (channelId == DEFAULT_PUBLIC_CHANNEL_ID) {
+            return Result.failure(IllegalArgumentException("General Chat cannot be deleted."))
+        }
+        if (!isCreator(channel, requesterUsername)) {
+            return Result.failure(IllegalAccessException("Only the channel creator can delete this channel."))
+        }
+        deleteChannel(channelId)
+        return Result.success(Unit)
     }
 
     fun assignMediaToChannel(channelId: String, mediaIds: Set<String>) {
@@ -280,7 +345,11 @@ object BitVoidChannelManager {
     ): ChannelSession? {
         val channelId = rawChannelId.trim()
         val channel = channels[channelId] ?: return null
-        if (!channel.isPublic) {
+        val cleanUsername = rawUsername?.let {
+            com.bitvoid.network.direct.BitVoidUserPrefs.normalizeUsernameOrNull(it)
+        }
+        val creatorAccess = cleanUsername != null && isCreator(channel, cleanUsername)
+        if (!channel.isPublic && !creatorAccess) {
             val requiredKey = channel.privateKey
             if (requiredKey != null && requiredKey != (rawPrivateKey?.trim() ?: "")) {
                 return null
@@ -288,9 +357,6 @@ object BitVoidChannelManager {
         }
 
         val issuedAt = System.currentTimeMillis()
-        val cleanUsername = rawUsername?.let {
-            com.bitvoid.network.direct.BitVoidUserPrefs.normalizeUsernameOrNull(it)
-        }
         if (cleanUsername != null) {
             com.bitvoid.network.direct.BitVoidDirectChatManager.registerUser(cleanUsername)
         }
@@ -382,6 +448,14 @@ object BitVoidChannelManager {
     fun getListedChannelSnapshots(): List<BitVoidChannel> {
         return channels.values
             .filter { !it.isHidden }
+            .sortedBy { it.createdTimestamp }
+            .map { toPublicChannel(it) }
+    }
+
+    fun getChannelSnapshotsForUser(rawUsername: String?): List<BitVoidChannel> {
+        val username = rawUsername?.trim()?.removePrefix("@").orEmpty()
+        return channels.values
+            .filter { channel -> !channel.isHidden || isCreator(channel, username) }
             .sortedBy { it.createdTimestamp }
             .map { toPublicChannel(it) }
     }
@@ -634,6 +708,7 @@ object BitVoidChannelManager {
             mediaList = assignedMedia,
             activeParticipants = getParticipants(storedChannel.channelId),
             messageCount = chatHistory[storedChannel.channelId]?.size ?: 0,
+            creatorUsername = storedChannel.creatorUsername,
             createdTimestamp = storedChannel.createdTimestamp
         )
     }
@@ -645,6 +720,12 @@ object BitVoidChannelManager {
             ""
         }
         return """{"id":"${jsonEscape(msg.id)}","channelId":"${jsonEscape(msg.channelId)}","roomId":"${jsonEscape(msg.channelId)}","sender":"${jsonEscape(msg.senderCallsign)}","text":"${jsonEscape(msg.text)}","time":"${jsonEscape(msg.timestampLabel)}"$attachmentJson}"""
+    }
+
+    private fun isCreator(channel: InternalChannel, rawUsername: String): Boolean {
+        val username = rawUsername.trim().removePrefix("@")
+        return username.isNotEmpty() &&
+            channel.creatorUsername.equals(username, ignoreCase = true)
     }
 
     private fun randomHex(length: Int): String {

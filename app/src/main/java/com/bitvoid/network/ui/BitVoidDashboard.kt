@@ -183,6 +183,7 @@ fun BitVoidDashboard(
     val channelJoinError by viewModel.channelJoinError.collectAsStateWithLifecycle()
 
     val myUsername by viewModel.myUsername.collectAsStateWithLifecycle()
+    val isUserIdDiscoverable by viewModel.isUserIdDiscoverable.collectAsStateWithLifecycle()
     val directConversations by viewModel.directConversations.collectAsStateWithLifecycle()
     val knownUsers by viewModel.knownUsers.collectAsStateWithLifecycle()
     val activeDirectSession by viewModel.activeDirectSession.collectAsStateWithLifecycle()
@@ -280,6 +281,31 @@ fun BitVoidDashboard(
         )
     }
 
+    val pChatScreenContent: @Composable () -> Unit = {
+        BitVoidPrivateChatScreen(
+            myUsername = myUsername,
+            isUserIdDiscoverable = isUserIdDiscoverable,
+            directConversations = directConversations,
+            knownUsers = knownUsers,
+            activeDirectSession = activeDirectSession,
+            directMessages = directMessages,
+            directWsStatus = directWsStatus,
+            isOpeningDirectChat = isOpeningDirectChat,
+            directChatError = directChatError,
+            isUploadingFile = isUploadingChatFile,
+            callUiState = callUiState,
+            callActions = callActions,
+            onOpenDirectChat = { target -> viewModel.openDirectChat(target) },
+            onSendDirectMessage = { text -> viewModel.sendDirectChatMessage(text) },
+            onLeaveDirectChat = { viewModel.leaveDirectChat() },
+            onClearDirectChatError = { viewModel.clearDirectChatError() },
+            onUploadDirectFile = { uri, caption ->
+                viewModel.uploadFileToActiveDirectChat(uri, caption)
+            },
+            onBuildAttachmentUrl = { path, token -> viewModel.buildAttachmentUrl(path, token) }
+        )
+    }
+
     val hubScreenContent: @Composable () -> Unit = {
         BitVoidHubScreen(
             clientState = clientState,
@@ -302,6 +328,20 @@ fun BitVoidDashboard(
             onOpenCreateChannel = {
                 editingChannelId = null
                 showChannelDialog = true
+            },
+            onEditChannel = { channelId ->
+                editingChannelId = channelId
+                showChannelDialog = true
+            },
+            onDeleteChannel = { channelId ->
+                viewModel.deleteChannel(channelId)
+                    .onFailure { error ->
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar(
+                                error.message ?: "Unable to delete channel"
+                            )
+                        }
+                    }
             },
             onOpenChannel = { channelId, privateKey ->
                 viewModel.openHubChannel(channelId, privateKey)
@@ -340,15 +380,19 @@ fun BitVoidDashboard(
         return
     }
 
-    val isInsideActiveHubChat = selectedBottomTab == AppBottomTab.HUB &&
-        (activeChannelSession != null ||
-            activeDirectSession != null ||
-            (callUiState.activeRoomId != null &&
-                !callUiState.activeRoomId!!.startsWith("dm__") &&
-                callUiState.callState != com.bitvoid.network.call.BitVoidCallState.IDLE))
+    val isInsideActiveConversation =
+        (selectedBottomTab == AppBottomTab.HUB &&
+            (activeChannelSession != null ||
+                (callUiState.activeRoomId != null &&
+                    !callUiState.activeRoomId!!.startsWith("dm__") &&
+                    callUiState.callState != com.bitvoid.network.call.BitVoidCallState.IDLE))) ||
+            (selectedBottomTab == AppBottomTab.PCHAT && activeDirectSession != null)
 
+    BackHandler(enabled = selectedBottomTab == AppBottomTab.HOME && mode == NodeMode.CLIENT) {
+        viewModel.selectMode(NodeMode.HOST)
+    }
     BackHandler(
-        enabled = selectedBottomTab != AppBottomTab.HOME && !isInsideActiveHubChat
+        enabled = selectedBottomTab != AppBottomTab.HOME && !isInsideActiveConversation
     ) {
         viewModel.selectBottomTab(AppBottomTab.HOME)
     }
@@ -358,7 +402,7 @@ fun BitVoidDashboard(
         contentWindowInsets = WindowInsets.safeDrawing,
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         bottomBar = {
-            if (!isInsideActiveHubChat) {
+            if (!isInsideActiveConversation) {
                 BitVoidBottomNavigationBar(
                     selectedTab = selectedBottomTab,
                     onSelectTab = { viewModel.selectBottomTab(it) }
@@ -382,21 +426,12 @@ fun BitVoidDashboard(
                         .widthIn(max = 1120.dp)
                         .align(Alignment.TopCenter)
                 ) {
-                    if (selectedBottomTab == AppBottomTab.HOME) {
-                        BitVoidHeaderBar(
-                            mode = mode,
-                            hostState = hostState,
-                            clientStatus = clientState.connectionStatus,
-                            onSelectMode = { viewModel.selectMode(it) },
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-                        )
-                    }
-
                     WideDashboardContent(
                         selectedBottomTab = selectedBottomTab,
                         mode = mode,
                         hostState = hostState,
                         myUsername = myUsername,
+                        isUserIdDiscoverable = isUserIdDiscoverable,
                         channels = channels,
                         auditLogs = auditLogs,
                         isImporting = isImporting,
@@ -424,8 +459,11 @@ fun BitVoidDashboard(
                         onDeleteFile = { viewModel.deleteFile(it) },
                         onClearLogs = { viewModel.clearAuditLogs() },
                         onCopy = ::copyToClipboard,
+                        onSetUserIdDiscoverable = { viewModel.setUserIdDiscoverable(it) },
                         clientHubContent = clientHubContent,
-                        hubScreenContent = hubScreenContent
+                        hubScreenContent = hubScreenContent,
+                        pChatScreenContent = pChatScreenContent,
+                        onOpenClientNode = { viewModel.selectMode(NodeMode.CLIENT) }
                     )
                 }
             } else {
@@ -434,6 +472,7 @@ fun BitVoidDashboard(
                     mode = mode,
                     hostState = hostState,
                     myUsername = myUsername,
+                    isUserIdDiscoverable = isUserIdDiscoverable,
                     channels = channels,
                     auditLogs = auditLogs,
                     clientState = clientState,
@@ -463,8 +502,10 @@ fun BitVoidDashboard(
                     onDeleteFile = { viewModel.deleteFile(it) },
                     onClearLogs = { viewModel.clearAuditLogs() },
                     onCopy = ::copyToClipboard,
+                    onSetUserIdDiscoverable = { viewModel.setUserIdDiscoverable(it) },
                     clientHubContent = clientHubContent,
                     hubScreenContent = hubScreenContent,
+                    pChatScreenContent = pChatScreenContent,
                     modifier = Modifier
                         .fillMaxSize()
                         .widthIn(max = 1120.dp)
@@ -505,13 +546,25 @@ fun BitVoidDashboard(
             },
             onSave = { name, isPublic, isHidden, customChannelId, privateKey, selectedMediaIds ->
                 if (editingChannel != null) {
-                    viewModel.assignMediaToChannel(editingChannel.channelId, selectedMediaIds)
-                    showChannelDialog = false
-                    editingChannelId = null
-                    coroutineScope.launch {
-                        snackbarHostState.showSnackbar("Updated media for #${editingChannel.name}")
+                    val effectivePublic = isPublic && !isHidden
+                    val result = viewModel.updateChannel(
+                        channelId = editingChannel.channelId,
+                        name = name,
+                        isPublic = effectivePublic,
+                        isHidden = isHidden,
+                        privateKey = if (effectivePublic) null else privateKey,
+                        mediaIds = selectedMediaIds
+                    )
+                    if (result.isSuccess) {
+                        showChannelDialog = false
+                        editingChannelId = null
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("Updated channel #$name")
+                        }
+                        null
+                    } else {
+                        result.exceptionOrNull()?.message ?: "Unable to update channel"
                     }
-                    null
                 } else {
                     val effectivePublic = isPublic && !isHidden
                     val result = viewModel.createChannel(
@@ -547,162 +600,12 @@ fun BitVoidDashboard(
 }
 
 @Composable
-private fun BitVoidHeaderBar(
-    mode: NodeMode,
-    hostState: HostState,
-    clientStatus: ClientConnectionStatus,
-    onSelectMode: (NodeMode) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val hostStatus = hostState.status
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(VoidMintContainer)
-                        .border(1.dp, VoidMint.copy(alpha = 0.5f), RoundedCornerShape(10.dp)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Router,
-                        contentDescription = null,
-                        tint = VoidMint,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Column {
-                    Text(
-                        text = "BITVOID // v1.4.2",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = VoidTextPrimary
-                    )
-                    Text(
-                        text = "OFFLINE MESH & ANONYMIZED GATEWAY",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = VoidMint
-                    )
-                }
-            }
-
-            val isOnline = hostStatus == HotspotStatus.ACTIVE ||
-                hostStatus == HotspotStatus.SERVER_ONLY ||
-                hostState.isServerRunning ||
-                clientStatus == ClientConnectionStatus.CONNECTED
-
-            StatusChip(
-                label = when {
-                    hostStatus == HotspotStatus.ACTIVE -> "HOST LIVE (${hostState.publicCount} PUB)"
-                    hostState.isOpenBroadcastMode && hostState.isServerRunning -> "OPEN BROADCAST (${hostState.publicCount} PUB)"
-                    hostStatus == HotspotStatus.SERVER_ONLY || hostState.isServerRunning -> "VAULT LIVE (${hostState.publicCount} PUB)"
-                    hostStatus == HotspotStatus.STARTING -> "BOOTING"
-                    clientStatus == ClientConnectionStatus.CONNECTED -> "PEER LINKED"
-                    else -> "AIR-GAPPED"
-                },
-                accentColor = if (isOnline) VoidMint else VoidTextSecondary
-            )
-        }
-
-        // Tactical Mode Switcher
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .background(VoidSurface)
-                .border(1.dp, VoidBorder, RoundedCornerShape(12.dp))
-                .padding(4.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            ModeSwitcherTab(
-                title = stringResource(R.string.node_mode_host),
-                subtitle = "Gateway + HTTP Vault",
-                selected = mode == NodeMode.HOST,
-                icon = Icons.Filled.WifiTethering,
-                testTag = "mode_tab_host",
-                modifier = Modifier.weight(1f),
-                onClick = { onSelectMode(NodeMode.HOST) }
-            )
-            ModeSwitcherTab(
-                title = stringResource(R.string.node_mode_client),
-                subtitle = "Peer + Sandbox",
-                selected = mode == NodeMode.CLIENT,
-                icon = Icons.Filled.WifiFind,
-                testTag = "mode_tab_client",
-                modifier = Modifier.weight(1f),
-                onClick = { onSelectMode(NodeMode.CLIENT) }
-            )
-        }
-    }
-}
-
-@Composable
-private fun ModeSwitcherTab(
-    title: String,
-    subtitle: String,
-    selected: Boolean,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    testTag: String,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    val bgColor = if (selected) VoidMintContainer else Color.Transparent
-    val borderColor = if (selected) VoidMint.copy(alpha = 0.65f) else Color.Transparent
-    val contentColor = if (selected) VoidMint else VoidTextSecondary
-
-    Row(
-        modifier = modifier
-            .height(52.dp)
-            .clip(RoundedCornerShape(9.dp))
-            .background(bgColor)
-            .border(1.dp, borderColor, RoundedCornerShape(9.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp)
-            .testTag(testTag),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = title,
-            tint = contentColor,
-            modifier = Modifier.size(18.dp)
-        )
-        Spacer(modifier = Modifier.width(8.dp))
-        Column {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.labelLarge,
-                color = if (selected) VoidMint else VoidTextPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.labelSmall,
-                color = VoidTextSecondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-    }
-}
-
-@Composable
 private fun CompactDashboardContent(
     selectedBottomTab: AppBottomTab,
     mode: NodeMode,
     hostState: HostState,
     myUsername: String,
+    isUserIdDiscoverable: Boolean,
     channels: List<BitVoidChannel>,
     auditLogs: List<AuditLogEntry>,
     clientState: ClientState,
@@ -724,13 +627,21 @@ private fun CompactDashboardContent(
     onDeleteFile: (String) -> Unit,
     onClearLogs: () -> Unit,
     onCopy: (String, String) -> Unit,
+    onSetUserIdDiscoverable: (Boolean) -> Unit,
     clientHubContent: @Composable () -> Unit,
     hubScreenContent: @Composable () -> Unit,
+    pChatScreenContent: @Composable () -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (selectedBottomTab == AppBottomTab.HUB) {
         Box(modifier = modifier.fillMaxSize()) {
             hubScreenContent()
+        }
+        return
+    }
+    if (selectedBottomTab == AppBottomTab.PCHAT) {
+        Box(modifier = modifier.fillMaxSize()) {
+            pChatScreenContent()
         }
         return
     }
@@ -744,15 +655,6 @@ private fun CompactDashboardContent(
     ) {
         when (selectedBottomTab) {
             AppBottomTab.HOME -> {
-                item(key = "header_bar") {
-                    BitVoidHeaderBar(
-                        mode = mode,
-                        hostState = hostState,
-                        clientStatus = clientState.connectionStatus,
-                        onSelectMode = onSelectMode,
-                        modifier = Modifier.padding(horizontal = 16.dp)
-                    )
-                }
                 if (mode == NodeMode.HOST) {
                     item(key = "host_power_card") {
                         Box(modifier = Modifier.padding(horizontal = 16.dp)) {
@@ -761,7 +663,8 @@ private fun CompactDashboardContent(
                                 onToggleHost = onToggleHost,
                                 onOpenProtocolDialog = onOpenProtocolDialog,
                                 onOpenQrDialog = onOpenQrDialog,
-                                onOpenHotspotSettings = onOpenHotspotSettings
+                                onOpenHotspotSettings = onOpenHotspotSettings,
+                                onOpenClientNode = { onSelectMode(NodeMode.CLIENT) }
                             )
                         }
                     }
@@ -787,40 +690,7 @@ private fun CompactDashboardContent(
 
             AppBottomTab.HUB -> Unit
 
-            AppBottomTab.UPLOAD -> {
-                item(key = "upload_vault_header") {
-                    Box(modifier = Modifier.padding(horizontal = 16.dp)) {
-                        SharedVaultHeaderCard(
-                            totalCount = hostState.sharedFiles.size,
-                            publicCount = hostState.publicCount,
-                            isImporting = isImporting,
-                            onPickDocuments = onPickDocuments,
-                            onPickMedia = onPickMedia
-                        )
-                    }
-                }
-                if (hostState.sharedFiles.isEmpty()) {
-                    item(key = "upload_empty_vault") {
-                        Box(modifier = Modifier.padding(horizontal = 16.dp)) {
-                            EmptyVaultCard()
-                        }
-                    }
-                } else {
-                    items(hostState.sharedFiles, key = { it.id }) { file ->
-                        Box(modifier = Modifier.padding(horizontal = 16.dp)) {
-                            SharedFileRowCard(
-                                item = file,
-                                channels = channels,
-                                onTogglePublic = { isPublic -> onToggleVideoPublic(file.id, isPublic) },
-                                onToggleChannelAssignment = { channelId ->
-                                    onToggleMediaChannel(channelId, file.id)
-                                },
-                                onDelete = { onDeleteFile(file.id) }
-                            )
-                        }
-                    }
-                }
-            }
+            AppBottomTab.PCHAT -> Unit
 
             AppBottomTab.SETTINGS -> {
                 item(key = "settings_cards") {
@@ -828,8 +698,10 @@ private fun CompactDashboardContent(
                         SettingsAutonomousCard(
                             hostState = hostState,
                             myUsername = myUsername,
+                            isUserIdDiscoverable = isUserIdDiscoverable,
                             missingPermissionsCount = missingPermissionsCount,
                             onCopyUsername = onCopy,
+                            onSetUserIdDiscoverable = onSetUserIdDiscoverable,
                             onSaveBroadcastCredentials = onSaveBroadcastCredentials,
                             onBroadcastSaved = onBroadcastSaved,
                             onRequestPermissions = onRequestPermissions,
@@ -861,6 +733,7 @@ private fun WideDashboardContent(
     mode: NodeMode,
     hostState: HostState,
     myUsername: String,
+    isUserIdDiscoverable: Boolean,
     channels: List<BitVoidChannel>,
     auditLogs: List<AuditLogEntry>,
     isImporting: Boolean,
@@ -880,8 +753,11 @@ private fun WideDashboardContent(
     onDeleteFile: (String) -> Unit,
     onClearLogs: () -> Unit,
     onCopy: (String, String) -> Unit,
+    onSetUserIdDiscoverable: (Boolean) -> Unit,
+    onOpenClientNode: () -> Unit,
     clientHubContent: @Composable () -> Unit,
-    hubScreenContent: @Composable () -> Unit
+    hubScreenContent: @Composable () -> Unit,
+    pChatScreenContent: @Composable () -> Unit
 ) {
     var showAuditLogs by rememberSaveable { mutableStateOf(true) }
 
@@ -921,7 +797,8 @@ private fun WideDashboardContent(
                             onToggleHost = onToggleHost,
                             onOpenProtocolDialog = onOpenProtocolDialog,
                             onOpenQrDialog = onOpenQrDialog,
-                            onOpenHotspotSettings = onOpenHotspotSettings
+                            onOpenHotspotSettings = onOpenHotspotSettings,
+                            onOpenClientNode = onOpenClientNode
                         )
                     }
                 }
@@ -959,37 +836,17 @@ private fun WideDashboardContent(
             }
         }
 
-        AppBottomTab.UPLOAD -> {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                contentPadding = PaddingValues(bottom = 24.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+        AppBottomTab.PCHAT -> {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.TopCenter
             ) {
-                item {
-                    SharedVaultHeaderCard(
-                        totalCount = hostState.sharedFiles.size,
-                        publicCount = hostState.publicCount,
-                        isImporting = isImporting,
-                        onPickDocuments = onPickDocuments,
-                        onPickMedia = onPickMedia
-                    )
-                }
-                if (hostState.sharedFiles.isEmpty()) {
-                    item { EmptyVaultCard() }
-                } else {
-                    items(hostState.sharedFiles, key = { it.id }) { file ->
-                        SharedFileRowCard(
-                            item = file,
-                            channels = channels,
-                            onTogglePublic = { isPublic -> onToggleVideoPublic(file.id, isPublic) },
-                            onToggleChannelAssignment = { channelId ->
-                                onToggleMediaChannel(channelId, file.id)
-                            },
-                            onDelete = { onDeleteFile(file.id) }
-                        )
-                    }
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .widthIn(max = 860.dp)
+                ) {
+                    pChatScreenContent()
                 }
             }
         }
@@ -1006,8 +863,10 @@ private fun WideDashboardContent(
                     SettingsAutonomousCard(
                         hostState = hostState,
                         myUsername = myUsername,
+                        isUserIdDiscoverable = isUserIdDiscoverable,
                         missingPermissionsCount = missingPermissionsCount,
                         onCopyUsername = onCopy,
+                        onSetUserIdDiscoverable = onSetUserIdDiscoverable,
                         onSaveBroadcastCredentials = onSaveBroadcastCredentials,
                         onBroadcastSaved = onBroadcastSaved,
                         onRequestPermissions = onRequestPermissions,
@@ -1036,7 +895,8 @@ private fun HostPowerControlCard(
     onToggleHost: () -> Unit,
     onOpenProtocolDialog: () -> Unit,
     onOpenQrDialog: () -> Unit,
-    onOpenHotspotSettings: () -> Unit
+    onOpenHotspotSettings: () -> Unit,
+    onOpenClientNode: () -> Unit
 ) {
     val isActive = hostState.status == HotspotStatus.ACTIVE ||
         hostState.status == HotspotStatus.SERVER_ONLY
@@ -1140,6 +1000,35 @@ private fun HostPowerControlCard(
                             onOpenProtocolDialog()
                         },
                         modifier = Modifier.testTag("menu_network_protocol")
+                    )
+                    HorizontalDivider(color = VoidBorder)
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(
+                                    text = "Client Node",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = VoidTextPrimary
+                                )
+                                Text(
+                                    text = "Find and connect to a nearby BitVoid node",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = VoidMint
+                                )
+                            }
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Filled.WifiFind,
+                                contentDescription = null,
+                                tint = VoidMint
+                            )
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            onOpenClientNode()
+                        },
+                        modifier = Modifier.testTag("menu_client_node")
                     )
                     HorizontalDivider(color = VoidBorder)
                     DropdownMenuItem(
@@ -2309,7 +2198,7 @@ private fun ChannelEditorDialog(
         title = {
             Text(
                 text = if (existingChannel != null) {
-                    "ASSIGN MEDIA // #${existingChannel.name}"
+                    "EDIT CHANNEL // #${existingChannel.name}"
                 } else {
                     "CREATE NEW CHANNEL"
                 },
@@ -2323,8 +2212,7 @@ private fun ChannelEditorDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                if (existingChannel == null) {
-                    OutlinedTextField(
+                OutlinedTextField(
                         value = channelName,
                         onValueChange = {
                             channelName = it
@@ -2426,7 +2314,7 @@ private fun ChannelEditorDialog(
 
                     if (isHidden) {
                         Text(
-                            text = "Hidden from Hub & Web Portal lists — accessible ONLY by entering this Private Channel ID in Hub → Enter Private Channel ID.",
+                            text = "Hidden from other users' Hub & Web Portal lists. You will still see and open your own hidden channel; others need its exact Private Channel ID.",
                             style = MaterialTheme.typography.labelSmall,
                             color = VoidAmber
                         )
@@ -2445,8 +2333,11 @@ private fun ChannelEditorDialog(
                                         privateChannelId = it
                                         validationError = null
                                     },
-                                    label = { Text("Private Channel ID") },
+                                    label = {
+                                        Text(if (existingChannel == null) "Private Channel ID" else "Channel ID (locked)")
+                                    },
                                     singleLine = true,
+                                    enabled = existingChannel == null,
                                     colors = fieldColors,
                                     modifier = Modifier
                                         .weight(1f)
@@ -2454,6 +2345,7 @@ private fun ChannelEditorDialog(
                                 )
                                 OutlinedButton(
                                     onClick = { privateChannelId = onSuggestPrivateId() },
+                                    enabled = existingChannel == null,
                                     border = BorderStroke(1.dp, VoidAmber),
                                     colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidAmber),
                                     modifier = Modifier.height(52.dp)
@@ -2474,13 +2366,6 @@ private fun ChannelEditorDialog(
                             )
                         }
                     }
-                } else {
-                    Text(
-                        text = "Select Vault videos/files assigned to #${existingChannel.name}:",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = VoidTextSecondary
-                    )
-                }
 
                 Text(
                     text = "ASSIGN VAULT MEDIA (${selectedMediaIds.size})",

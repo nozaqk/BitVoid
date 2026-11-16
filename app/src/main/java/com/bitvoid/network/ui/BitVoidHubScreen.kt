@@ -43,9 +43,12 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.VideoLibrary
@@ -57,6 +60,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -113,15 +118,271 @@ import com.bitvoid.network.ui.theme.VoidTextSecondary
 import java.util.Locale
 
 private data class HubChannelDisplayItem(
-    val publicChannelId: String?,
+    val channelId: String?,
     val name: String,
     val isPublic: Boolean,
+    val isHidden: Boolean,
+    val isOwner: Boolean,
     val hasPrivateKey: Boolean,
     val mediaCount: Int,
     val activePeers: Int,
     val messageCount: Int,
     val isGeneralChat: Boolean
 )
+
+@Composable
+fun BitVoidPrivateChatScreen(
+    myUsername: String,
+    isUserIdDiscoverable: Boolean,
+    directConversations: List<DirectConversationSummary>,
+    knownUsers: List<String>,
+    activeDirectSession: ClientDirectSession?,
+    directMessages: List<ClientChatMessage>,
+    directWsStatus: ClientWsStatus,
+    isOpeningDirectChat: Boolean,
+    directChatError: String?,
+    isUploadingFile: Boolean,
+    callUiState: BitVoidCallUiState,
+    callActions: BitVoidCallActions,
+    onOpenDirectChat: (String) -> Unit,
+    onSendDirectMessage: (String) -> Unit,
+    onLeaveDirectChat: () -> Unit,
+    onClearDirectChatError: () -> Unit,
+    onUploadDirectFile: (Uri, String) -> Unit,
+    onBuildAttachmentUrl: (String, String?) -> String,
+    modifier: Modifier = Modifier
+) {
+    if (activeDirectSession != null) {
+        BackHandler(onBack = onLeaveDirectChat)
+        WhatsAppDirectChatSpace(
+            session = activeDirectSession,
+            messages = directMessages,
+            wsStatus = directWsStatus,
+            isUploadingFile = isUploadingFile,
+            callUiState = callUiState,
+            callActions = callActions,
+            onBack = onLeaveDirectChat,
+            onSendMessage = onSendDirectMessage,
+            onUploadFile = onUploadDirectFile,
+            onBuildAttachmentUrl = onBuildAttachmentUrl,
+            modifier = modifier
+        )
+        return
+    }
+
+    var showAddUserDialog by rememberSaveable { mutableStateOf(false) }
+    var targetUsername by rememberSaveable { mutableStateOf("") }
+    var localError by remember { mutableStateOf<String?>(null) }
+    val visibleUsers = remember(knownUsers, myUsername) {
+        knownUsers
+            .filter { !it.equals(myUsername, ignoreCase = true) }
+            .distinctBy { it.lowercase(Locale.US) }
+            .sortedBy { it.lowercase(Locale.US) }
+    }
+    val conversationByPeer = directConversations.associateBy {
+        it.peerUsername.lowercase(Locale.US)
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(VoidObsidian)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "P.CHAT",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = VoidTextPrimary,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "PRIVATE USER CHAT · VOICE · VIDEO",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = VoidMint
+                )
+            }
+            Surface(
+                onClick = {
+                    targetUsername = ""
+                    localError = null
+                    onClearDirectChatError()
+                    showAddUserDialog = true
+                },
+                shape = CircleShape,
+                color = VoidMintContainer,
+                border = BorderStroke(1.5.dp, VoidMint),
+                modifier = Modifier
+                    .size(48.dp)
+                    .testTag("pchat_add_user_button")
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Filled.Add,
+                        contentDescription = "Add user by User ID",
+                        tint = VoidMint,
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+            }
+        }
+        HorizontalDivider(thickness = 1.dp, color = VoidBorder)
+
+        if (isOpeningDirectChat) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(VoidSurface)
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = VoidMint
+                )
+                Text("Opening private chat…", color = VoidMint)
+            }
+        }
+
+        LazyColumn(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            item(key = "pchat_identity") {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = VoidSurface),
+                    border = BorderStroke(1.dp, if (isUserIdDiscoverable) VoidMint.copy(alpha = 0.65f) else VoidBorder),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Text("YOU · @$myUsername", color = VoidTextPrimary, fontWeight = FontWeight.Bold)
+                        Text(
+                            if (isUserIdDiscoverable) {
+                                "Visible automatically to users on this node"
+                            } else {
+                                "Hidden from automatic lists · exact User ID still works"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isUserIdDiscoverable) VoidMint else VoidTextSecondary
+                        )
+                    }
+                }
+            }
+
+            item(key = "pchat_visible_header") {
+                HubSectionHeader(title = "USERS ON THIS NODE", accent = VoidMint)
+            }
+            if (visibleUsers.isEmpty()) {
+                item(key = "pchat_visible_empty") {
+                    Text(
+                        "No visible users are online. Tap + to add someone by their exact User ID.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = VoidTextSecondary
+                    )
+                }
+            } else {
+                items(visibleUsers, key = { "visible_$it" }) { peer ->
+                    val conversation = conversationByPeer[peer.lowercase(Locale.US)]
+                    HubDirectChatRow(
+                        peerUsername = peer,
+                        subtitle = conversation?.lastMessagePreview
+                            ?.let { "Online · ${conversation.messageCount} msgs · $it" }
+                            ?: "Online on this BitVoid node · Tap to chat or call",
+                        onClick = { onOpenDirectChat(peer) },
+                        testTag = "pchat_visible_user_$peer"
+                    )
+                }
+            }
+        }
+    }
+
+    if (showAddUserDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddUserDialog = false },
+            containerColor = VoidSurface,
+            titleContentColor = VoidMint,
+            textContentColor = VoidTextPrimary,
+            modifier = Modifier.testTag("pchat_add_user_dialog"),
+            title = { Text("ADD PRIVATE CHAT") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "Enter the exact User ID. This also works when that user disabled automatic display.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = VoidTextSecondary
+                    )
+                    OutlinedTextField(
+                        value = targetUsername,
+                        onValueChange = {
+                            targetUsername = it
+                            localError = null
+                            onClearDirectChatError()
+                        },
+                        label = { Text("User ID") },
+                        placeholder = { Text("user-4210") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = VoidMint,
+                            unfocusedBorderColor = VoidBorder,
+                            focusedTextColor = VoidTextPrimary,
+                            unfocusedTextColor = VoidTextPrimary,
+                            cursorColor = VoidMint
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("pchat_exact_user_id_input")
+                    )
+                    (localError ?: directChatError)?.let { error ->
+                        Text(error, color = VoidCrimson, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val clean = targetUsername.trim().removePrefix("@")
+                        when {
+                            clean.isEmpty() -> localError = "Enter a User ID."
+                            clean.equals(myUsername, ignoreCase = true) ->
+                                localError = "Enter another user's ID."
+                            else -> {
+                                localError = null
+                                onOpenDirectChat(clean)
+                            }
+                        }
+                    },
+                    enabled = !isOpeningDirectChat,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = VoidMint,
+                        contentColor = VoidObsidian
+                    ),
+                    modifier = Modifier
+                        .height(48.dp)
+                        .testTag("pchat_add_user_submit")
+                ) {
+                    Text(if (isOpeningDirectChat) "OPENING…" else "OPEN CHAT")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddUserDialog = false }) {
+                    Text("CANCEL", color = VoidTextSecondary)
+                }
+            }
+        )
+    }
+}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -144,6 +405,8 @@ fun BitVoidHubScreen(
     isOpeningDirectChat: Boolean,
     directChatError: String?,
     onOpenCreateChannel: () -> Unit,
+    onEditChannel: (channelId: String) -> Unit,
+    onDeleteChannel: (channelId: String) -> Unit,
     onOpenChannel: (channelId: String, privateKey: String?) -> Unit,
     onSendChatMessage: (String) -> Unit,
     onLeaveChannel: () -> Unit,
@@ -285,9 +548,11 @@ fun BitVoidHubScreen(
         if (useRemoteList) {
             remoteChannels.map { rc ->
                 HubChannelDisplayItem(
-                    publicChannelId = rc.channelId,
+                    channelId = rc.channelId,
                     name = rc.name,
                     isPublic = rc.isPublic,
+                    isHidden = rc.isHidden,
+                    isOwner = rc.isOwner,
                     hasPrivateKey = rc.hasPrivateKey,
                     mediaCount = rc.mediaCount,
                     activePeers = rc.activePeers,
@@ -296,15 +561,21 @@ fun BitVoidHubScreen(
                 )
             }
         } else {
-            // Hidden channels (isHidden == true) are deliberately omitted from the Hub list;
-            // they can only be entered by typing their Private Channel ID.
+            // Hidden channels remain private, but their creator always sees and enters them
+            // directly without typing the private ID again.
             hostChannels
-                .filter { !it.isHidden }
+                .filter { channel ->
+                    !channel.isHidden ||
+                        channel.creatorUsername.equals(myUsername, ignoreCase = true)
+                }
                 .map { hc ->
+                    val isOwner = hc.creatorUsername.equals(myUsername, ignoreCase = true)
                     HubChannelDisplayItem(
-                        publicChannelId = if (hc.isPublic) hc.channelId else null,
+                        channelId = if (hc.isPublic || isOwner) hc.channelId else null,
                         name = hc.name,
                         isPublic = hc.isPublic,
+                        isHidden = hc.isHidden,
+                        isOwner = isOwner,
                         hasPrivateKey = !hc.privateKey.isNullOrBlank(),
                         mediaCount = hc.mediaList.size,
                         activePeers = hc.activeParticipants.count { it.isWebSocketConnected },
@@ -348,7 +619,7 @@ fun BitVoidHubScreen(
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "CHANNELS · DIRECT · LIVE CLASS & CALLS",
+                    text = "CHANNELS · LIVE CLASS & CALLS",
                     style = MaterialTheme.typography.labelSmall,
                     color = VoidMint
                 )
@@ -406,22 +677,6 @@ fun BitVoidHubScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
 
-            if (directConversations.isNotEmpty()) {
-                item(key = "section_direct_chats") {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    HubSectionHeader(title = "DIRECT USER CHATS", accent = VoidMint)
-                }
-                items(directConversations, key = { "dm_${it.dmId}" }) { dm ->
-                    HubDirectChatRow(
-                        peerUsername = dm.peerUsername,
-                        subtitle = dm.lastMessagePreview
-                            ?.let { "${dm.messageCount} msgs · $it" }
-                            ?: "Tap to continue direct chat",
-                        onClick = { onOpenDirectChat(dm.peerUsername) },
-                        testTag = "hub_dm_row_${dm.peerUsername}"
-                    )
-                }
-            }
             item(key = "section_general") {
                 HubSectionHeader(title = "GENERAL CHAT", accent = VoidMint)
             }
@@ -437,15 +692,15 @@ fun BitVoidHubScreen(
                     )
                 }
             } else {
-                items(generalChannels, key = { "gen_${it.publicChannelId ?: it.name}" }) { ch ->
+                items(generalChannels, key = { "gen_${it.channelId ?: it.name}" }) { ch ->
                     HubChannelRow(
                         title = ch.name,
                         subtitle = "${ch.mediaCount} media · ${ch.activePeers} live · ${ch.messageCount} msgs",
                         isPublic = true,
                         onClick = {
-                            ch.publicChannelId?.let { id -> onOpenChannel(id, null) }
+                            ch.channelId?.let { id -> onOpenChannel(id, null) }
                         },
-                        testTag = "hub_channel_${ch.publicChannelId ?: ch.name}"
+                        testTag = "hub_channel_${ch.channelId ?: ch.name}"
                     )
                 }
             }
@@ -465,15 +720,18 @@ fun BitVoidHubScreen(
                     )
                 }
             } else {
-                items(publicChannels, key = { "pub_${it.publicChannelId ?: it.name}" }) { ch ->
+                items(publicChannels, key = { "pub_${it.channelId ?: it.name}" }) { ch ->
                     HubChannelRow(
                         title = ch.name,
                         subtitle = "${ch.mediaCount} media · ${ch.activePeers} live · ${ch.messageCount} msgs",
                         isPublic = true,
+                        canManage = ch.isOwner,
+                        onEdit = { ch.channelId?.let(onEditChannel) },
+                        onDelete = { ch.channelId?.let(onDeleteChannel) },
                         onClick = {
-                            ch.publicChannelId?.let { id -> onOpenChannel(id, null) }
+                            ch.channelId?.let { id -> onOpenChannel(id, null) }
                         },
-                        testTag = "hub_channel_${ch.publicChannelId ?: ch.name}"
+                        testTag = "hub_channel_${ch.channelId ?: ch.name}"
                     )
                 }
             }
@@ -493,19 +751,34 @@ fun BitVoidHubScreen(
                     )
                 }
             } else {
-                items(privateChannels, key = { "prv_${it.name}_${it.mediaCount}" }) { ch ->
+                items(privateChannels, key = { "prv_${it.channelId ?: it.name}_${it.mediaCount}" }) { ch ->
                     HubChannelRow(
                         title = ch.name,
-                        subtitle = "Locked · Tap & enter Private ID (${ch.mediaCount} media)",
-                        isPublic = false,
-                        onClick = {
-                            targetPrivateChannelName = ch.name
-                            privateIdInput = ""
-                            privateKeyInput = ""
-                            localDialogError = null
-                            showPrivateUnlockDialog = true
+                        subtitle = if (ch.isOwner) {
+                            if (ch.isHidden) {
+                                "YOUR HIDDEN CHANNEL · Tap to open (${ch.mediaCount} media)"
+                            } else {
+                                "YOUR PRIVATE CHANNEL · Tap to open (${ch.mediaCount} media)"
+                            }
+                        } else {
+                            "Locked · Tap & enter Private ID (${ch.mediaCount} media)"
                         },
-                        testTag = "hub_private_${ch.name}"
+                        isPublic = false,
+                        canManage = ch.isOwner,
+                        onEdit = { ch.channelId?.let(onEditChannel) },
+                        onDelete = { ch.channelId?.let(onDeleteChannel) },
+                        onClick = {
+                            if (ch.isOwner && ch.channelId != null) {
+                                onOpenChannel(ch.channelId, null)
+                            } else {
+                                targetPrivateChannelName = ch.name
+                                privateIdInput = ""
+                                privateKeyInput = ""
+                                localDialogError = null
+                                showPrivateUnlockDialog = true
+                            }
+                        },
+                        testTag = "hub_private_${ch.channelId ?: ch.name}"
                     )
                 }
             }
@@ -702,123 +975,6 @@ fun BitVoidHubScreen(
                                 )
                                 Text(
                                     text = "Public, Private (Show), or Private (Hidden)",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = VoidTextSecondary
-                                )
-                            }
-                            Icon(
-                                imageVector = Icons.Filled.ChevronRight,
-                                contentDescription = null,
-                                tint = VoidMint
-                            )
-                        }
-                    }
-
-                    Card(
-                        onClick = {
-                            showPlusChooserDialog = false
-                            onClearDirectChatError()
-                            localDmError = null
-                            directDialogForCall = false
-                            showDirectChatDialog = true
-                        },
-                        colors = CardDefaults.cardColors(containerColor = VoidObsidian),
-                        border = BorderStroke(1.dp, VoidCyan.copy(alpha = 0.65f)),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("hub_plus_option_chat_user")
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .clip(CircleShape)
-                                    .background(VoidCyan.copy(alpha = 0.14f))
-                                    .border(1.dp, VoidCyan, CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Chat,
-                                    contentDescription = null,
-                                    tint = VoidCyan,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Chat with User",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = VoidTextPrimary,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = "Direct 1-on-1 chat using Username ID",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = VoidTextSecondary
-                                )
-                            }
-                            Icon(
-                                imageVector = Icons.Filled.ChevronRight,
-                                contentDescription = null,
-                                tint = VoidCyan
-                            )
-                        }
-                    }
-
-                    Card(
-                        onClick = {
-                            showPlusChooserDialog = false
-                            onClearDirectChatError()
-                            localDmError = null
-                            directDialogForCall = true
-                            directDialogCallWithVideo = true
-                            showDirectChatDialog = true
-                        },
-                        colors = CardDefaults.cardColors(containerColor = VoidObsidian),
-                        border = BorderStroke(1.dp, VoidMint.copy(alpha = 0.65f)),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("hub_plus_option_call_user")
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .clip(CircleShape)
-                                    .background(VoidMintContainer)
-                                    .border(1.dp, VoidMint, CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Videocam,
-                                    contentDescription = null,
-                                    tint = VoidMint,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Voice / Video Call User",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = VoidTextPrimary,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = "Direct WebRTC voice or video call by Username ID",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = VoidTextSecondary
                                 )
@@ -1406,10 +1562,15 @@ private fun HubChannelRow(
     title: String,
     subtitle: String,
     isPublic: Boolean,
+    canManage: Boolean = false,
+    onEdit: () -> Unit = {},
+    onDelete: () -> Unit = {},
     onClick: () -> Unit,
     testTag: String
 ) {
     val accent = if (isPublic) VoidMint else VoidAmber
+    var menuExpanded by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
     Card(
         onClick = onClick,
         colors = CardDefaults.cardColors(containerColor = VoidSurface),
@@ -1469,12 +1630,88 @@ private fun HubChannelRow(
                 )
             }
 
-            Icon(
-                imageVector = Icons.Filled.ChevronRight,
-                contentDescription = "Open channel",
-                tint = VoidTextSecondary
-            )
+            if (canManage) {
+                Box {
+                    IconButton(
+                        onClick = { menuExpanded = true },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("${testTag}_more")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.MoreVert,
+                            contentDescription = "Edit or delete $title",
+                            tint = VoidTextPrimary
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false },
+                        containerColor = VoidSurface
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Edit channel", color = VoidTextPrimary) },
+                            leadingIcon = {
+                                Icon(Icons.Filled.Edit, contentDescription = null, tint = VoidCyan)
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                onEdit()
+                            },
+                            modifier = Modifier.testTag("${testTag}_edit")
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Delete channel", color = VoidCrimson) },
+                            leadingIcon = {
+                                Icon(Icons.Filled.Delete, contentDescription = null, tint = VoidCrimson)
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                confirmDelete = true
+                            },
+                            modifier = Modifier.testTag("${testTag}_delete")
+                        )
+                    }
+                }
+            } else {
+                Icon(
+                    imageVector = Icons.Filled.ChevronRight,
+                    contentDescription = "Open channel",
+                    tint = VoidTextSecondary
+                )
+            }
         }
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            containerColor = VoidSurface,
+            title = { Text("DELETE CHANNEL?", color = VoidCrimson) },
+            text = {
+                Text(
+                    "Delete '$title' and close it for every participant? This cannot be undone.",
+                    color = VoidTextPrimary
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        confirmDelete = false
+                        onDelete()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = VoidCrimson,
+                        contentColor = VoidTextPrimary
+                    )
+                ) { Text("DELETE") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) {
+                    Text("CANCEL", color = VoidTextSecondary)
+                }
+            }
+        )
     }
 }
 
