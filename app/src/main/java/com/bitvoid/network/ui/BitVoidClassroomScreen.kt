@@ -99,6 +99,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.bitvoid.network.call.BitVoidCallState
 import com.bitvoid.network.call.BitVoidScreenProjectionService
+import com.bitvoid.network.call.DirectCallPhase
 import com.bitvoid.network.call.LiveClassMaterial
 import com.bitvoid.network.call.ParticipantRole
 import com.bitvoid.network.call.RenderedMaterialDeck
@@ -198,6 +199,7 @@ fun BitVoidClassroomScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val isDirectRoom = channelId.startsWith("dm__")
     val isImeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     var showQaChatDrawer by rememberSaveable(channelId) { mutableStateOf(false) }
     var showDocsStage by rememberSaveable(channelId) { mutableStateOf(false) }
@@ -219,7 +221,7 @@ fun BitVoidClassroomScreen(
     ) { uri ->
         if (uri != null) {
             showDocsStage = true
-            callActions.onUploadClassroomDocument(channelId, uri, false)
+            callActions.onUploadClassroomDocument(channelId, uri, isDirectRoom)
         }
     }
 
@@ -277,7 +279,11 @@ fun BitVoidClassroomScreen(
     }
 
     val isJoinedHere = callUiState.isInRoom(channelId)
-    val remoteStatus = callUiState.activeChannelCallStatus?.takeIf { it.roomId == channelId }
+    val remoteStatus = (if (isDirectRoom) {
+        callUiState.activeDirectCallStatus
+    } else {
+        callUiState.activeChannelCallStatus
+    })?.takeIf { it.roomId == channelId }
 
     Column(
         modifier = modifier
@@ -356,7 +362,11 @@ fun BitVoidClassroomScreen(
                             }
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "LIVE CLASS & PRESENTATION // #$channelName",
+                                    text = if (isDirectRoom) {
+                                        "PRIVATE MEETING // $channelName"
+                                    } else {
+                                        "LIVE CLASS & PRESENTATION // #$channelName"
+                                    },
                                     style = MaterialTheme.typography.titleMedium,
                                     color = VoidTextPrimary,
                                     fontWeight = FontWeight.Bold
@@ -568,7 +578,14 @@ fun BitVoidClassroomScreen(
                     )
                     Text(
                         text = buildString {
-                            append("${callUiState.participants.size.coerceAtLeast(1)} active")
+                            if (isDirectRoom && remoteStatus?.let {
+                                    it.directCallPhase == DirectCallPhase.RINGING && it.isOutgoing
+                                } == true
+                            ) {
+                                append("Ringing $channelName · waiting for answer")
+                            } else {
+                                append("${callUiState.participants.size.coerceAtLeast(1)} active")
+                            }
                             if (!callUiState.liveClassCode.isNullOrBlank()) {
                                 append(" · ID: ${callUiState.liveClassCode}")
                             }
@@ -616,10 +633,15 @@ fun BitVoidClassroomScreen(
         HorizontalDivider(thickness = 1.dp, color = VoidBorder)
 
         // Stage + Participant Grid + Optional Q&A Chat
+        val screenSharingPeer = callUiState.participants.firstOrNull {
+            it.peerId != callUiState.myPeerId && it.isScreenSharing
+        }
         val teacherPeer = callUiState.participants.firstOrNull { it.role == ParticipantRole.HOST_TEACHER }
-        val remotePresenter = teacherPeer
-            ?.takeIf { it.peerId != callUiState.myPeerId }
-            ?.let { tp -> callUiState.remoteVideoTracks[tp.peerId]?.let { tp to it } }
+        val remotePresenter = screenSharingPeer
+            ?.let { peer -> callUiState.remoteVideoTracks[peer.peerId]?.let { peer to it } }
+            ?: teacherPeer
+                ?.takeIf { it.peerId != callUiState.myPeerId }
+                ?.let { tp -> callUiState.remoteVideoTracks[tp.peerId]?.let { tp to it } }
             ?: callUiState.remoteVideoTracks.entries.firstOrNull()?.let { (pid, track) ->
                 val p = callUiState.participants.firstOrNull { it.peerId == pid }
                     ?: SignalingPeer(pid, pid, ParticipantRole.SPEAKER, channelId)
@@ -685,6 +707,7 @@ fun BitVoidClassroomScreen(
                 ClassroomQaChatPanel(
                     channelName = channelName,
                     localCallsign = localCallsign,
+                    isDirectRoom = isDirectRoom,
                     messages = channelMessages,
                     draft = qaDraft,
                     onDraftChange = { qaDraft = it },
@@ -1086,7 +1109,7 @@ fun BitVoidClassroomScreen(
 
             CallDockButton(
                 icon = Icons.Filled.Chat,
-                label = "Q&A",
+                label = if (isDirectRoom) "CHAT" else "Q&A",
                 active = showQaChatDrawer,
                 activeColor = VoidMint,
                 inactiveColor = VoidTextSecondary,
@@ -1298,6 +1321,7 @@ private fun ParticipantBadgeChip(peer: SignalingPeer) {
 private fun ClassroomQaChatPanel(
     channelName: String,
     localCallsign: String,
+    isDirectRoom: Boolean,
     messages: List<ClientChatMessage>,
     draft: String,
     onDraftChange: (String) -> Unit,
@@ -1325,7 +1349,11 @@ private fun ClassroomQaChatPanel(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
-                text = "CLASS Q&A CHAT // $channelName ($localCallsign)",
+                text = if (isDirectRoom) {
+                    "MEETING CHAT // $channelName ($localCallsign)"
+                } else {
+                    "CLASS Q&A CHAT // $channelName ($localCallsign)"
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = VoidMint,
                 fontWeight = FontWeight.Bold,
@@ -1347,7 +1375,11 @@ private fun ClassroomQaChatPanel(
                 if (messages.isEmpty()) {
                     item {
                         Text(
-                            text = "Ask questions here during the Live Class presentation.",
+                            text = if (isDirectRoom) {
+                                "Messages shared here stay with this private call."
+                            } else {
+                                "Ask questions here during the Live Class presentation."
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = VoidTextSecondary
                         )
@@ -1380,7 +1412,9 @@ private fun ClassroomQaChatPanel(
                 OutlinedTextField(
                     value = draft,
                     onValueChange = onDraftChange,
-                    placeholder = { Text("Ask question in #$channelName...") },
+                    placeholder = {
+                        Text(if (isDirectRoom) "Message $channelName..." else "Ask question in #$channelName...")
+                    },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = VoidMint,

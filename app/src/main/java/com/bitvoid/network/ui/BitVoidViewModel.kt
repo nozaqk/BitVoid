@@ -428,20 +428,26 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                 if (status?.roomId != pending.first) return@collect
                 when (status.directCallPhase) {
                     DirectCallPhase.ACCEPTED -> {
+                        pendingOutgoingDirectCall = null
                         val session = activeDirectSession.value
                         if (session != null && session.dmId == pending.first &&
                             callManager.activeRoomId.value != session.dmId
                         ) {
-                            pendingOutgoingDirectCall = null
-                            connectAcceptedDirectCall(session, pending.third)
+                            connectDirectCall(session, pending.third)
                         }
                     }
                     DirectCallPhase.DECLINED -> {
                         pendingOutgoingDirectCall = null
+                        if (callManager.activeRoomId.value == pending.first) {
+                            callManager.leaveSession()
+                        }
                         _extraCallError.value = "@${pending.second} declined the call."
                     }
                     DirectCallPhase.CANCELED, DirectCallPhase.MISSED, DirectCallPhase.ENDED -> {
                         pendingOutgoingDirectCall = null
+                        if (callManager.activeRoomId.value == pending.first) {
+                            callManager.leaveSession()
+                        }
                     }
                     else -> Unit
                 }
@@ -1157,6 +1163,14 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             clientRepository.requestDirectCall(dmId, token, withVideo)
                 .onSuccess {
                     pendingOutgoingDirectCall = Triple(dmId, peerUsername, withVideo)
+                    val session = activeDirectSession.value
+                    if (session != null && session.dmId == dmId &&
+                        callManager.activeRoomId.value != dmId
+                    ) {
+                        // The caller deliberately selected media, so open the full meeting
+                        // stage immediately while the recipient is still deciding whether to answer.
+                        connectDirectCall(session, withVideo)
+                    }
                 }
                 .onFailure { error ->
                     _extraCallError.value = error.message ?: "Unable to ring @$peerUsername."
@@ -1171,7 +1185,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                 .onSuccess {
                     val session = activeDirectSession.value
                     if (session != null && session.dmId == dmId) {
-                        connectAcceptedDirectCall(session, withVideo)
+                        connectDirectCall(session, withVideo)
                     }
                 }
                 .onFailure { error ->
@@ -1191,12 +1205,15 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
 
     fun cancelDirectCall(dmId: String, token: String) {
         pendingOutgoingDirectCall = null
+        if (callManager.activeRoomId.value == dmId) {
+            callManager.leaveSession()
+        }
         viewModelScope.launch {
             clientRepository.cancelOrEndDirectCall(dmId, token, action = "cancel")
         }
     }
 
-    private fun connectAcceptedDirectCall(session: ClientDirectSession, withVideo: Boolean) {
+    private fun connectDirectCall(session: ClientDirectSession, withVideo: Boolean) {
         callManager.startOrJoinSession(
             gatewayBaseUrl = clientRepository.gatewayBaseUrl.value,
             channelId = session.dmId,

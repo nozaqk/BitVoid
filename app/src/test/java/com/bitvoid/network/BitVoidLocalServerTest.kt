@@ -1080,6 +1080,12 @@ class BitVoidLocalServerTest {
         assertTrue(html.contains("rtc-start-class-host-btn"))
         assertTrue(html.contains("rtc-start-call-btn"))
         assertTrue(html.contains("rtc-share-screen-btn"))
+        assertTrue(html.contains("direct-incoming-controls"))
+        assertTrue(html.contains("meeting-active"))
+        assertTrue(html.contains("Calls are unavailable in General Chat"))
+        assertTrue(html.contains("activeChannel.channelId === 'general-chat'"))
+        assertTrue(html.contains("joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true, null, null, !!withVideo)"))
+        assertFalse(html.contains("window.confirm"))
     }
 
     @Test
@@ -1427,8 +1433,8 @@ class BitVoidLocalServerTest {
             assertEquals(401, eveStatus.responseCode)
             eveStatus.disconnect()
 
-            // Caller rings first; recipient sees an incoming prompt state and explicitly accepts
-            // before either peer is allowed into WebRTC signaling.
+            // Caller rings first. The caller may open a local meeting preview immediately,
+            // while the recipient remains blocked from signaling until explicit acceptance.
             assertTrue(
                 aliceRepo.requestDirectCall(
                     dmId,
@@ -1436,6 +1442,20 @@ class BitVoidLocalServerTest {
                     withVideo = true,
                     urlOverride = baseUrl
                 ).isSuccess
+            )
+            assertTrue(
+                BitVoidSignalingServer.authorizeSignalingJoin(
+                    roomId = dmId,
+                    channelId = dmId,
+                    token = aliceSession.token
+                )
+            )
+            assertFalse(
+                BitVoidSignalingServer.authorizeSignalingJoin(
+                    roomId = dmId,
+                    channelId = dmId,
+                    token = bobSession.token
+                )
             )
             bobRepo.fetchDirectCallStatus(dmId, bobSession.token, baseUrl)
             val ringing = bobRepo.activeDirectCallStatus.value
@@ -1450,6 +1470,13 @@ class BitVoidLocalServerTest {
             assertEquals(
                 DirectCallPhase.ACCEPTED,
                 aliceRepo.activeDirectCallStatus.value?.directCallPhase
+            )
+            assertTrue(
+                BitVoidSignalingServer.authorizeSignalingJoin(
+                    roomId = dmId,
+                    channelId = dmId,
+                    token = bobSession.token
+                )
             )
 
             aliceWs = okClient.newWebSocket(

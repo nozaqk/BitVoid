@@ -3088,6 +3088,45 @@ class BitVoidLocalServer(
               display: grid;
               gap: 10px;
             }
+            .live-stage-panel.meeting-active {
+              flex: 1;
+              min-height: 0;
+              max-height: none;
+              padding: 14px;
+              overflow-y: auto;
+              align-content: start;
+              background: radial-gradient(circle at 50% 12%, #182432 0%, #0b1017 48%, #05070a 100%);
+              border-bottom: 0;
+            }
+            .wa-main-pane.meeting-mode #active-channel-panel,
+            .wa-main-pane.meeting-mode #media-drawer,
+            .wa-app.meeting-running #channels-sidebar,
+            .wa-app.meeting-running #sidebar-backdrop {
+              display: none !important;
+            }
+            .meeting-active .live-head {
+              position: sticky;
+              top: -14px;
+              z-index: 8;
+              margin: -14px -14px 0;
+              padding: 12px 14px;
+              background: rgba(15, 21, 29, 0.96);
+              border-bottom: 1px solid var(--border);
+              backdrop-filter: blur(10px);
+            }
+            .meeting-active #live-active-controls,
+            .meeting-active #direct-incoming-controls {
+              position: sticky;
+              bottom: -14px;
+              z-index: 9;
+              order: 20;
+              justify-content: center;
+              margin: 0 -14px -14px;
+              padding: 12px 14px;
+              background: rgba(15, 21, 29, 0.96);
+              border-top: 1px solid var(--border);
+              backdrop-filter: blur(10px);
+            }
             .live-head {
               display: flex;
               flex-wrap: wrap;
@@ -3120,11 +3159,48 @@ class BitVoidLocalServer(
               align-items: center;
               justify-content: center;
             }
-            .live-video-tile.teacher-tile {
+            .live-video-tile.teacher-tile,
+            .live-video-tile.presenter-tile {
               border-color: var(--mint);
               grid-column: 1 / -1;
               min-height: 190px;
             }
+            .meeting-active .live-video-grid {
+              grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+              align-items: stretch;
+            }
+            .meeting-active .live-video-tile {
+              min-height: clamp(220px, 42vh, 620px);
+              box-shadow: 0 16px 48px rgba(0, 0, 0, 0.28);
+            }
+            .meeting-active .live-video-tile.presenter-tile,
+            .meeting-active .live-video-tile.teacher-tile {
+              min-height: clamp(300px, 58vh, 720px);
+            }
+            .live-waiting-state {
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              justify-content: center;
+              gap: 10px;
+              padding: 28px;
+              text-align: center;
+              color: var(--muted);
+            }
+            .live-waiting-avatar {
+              width: 82px;
+              height: 82px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              border-radius: 50%;
+              border: 2px solid var(--cyan);
+              color: var(--cyan);
+              background: rgba(56, 189, 248, 0.12);
+              font-size: 28px;
+              font-weight: 800;
+            }
+            .live-waiting-title { color: var(--text); font-size: 16px; font-weight: 700; }
             .live-video-tile video {
               width: 100%;
               height: 100%;
@@ -3252,6 +3328,27 @@ class BitVoidLocalServer(
               .call-icon-btn svg { width: 19px; height: 19px; }
               .bubble.has-attachment { width: 94%; max-width: 94%; }
               .msg-att-state { display: none; }
+              .live-stage-panel.meeting-active { padding: 10px; }
+              .meeting-active .live-head {
+                top: -10px;
+                margin: -10px -10px 0;
+                padding: 9px 10px;
+              }
+              .meeting-active .live-video-tile,
+              .meeting-active .live-video-tile.presenter-tile,
+              .meeting-active .live-video-tile.teacher-tile {
+                min-height: clamp(230px, 48vh, 520px);
+              }
+              .meeting-active #live-active-controls,
+              .meeting-active #direct-incoming-controls {
+                bottom: -10px;
+                margin: 0 -10px -10px;
+                padding: 10px;
+              }
+              .meeting-active #live-active-controls .btn {
+                min-height: 44px;
+                flex: 1 1 92px;
+              }
             }
 
             /* PC / Desktop Split-Pane Format */
@@ -3285,7 +3382,7 @@ class BitVoidLocalServer(
           </style>
         </head>
         <body>
-          <div class="wa-app">
+          <div id="wa-app" class="wa-app">
             <!-- Slide-out Drawer Backdrop & Sidebar -->
             <div id="sidebar-backdrop" class="sidebar-backdrop hidden"></div>
             <aside id="channels-sidebar" aria-label="Channels navigation">
@@ -3367,7 +3464,7 @@ class BitVoidLocalServer(
             </div>
 
             <!-- Main Chat & Media Workspace -->
-            <div class="wa-main-pane">
+            <div id="wa-main-pane" class="wa-main-pane">
               <!-- Top Bar with Three-Line Hamburger Menu at Top Left -->
               <header class="wa-topbar">
                 <button id="menu-toggle-btn" class="hamburger-btn" type="button" aria-label="Open channels menu">
@@ -3447,6 +3544,11 @@ class BitVoidLocalServer(
                   <button id="rtc-end-session-btn" class="btn-danger hidden" type="button">END CLASS</button>
                 </div>
 
+                <div id="direct-incoming-controls" class="live-controls-bar hidden">
+                  <button id="direct-decline-call-btn" class="btn-danger" type="button">DECLINE</button>
+                  <button id="direct-accept-call-btn" class="btn-primary" type="button">ACCEPT &amp; JOIN</button>
+                </div>
+
                 <div id="live-error-msg" class="err hidden"></div>
 
                 <div id="live-presentation-stage" class="live-doc-stage hidden">
@@ -3490,6 +3592,7 @@ class BitVoidLocalServer(
 
           <script>
             (function () {
+              var appRoot = document.getElementById('wa-app');
               var sidebar = document.getElementById('channels-sidebar');
               var backdrop = document.getElementById('sidebar-backdrop');
               var menuToggleBtn = document.getElementById('menu-toggle-btn');
@@ -3526,6 +3629,7 @@ class BitVoidLocalServer(
               var liveClassBtn = document.getElementById('live-class-btn');
               var voiceCallBtn = document.getElementById('voice-call-btn');
               var videoCallBtn = document.getElementById('video-call-btn');
+              var mainPane = document.getElementById('wa-main-pane');
               var liveStagePanel = document.getElementById('live-stage-panel');
               var closeLiveStageBtn = document.getElementById('close-live-stage-btn');
               var liveModeBadge = document.getElementById('live-mode-badge');
@@ -3552,6 +3656,9 @@ class BitVoidLocalServer(
               var rtcUploadDocBtn = document.getElementById('rtc-upload-doc-btn');
               var rtcLeaveBtn = document.getElementById('rtc-leave-btn');
               var rtcEndSessionBtn = document.getElementById('rtc-end-session-btn');
+              var directIncomingControls = document.getElementById('direct-incoming-controls');
+              var directDeclineCallBtn = document.getElementById('direct-decline-call-btn');
+              var directAcceptCallBtn = document.getElementById('direct-accept-call-btn');
               var liveErrorMsg = document.getElementById('live-error-msg');
               var livePresentationStage = document.getElementById('live-presentation-stage');
               var liveDocTitle = document.getElementById('live-doc-title');
@@ -3606,6 +3713,7 @@ class BitVoidLocalServer(
               var directCallPromptOpen = false;
               var directCallConnecting = false;
               var directCallIncomingOpenPending = false;
+              var directCallIncomingWithVideo = false;
               var directCallLastPhase = 'IDLE';
               try {
                 var queryUser = new URLSearchParams(location.search).get('username');
@@ -3943,13 +4051,16 @@ class BitVoidLocalServer(
                 chatInput.placeholder = 'Message ' + label + '...';
                 liveClassBtn.textContent = 'LIVE CLASS / CALL';
                 liveClassBtn.classList.remove('active');
-                liveClassBtn.classList.toggle(
-                  'hidden',
-                  data.channelId === '${BitVoidChannelManager.DEFAULT_PUBLIC_CHANNEL_ID}'
-                );
+                var isGeneralChannel = data.channelId === '${BitVoidChannelManager.DEFAULT_PUBLIC_CHANNEL_ID}';
+                liveClassBtn.classList.toggle('hidden', isGeneralChannel);
                 voiceCallBtn.classList.add('hidden');
                 videoCallBtn.classList.add('hidden');
-                rtcStartCallBtn.classList.remove('hidden');
+                rtcStartCallBtn.classList.toggle('hidden', isGeneralChannel);
+                if (isGeneralChannel && !rtcSocket) {
+                  liveStagePanel.classList.add('hidden');
+                  setMeetingStageActive(false);
+                }
+                updateRtcControlsUi();
                 if (data.isPublic) {
                   activeAvatar.textContent = '#';
                   activeAvatar.className = 'wa-top-avatar';
@@ -4164,54 +4275,49 @@ class BitVoidLocalServer(
                         voiceCallBtn.classList.add('active');
                         videoCallBtn.classList.toggle('active', !!st.withVideo);
                         liveStagePanel.classList.remove('hidden');
-                        liveRoomStatusEl.textContent = 'Ringing @' + activeDm.peerUsername + ' · waiting for accept or decline';
-                      } else if (phase === 'RINGING' && st.isIncoming && !directCallPromptOpen && !rtcSocket) {
+                        setMeetingStageActive(true);
+                        liveRoomStatusEl.textContent = 'Ringing @' + activeDm.peerUsername + ' · your meeting stage is ready';
+                        renderRtcVideoTiles();
+                      } else if (phase === 'RINGING' && st.isIncoming && !rtcSocket) {
                         directCallPromptOpen = true;
+                        directCallIncomingWithVideo = !!st.withVideo;
                         liveStagePanel.classList.remove('hidden');
+                        setMeetingStageActive(true);
                         liveRoomStatusEl.textContent = 'Incoming ' + (st.withVideo ? 'video' : 'voice') + ' call from @' + st.callerUsername;
-                        var accepted = window.confirm(
-                          'Incoming ' + (st.withVideo ? 'video' : 'voice') + ' call from @' + st.callerUsername + '.\n\nAccept this call? Camera and microphone connect only after you accept.'
-                        );
-                        if (accepted && !window.isSecureContext) {
-                          directCallPromptOpen = false;
-                          window.alert('To accept, first install the BitVoid local certificate and reopen the trusted HTTPS portal. The caller will keep ringing while you complete setup.');
-                          window.location.href = '/secure-setup?username=' + encodeURIComponent(activeDm.myUsername || '');
-                          return;
+                        updateRtcControlsUi();
+                        renderRtcVideoTiles();
+                      } else if (phase === 'ACCEPTED') {
+                        directCallPromptOpen = false;
+                        updateRtcControlsUi();
+                        if (!rtcSocket && !directCallConnecting &&
+                            st.callerUsername && st.callerUsername.toLowerCase() === String(activeDm.myUsername).toLowerCase()) {
+                          directCallConnecting = true;
+                          joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true, null, null, !!st.withVideo);
+                        } else if (rtcSocket) {
+                          liveRoomStatusEl.textContent = 'CALL WITH @' + activeDm.peerUsername + ' · Local P2P';
                         }
-                        var responseAction = accepted ? 'accept' : 'decline';
-                        fetch('/api/dm/' + encodeURIComponent(activeDm.dmId) + '/call/' + responseAction, {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json', 'X-DM-Token': activeDm.token },
-                          body: '{}'
-                        }).then(function (r) {
-                          if (!r.ok) throw new Error('Call response failed (HTTP ' + r.status + ')');
-                          return r.json();
-                        }).then(function () {
-                          directCallPromptOpen = false;
-                          if (accepted) {
-                            directCallConnecting = true;
-                            joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true, null, null, !!st.withVideo);
-                          } else {
-                            liveRoomStatusEl.textContent = 'Call declined';
-                          }
-                        }).catch(function (err) {
-                          directCallPromptOpen = false;
-                          showRtcError(err.message || 'Unable to answer call.');
-                        });
-                      } else if (phase === 'ACCEPTED' && !rtcSocket && !directCallConnecting &&
-                          st.callerUsername && st.callerUsername.toLowerCase() === String(activeDm.myUsername).toLowerCase()) {
-                        directCallConnecting = true;
-                        joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true, null, null, !!st.withVideo);
-                      } else if (phase === 'DECLINED' && !rtcSocket) {
+                      } else if (phase === 'DECLINED') {
+                        directCallPromptOpen = false;
+                        directCallConnecting = false;
+                        if (rtcSocket) leaveRtcSession();
                         voiceCallBtn.classList.remove('active');
                         videoCallBtn.classList.remove('active');
-                        liveRoomStatusEl.textContent = '@' + activeDm.peerUsername + ' declined the call';
-                      } else if ((phase === 'MISSED' || phase === 'CANCELED' || phase === 'ENDED' || phase === 'IDLE') && !rtcSocket) {
+                        setMeetingStageActive(false);
+                        liveStagePanel.classList.add('hidden');
+                        showPchatError('@' + activeDm.peerUsername + ' declined the call.', false);
+                      } else if (phase === 'MISSED' || phase === 'CANCELED' || phase === 'ENDED' || phase === 'IDLE') {
+                        directCallPromptOpen = false;
                         directCallConnecting = false;
+                        if (rtcSocket) leaveRtcSession();
                         voiceCallBtn.classList.remove('active');
                         videoCallBtn.classList.remove('active');
                         voiceCallBtn.title = 'Start voice call';
                         videoCallBtn.title = 'Start video call';
+                        if (phase !== 'IDLE') {
+                          setMeetingStageActive(false);
+                          liveStagePanel.classList.add('hidden');
+                        }
+                        updateRtcControlsUi();
                       }
                     })
                     .catch(function () {});
@@ -4525,9 +4631,22 @@ class BitVoidLocalServer(
                 }
               }
 
+              function isGeneralChatActive() {
+                return !!activeChannel &&
+                  activeChannel.channelId === '${BitVoidChannelManager.DEFAULT_PUBLIC_CHANNEL_ID}';
+              }
+
+              function setMeetingStageActive(active) {
+                liveStagePanel.classList.toggle('meeting-active', !!active);
+                mainPane.classList.toggle('meeting-mode', !!active);
+                appRoot.classList.toggle('meeting-running', !!active);
+                closeLiveStageBtn.textContent = active ? 'BACK TO CHAT' : 'HIDE';
+              }
+
               function updateRtcControlsUi() {
                 var joined = !!rtcSocket;
-                if (activeDm) {
+                var generalChat = isGeneralChatActive();
+                if (activeDm || generalChat) {
                   rtcStartClassHostBtn.classList.add('hidden');
                   rtcJoinClassStudentBtn.classList.add('hidden');
                   rtcStartCallBtn.classList.add('hidden');
@@ -4537,6 +4656,10 @@ class BitVoidLocalServer(
                   rtcStartCallBtn.classList.remove('hidden');
                   rtcStartCallBtn.textContent = 'START VOICE / VIDEO CALL';
                 }
+                directIncomingControls.classList.toggle(
+                  'hidden',
+                  !(activeDm && directCallPromptOpen && directCallLastPhase === 'RINGING' && !joined)
+                );
                 if (joined) {
                   liveLauncherControls.classList.add('hidden');
                   liveJoinIdRow.classList.add('hidden');
@@ -4550,7 +4673,7 @@ class BitVoidLocalServer(
                     rtcEndSessionBtn.classList.add('hidden');
                   }
                 } else {
-                  liveLauncherControls.classList.remove('hidden');
+                  liveLauncherControls.classList.toggle('hidden', !!activeDm || generalChat);
                   liveActiveControls.classList.add('hidden');
                 }
               }
@@ -4573,12 +4696,30 @@ class BitVoidLocalServer(
                 });
               }
 
+              function appendRtcWaitingState(tile, title, subtitle, initials) {
+                var waiting = document.createElement('div');
+                waiting.className = 'live-waiting-state';
+                var avatar = document.createElement('div');
+                avatar.className = 'live-waiting-avatar';
+                avatar.textContent = String(initials || 'BV').slice(0, 2).toUpperCase();
+                var heading = document.createElement('div');
+                heading.className = 'live-waiting-title';
+                heading.textContent = title;
+                var note = document.createElement('div');
+                note.textContent = subtitle;
+                waiting.appendChild(avatar);
+                waiting.appendChild(heading);
+                waiting.appendChild(note);
+                tile.appendChild(waiting);
+              }
+
               function renderRtcVideoTiles() {
                 liveVideoGrid.innerHTML = '';
                 var localStream = rtcScreenSharing && rtcScreenStream ? rtcScreenStream : rtcLocalStream;
                 if (localStream && (rtcVideoOn || rtcScreenSharing)) {
                   var localTile = document.createElement('div');
-                  localTile.className = 'live-video-tile' + (rtcRole === 'HOST_TEACHER' ? ' teacher-tile' : '');
+                  localTile.className = 'live-video-tile' +
+                    (rtcScreenSharing ? ' presenter-tile' : (rtcRole === 'HOST_TEACHER' ? ' teacher-tile' : ''));
                   var v = document.createElement('video');
                   v.autoplay = true;
                   v.muted = true;
@@ -4586,30 +4727,57 @@ class BitVoidLocalServer(
                   v.srcObject = localStream;
                   var lbl = document.createElement('span');
                   lbl.className = 'live-tile-label';
-                  lbl.textContent = 'YOU (' + (rtcScreenSharing ? 'SCREEN' : rtcRole) + ')';
+                  lbl.textContent = 'YOU (' + (rtcScreenSharing ? 'SCREEN SHARE' : rtcRole) + ')';
                   localTile.appendChild(v);
                   localTile.appendChild(lbl);
                   liveVideoGrid.appendChild(localTile);
                 }
 
-                Object.keys(rtcRemoteStreams).forEach(function (pid) {
+                Object.keys(rtcRemoteStreams).sort(function (a, b) {
+                  var aMeta = rtcParticipantList.find(function (p) { return p.peerId === a; });
+                  var bMeta = rtcParticipantList.find(function (p) { return p.peerId === b; });
+                  return Number(!!(bMeta && bMeta.isScreenSharing)) - Number(!!(aMeta && aMeta.isScreenSharing));
+                }).forEach(function (pid) {
                   var stream = rtcRemoteStreams[pid];
                   if (!stream) return;
                   var peerMeta = rtcParticipantList.find(function (p) { return p.peerId === pid; });
                   var tile = document.createElement('div');
                   var isTeacher = peerMeta && peerMeta.role === 'HOST_TEACHER';
-                  tile.className = 'live-video-tile' + (isTeacher ? ' teacher-tile' : '');
+                  var isPresenting = peerMeta && peerMeta.isScreenSharing;
+                  tile.className = 'live-video-tile' +
+                    (isPresenting ? ' presenter-tile' : (isTeacher ? ' teacher-tile' : ''));
                   var v = document.createElement('video');
                   v.autoplay = true;
                   v.playsInline = true;
                   v.srcObject = stream;
+                  if (stream.getVideoTracks().length === 0) {
+                    v.style.display = 'none';
+                    appendRtcWaitingState(
+                      tile,
+                      peerMeta ? peerMeta.displayName : pid,
+                      'Audio connected · camera is off',
+                      peerMeta ? peerMeta.displayName : pid
+                    );
+                  }
                   var lbl = document.createElement('span');
                   lbl.className = 'live-tile-label';
-                  lbl.textContent = (peerMeta ? peerMeta.displayName : pid) + (isTeacher ? ' [TEACHER]' : '');
+                  lbl.textContent = (peerMeta ? peerMeta.displayName : pid) +
+                    (isPresenting ? ' [PRESENTING]' : (isTeacher ? ' [TEACHER]' : ''));
                   tile.appendChild(v);
                   tile.appendChild(lbl);
                   liveVideoGrid.appendChild(tile);
                 });
+
+                if (!liveVideoGrid.children.length) {
+                  var waitingTile = document.createElement('div');
+                  waitingTile.className = 'live-video-tile presenter-tile';
+                  var waitingName = activeDm ? ('@' + activeDm.peerUsername) : 'Meeting participants';
+                  var waitingText = activeDm && directCallLastPhase === 'RINGING'
+                    ? 'Calling on this local Wi-Fi node…'
+                    : 'Camera is off · audio meeting stage is ready';
+                  appendRtcWaitingState(waitingTile, waitingName, waitingText, activeDm ? activeDm.peerUsername : 'BV');
+                  liveVideoGrid.appendChild(waitingTile);
+                }
               }
 
               function sendRtcMediaState() {
@@ -4687,6 +4855,34 @@ class BitVoidLocalServer(
                   .catch(function () {});
               }
 
+              function replaceRtcOutgoingVideoTrack(track) {
+                Object.keys(rtcPeers).forEach(function (pid) {
+                  var transceiver = rtcPeers[pid].getTransceivers().find(function (tr) {
+                    return tr.receiver && tr.receiver.track && tr.receiver.track.kind === 'video';
+                  });
+                  if (transceiver && transceiver.sender) {
+                    transceiver.sender.replaceTrack(track || null).catch(function () {});
+                  }
+                });
+              }
+
+              function stopRtcScreenShare() {
+                var oldScreenStream = rtcScreenStream;
+                rtcScreenStream = null;
+                rtcScreenSharing = false;
+                if (oldScreenStream) {
+                  oldScreenStream.getTracks().forEach(function (t) {
+                    t.onended = null;
+                    t.stop();
+                  });
+                }
+                var camTrack = rtcLocalStream ? rtcLocalStream.getVideoTracks()[0] : null;
+                replaceRtcOutgoingVideoTrack(camTrack || null);
+                updateRtcControlsUi();
+                renderRtcVideoTiles();
+                sendRtcMediaState();
+              }
+
               function cleanupRtcPeersAndMedia() {
                 Object.keys(rtcPeers).forEach(function (pid) {
                   try { rtcPeers[pid].close(); } catch (e) {}
@@ -4698,7 +4894,10 @@ class BitVoidLocalServer(
                   rtcLocalStream = null;
                 }
                 if (rtcScreenStream) {
-                  rtcScreenStream.getTracks().forEach(function (t) { t.stop(); });
+                  rtcScreenStream.getTracks().forEach(function (t) {
+                    t.onended = null;
+                    t.stop();
+                  });
                   rtcScreenStream = null;
                 }
                 rtcScreenSharing = false;
@@ -4724,6 +4923,7 @@ class BitVoidLocalServer(
                 rtcActiveMaterialId = '';
                 rtcActivePageIndex = 0;
                 renderLiveMaterials();
+                setMeetingStageActive(false);
                 updateRtcControlsUi();
                 liveRoomStatusEl.textContent = 'Left live session';
               }
@@ -4750,6 +4950,12 @@ class BitVoidLocalServer(
                   showRtcError('Open a channel or Direct Chat before starting a Live Class or Call.');
                   return;
                 }
+                if (!activeDm && mode === 'VOICE_VIDEO_CALL' && isGeneralChatActive()) {
+                  showRtcError('Voice and video calls are unavailable in General Chat. Open P.Chat or another channel.');
+                  liveStagePanel.classList.add('hidden');
+                  setMeetingStageActive(false);
+                  return;
+                }
                 if (typeof RTCPeerConnection === 'undefined') {
                   showRtcError('WebRTC is not supported by this browser.');
                   directCallConnecting = false;
@@ -4758,6 +4964,7 @@ class BitVoidLocalServer(
                 if (startWithMedia && !window.isSecureContext) {
                   showRtcError('Camera and microphone require trusted HTTPS. Open /secure-setup, install the BitVoid local CA, then use the secure portal URL.');
                   liveStagePanel.classList.remove('hidden');
+                  setMeetingStageActive(true);
                   liveRoomStatusEl.innerHTML = 'Secure browser setup required · <a href="/secure-setup?username=' + encodeURIComponent(activeDm ? activeDm.myUsername : portalUsername) + '">OPEN SETUP</a>';
                   directCallConnecting = false;
                   return;
@@ -4770,12 +4977,14 @@ class BitVoidLocalServer(
                 leaveRtcSession();
                 showRtcError('');
                 liveStagePanel.classList.remove('hidden');
+                setMeetingStageActive(true);
                 rtcRoomId = targetRoom;
                 rtcMode = mode;
                 rtcRole = role;
                 if (presetClassCode) renderLiveClassCode(presetClassCode);
                 rtcPeerId = 'web_' + Math.random().toString(36).slice(2, 10);
                 rtcMuted = (role === 'STUDENT_VIEWER');
+                renderRtcVideoTiles();
 
                 var wantsVideo = startWithVideo !== false && role !== 'STUDENT_VIEWER';
                 var mediaPromise = startWithMedia
@@ -4821,7 +5030,10 @@ class BitVoidLocalServer(
                   liveRoomStatusEl.textContent = 'Connecting WebRTC signaling...';
 
                   rtcSocket.onopen = function () {
-                    liveRoomStatusEl.textContent = (rtcMode === 'LIVE_CLASSROOM' ? 'LIVE CLASS ACTIVE' : (activeDm ? ('CALL WITH @' + activeDm.peerUsername) : 'VOICE/VIDEO CALL LIVE')) + ' · Local P2P';
+                    var callLabel = activeDm && directCallLastPhase === 'RINGING'
+                      ? ('RINGING @' + activeDm.peerUsername + ' · your meeting stage is ready')
+                      : (activeDm ? ('CALL WITH @' + activeDm.peerUsername) : 'VOICE/VIDEO CALL LIVE');
+                    liveRoomStatusEl.textContent = (rtcMode === 'LIVE_CLASSROOM' ? 'LIVE CLASS ACTIVE' : callLabel) + ' · Local P2P';
                   };
                   rtcSocket.onerror = function () {
                     showRtcError('WebRTC signaling error on /ws/signaling.');
@@ -4918,6 +5130,8 @@ class BitVoidLocalServer(
                 if (!activeDm) return;
                 if (!window.isSecureContext) {
                   liveStagePanel.classList.remove('hidden');
+                  setMeetingStageActive(true);
+                  renderRtcVideoTiles();
                   showRtcError('Browser calls require the trusted HTTPS portal. Complete the one-time certificate setup first.');
                   liveRoomStatusEl.innerHTML = 'Secure browser setup required · <a href="/secure-setup?username=' + encodeURIComponent(activeDm.myUsername || '') + '">OPEN SETUP</a>';
                   return;
@@ -4940,13 +5154,60 @@ class BitVoidLocalServer(
                     }
                     return r.json();
                   }).then(function () {
+                    directCallLastPhase = 'RINGING';
+                    directCallConnecting = true;
                     liveStagePanel.classList.remove('hidden');
+                    setMeetingStageActive(true);
                     voiceCallBtn.classList.add('active');
                     videoCallBtn.classList.toggle('active', !!withVideo);
-                    liveRoomStatusEl.textContent = 'Ringing @' + activeDm.peerUsername + ' · media waits for acceptance';
+                    liveRoomStatusEl.textContent = 'Ringing @' + activeDm.peerUsername + ' · opening your meeting stage';
+                    joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true, null, null, !!withVideo);
                   }).catch(function (err) {
                     showRtcError(err.message || 'Unable to ring this user.');
                   });
+                });
+              }
+
+              function respondToIncomingDirectCall(accept) {
+                if (!activeDm || directCallLastPhase !== 'RINGING') return;
+                if (accept && !window.isSecureContext) {
+                  showRtcError('Install the BitVoid local certificate and reopen the trusted HTTPS portal before accepting.');
+                  window.location.href = '/secure-setup?username=' + encodeURIComponent(activeDm.myUsername || '');
+                  return;
+                }
+                directAcceptCallBtn.disabled = true;
+                directDeclineCallBtn.disabled = true;
+                fetch('/api/dm/' + encodeURIComponent(activeDm.dmId) + '/call/' + (accept ? 'accept' : 'decline'), {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'X-DM-Token': activeDm.token },
+                  body: '{}'
+                }).then(function (r) {
+                  if (!r.ok) throw new Error('Call response failed (HTTP ' + r.status + ')');
+                  return r.json();
+                }).then(function () {
+                  directCallPromptOpen = false;
+                  updateRtcControlsUi();
+                  if (accept) {
+                    directCallLastPhase = 'ACCEPTED';
+                    directCallConnecting = true;
+                    joinRtcSession(
+                      'VOICE_VIDEO_CALL',
+                      'SPEAKER',
+                      true,
+                      null,
+                      null,
+                      directCallIncomingWithVideo
+                    );
+                  } else {
+                    directCallLastPhase = 'DECLINED';
+                    setMeetingStageActive(false);
+                    liveStagePanel.classList.add('hidden');
+                  }
+                }).catch(function (err) {
+                  showRtcError(err.message || 'Unable to answer call.');
+                }).finally(function () {
+                  directAcceptCallBtn.disabled = false;
+                  directDeclineCallBtn.disabled = false;
                 });
               }
 
@@ -4956,6 +5217,8 @@ class BitVoidLocalServer(
               });
               voiceCallBtn.addEventListener('click', function () { startDirectCall(false); });
               videoCallBtn.addEventListener('click', function () { startDirectCall(true); });
+              directAcceptCallBtn.addEventListener('click', function () { respondToIncomingDirectCall(true); });
+              directDeclineCallBtn.addEventListener('click', function () { respondToIncomingDirectCall(false); });
               closeLiveStageBtn.addEventListener('click', function () {
                 if (activeDm && directCallLastPhase === 'RINGING') {
                   fetch('/api/dm/' + encodeURIComponent(activeDm.dmId) + '/call/cancel', {
@@ -4964,6 +5227,10 @@ class BitVoidLocalServer(
                     body: '{}'
                   }).catch(function () {});
                   directCallLastPhase = 'CANCELED';
+                  directCallPromptOpen = false;
+                  leaveRtcSession();
+                } else {
+                  setMeetingStageActive(false);
                 }
                 liveStagePanel.classList.add('hidden');
               });
@@ -4991,6 +5258,12 @@ class BitVoidLocalServer(
                 joinLiveClassByCode(sidebarClassCodeInput.value, sidebarClassErr);
               });
               rtcStartCallBtn.addEventListener('click', function () {
+                if (isGeneralChatActive()) {
+                  showRtcError('Calls are unavailable in General Chat. Use P.Chat for a direct call.');
+                  liveStagePanel.classList.add('hidden');
+                  setMeetingStageActive(false);
+                  return;
+                }
                 joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true);
               });
               rtcUploadDocBtn.addEventListener('click', function () {
@@ -5069,10 +5342,9 @@ class BitVoidLocalServer(
                       var vTrack = camStream.getVideoTracks()[0];
                       if (!rtcLocalStream) rtcLocalStream = camStream;
                       else if (vTrack) rtcLocalStream.addTrack(vTrack);
-                      Object.keys(rtcPeers).forEach(function (pid) {
-                        var sender = rtcPeers[pid].getSenders().find(function (s) { return s.track && s.track.kind === 'video'; });
-                        if (sender && vTrack) sender.replaceTrack(vTrack);
-                      });
+                      if (!rtcScreenSharing && vTrack) {
+                        replaceRtcOutgoingVideoTrack(vTrack);
+                      }
                       updateRtcControlsUi();
                       renderRtcVideoTiles();
                       sendRtcMediaState();
@@ -5085,59 +5357,44 @@ class BitVoidLocalServer(
               });
               rtcShareScreenBtn.addEventListener('click', function () {
                 if (rtcScreenSharing) {
-                  if (rtcScreenStream) {
-                    rtcScreenStream.getTracks().forEach(function (t) { t.stop(); });
-                    rtcScreenStream = null;
-                  }
-                  rtcScreenSharing = false;
-                  var camTrack = rtcLocalStream ? rtcLocalStream.getVideoTracks()[0] : null;
-                  Object.keys(rtcPeers).forEach(function (pid) {
-                    var sender = rtcPeers[pid].getSenders().find(function (s) {
-                      var trans = rtcPeers[pid].getTransceivers().find(function (tr) { return tr.sender === s; });
-                      return trans && trans.receiver && trans.receiver.track && trans.receiver.track.kind === 'video';
-                    });
-                    if (sender) sender.replaceTrack(camTrack || null);
-                  });
-                  updateRtcControlsUi();
-                  renderRtcVideoTiles();
-                  sendRtcMediaState();
+                  stopRtcScreenShare();
                 } else if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
                   navigator.mediaDevices.getDisplayMedia({ video: true, audio: false })
                     .then(function (screenStream) {
+                      var screenTrack = screenStream.getVideoTracks()[0];
+                      if (!screenTrack) throw new Error('No screen video track was returned.');
                       rtcScreenStream = screenStream;
                       rtcScreenSharing = true;
-                      var screenTrack = screenStream.getVideoTracks()[0];
-                      if (screenTrack) {
-                        screenTrack.onended = function () {
-                          if (rtcScreenSharing) rtcShareScreenBtn.click();
-                        };
-                        Object.keys(rtcPeers).forEach(function (pid) {
-                          var trans = rtcPeers[pid].getTransceivers().find(function (tr) {
-                            return tr.receiver && tr.receiver.track && tr.receiver.track.kind === 'video';
-                          });
-                          if (trans && trans.sender) trans.sender.replaceTrack(screenTrack);
-                        });
-                      }
+                      screenTrack.onended = function () {
+                        if (rtcScreenSharing) stopRtcScreenShare();
+                      };
+                      replaceRtcOutgoingVideoTrack(screenTrack);
                       updateRtcControlsUi();
                       renderRtcVideoTiles();
                       sendRtcMediaState();
                     })
-                    .catch(function () {
-                      showRtcError('Screen sharing permission cancelled or unavailable.');
+                    .catch(function (err) {
+                      showRtcError('Screen sharing permission cancelled or unavailable: ' + ((err && err.message) || 'unsupported browser'));
                     });
                 } else {
-                  showRtcError('Screen sharing requires Chrome/Desktop browser or native Android app.');
+                  showRtcError('This phone browser cannot capture the screen. Use the SCREEN control in the BitVoid Android app, or share from Chrome/Edge/Firefox on desktop.');
                 }
               });
               rtcLeaveBtn.addEventListener('click', function () {
-                if (activeDm && rtcRoomId === activeDm.dmId) {
+                var leavingDirectCall = activeDm && rtcRoomId === activeDm.dmId;
+                if (leavingDirectCall) {
+                  directCallConnecting = true;
+                  directCallLastPhase = 'ENDED';
                   fetch('/api/dm/' + encodeURIComponent(activeDm.dmId) + '/call/end', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-DM-Token': activeDm.token },
                     body: '{}'
-                  }).catch(function () {});
+                  }).catch(function () {}).finally(function () {
+                    directCallConnecting = false;
+                  });
                 }
                 leaveRtcSession();
+                if (leavingDirectCall) liveStagePanel.classList.add('hidden');
               });
               rtcEndSessionBtn.addEventListener('click', function () {
                 if (rtcSocket && rtcSocket.readyState === 1) {
