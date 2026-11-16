@@ -10,7 +10,7 @@ enum class NodeMode {
 enum class AppBottomTab(val label: String) {
     HOME("Home"),
     HUB("Hub"),
-    UPLOAD("Upload"),
+    PCHAT("P.Chat"),
     SETTINGS("Settings")
 }
 

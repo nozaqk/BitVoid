@@ -81,6 +81,9 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     private val _myUsername = MutableStateFlow(BitVoidUserPrefs.loadOrCreate(appContext))
     val myUsername: StateFlow<String> = _myUsername.asStateFlow()
 
+    private val _isUserIdDiscoverable = MutableStateFlow(BitVoidUserPrefs.isDiscoverable(appContext))
+    val isUserIdDiscoverable: StateFlow<Boolean> = _isUserIdDiscoverable.asStateFlow()
+
     val hostState: StateFlow<HostState> = BitVoidNodeStateHolder.hostState
     val auditLogs: StateFlow<List<AuditLogEntry>> = BitVoidNodeStateHolder.auditLogs
     val clientState: StateFlow<ClientState> = BitVoidNodeStateHolder.clientState
@@ -323,7 +326,10 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         BitVoidChannelManager.ensureDefaultChannel()
-        BitVoidDirectChatManager.registerUser(_myUsername.value)
+        BitVoidDirectChatManager.registerUser(
+            _myUsername.value,
+            _isUserIdDiscoverable.value
+        )
         BitVoidDirectChatManager.refreshConversationsForUser(_myUsername.value)
         loadSavedNetworkPreferences()
         viewModelScope.launch {
@@ -387,11 +393,34 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             // this local node, while users that leave the Wi-Fi disappear automatically.
             delay(2_000L)
             while (isActive) {
-                BitVoidDirectChatManager.registerUser(_myUsername.value)
-                if (clientState.value.connectionStatus == ClientConnectionStatus.CONNECTED) {
-                    clientRepository.registerUsername(_myUsername.value)
+                BitVoidDirectChatManager.registerUser(
+                    _myUsername.value,
+                    _isUserIdDiscoverable.value
+                )
+                if (clientState.value.connectionStatus == ClientConnectionStatus.CONNECTED ||
+                    hostState.value.isServerRunning
+                ) {
+                    clientRepository.registerUsername(
+                        _myUsername.value,
+                        discoverable = _isUserIdDiscoverable.value
+                    )
                 }
                 delay(15_000L)
+            }
+        }
+        viewModelScope.launch {
+            while (isActive) {
+                if (_selectedBottomTab.value == AppBottomTab.PCHAT &&
+                    (hostState.value.isServerRunning ||
+                        clientState.value.connectionStatus == ClientConnectionStatus.CONNECTED)
+                ) {
+                    clientRepository.registerUsername(
+                        _myUsername.value,
+                        discoverable = _isUserIdDiscoverable.value
+                    )
+                    clientRepository.fetchKnownUsers()
+                }
+                delay(3_000L)
             }
         }
         viewModelScope.launch {
@@ -435,7 +464,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                         openingIncomingCallDmId = null
                     }
                     if (activeDirectSession.value?.dmId == incoming.dmId) {
-                        _selectedBottomTab.value = AppBottomTab.HUB
+                        _selectedBottomTab.value = AppBottomTab.PCHAT
                     }
                 }
                 delay(1_000L)
@@ -535,12 +564,18 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             refreshClientChannels()
             refreshClientPublicMedia()
             refreshLiveClasses()
+        } else if (tab == AppBottomTab.PCHAT) {
+            syncGatewayToLocalIfAvailable()
             BitVoidDirectChatManager.refreshConversationsForUser(_myUsername.value)
             if (hostState.value.isServerRunning ||
                 clientState.value.connectionStatus == ClientConnectionStatus.CONNECTED
             ) {
                 viewModelScope.launch {
-                    clientRepository.registerUsername(_myUsername.value)
+                    clientRepository.registerUsername(
+                        _myUsername.value,
+                        discoverable = _isUserIdDiscoverable.value
+                    )
+                    clientRepository.fetchKnownUsers()
                 }
             }
         }
@@ -687,11 +722,33 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             rawChannelId = customChannelId,
             rawPrivateKey = privateKey,
             mediaIds = mediaIds,
-            isHidden = isHidden
+            isHidden = isHidden,
+            creatorUsername = _myUsername.value
         )
         if (result.isSuccess && hostState.value.isServerRunning) {
             refreshClientChannels()
         }
+        return result
+    }
+
+    fun updateChannel(
+        channelId: String,
+        name: String,
+        isPublic: Boolean,
+        privateKey: String?,
+        mediaIds: Set<String>,
+        isHidden: Boolean
+    ): Result<BitVoidChannel> {
+        val result = BitVoidChannelManager.updateChannel(
+            channelId = channelId,
+            rawName = name,
+            isPublic = isPublic,
+            rawPrivateKey = privateKey,
+            mediaIds = mediaIds,
+            isHidden = isHidden,
+            requesterUsername = _myUsername.value
+        )
+        if (result.isSuccess && hostState.value.isServerRunning) refreshClientChannels()
         return result
     }
 
@@ -719,11 +776,12 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun deleteChannel(channelId: String) {
-        BitVoidChannelManager.deleteChannel(channelId)
-        if (hostState.value.isServerRunning) {
+    fun deleteChannel(channelId: String): Result<Unit> {
+        val result = BitVoidChannelManager.deleteChannelByCreator(channelId, _myUsername.value)
+        if (result.isSuccess && hostState.value.isServerRunning) {
             refreshClientChannels()
         }
+        return result
     }
 
     fun suggestPrivateChannelId(): String {
@@ -805,7 +863,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
 
     fun refreshClientChannels(urlOverride: String? = null) {
         viewModelScope.launch {
-            clientRepository.fetchChannels(urlOverride)
+            clientRepository.fetchChannels(urlOverride, username = _myUsername.value)
         }
     }
 
@@ -848,24 +906,47 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         val res = BitVoidUserPrefs.saveUsername(appContext, rawUsername)
         res.onSuccess { clean ->
             _myUsername.value = clean
-            BitVoidDirectChatManager.registerUser(clean)
+            BitVoidDirectChatManager.registerUser(clean, _isUserIdDiscoverable.value)
             BitVoidDirectChatManager.refreshConversationsForUser(clean)
             if (hostState.value.isServerRunning ||
                 clientState.value.connectionStatus == ClientConnectionStatus.CONNECTED
             ) {
                 viewModelScope.launch {
-                    clientRepository.registerUsername(clean)
+                    clientRepository.registerUsername(
+                        clean,
+                        discoverable = _isUserIdDiscoverable.value
+                    )
                 }
             }
         }
         return res
     }
 
+    fun setUserIdDiscoverable(discoverable: Boolean) {
+        _isUserIdDiscoverable.value = discoverable
+        BitVoidUserPrefs.setDiscoverable(appContext, discoverable)
+        BitVoidDirectChatManager.registerUser(_myUsername.value, discoverable)
+        viewModelScope.launch {
+            if (hostState.value.isServerRunning ||
+                clientState.value.connectionStatus == ClientConnectionStatus.CONNECTED
+            ) {
+                clientRepository.registerUsername(
+                    _myUsername.value,
+                    discoverable = discoverable
+                )
+                clientRepository.fetchKnownUsers()
+            }
+        }
+    }
+
     fun openDirectChat(targetUsername: String) {
         viewModelScope.launch {
             ensureLocalGatewayReadyIfNeeded()
             syncGatewayToLocalIfAvailable()
-            clientRepository.registerUsername(_myUsername.value)
+            clientRepository.registerUsername(
+                _myUsername.value,
+                discoverable = _isUserIdDiscoverable.value
+            )
             clientRepository.openDirectChat(
                 myUsername = _myUsername.value,
                 targetUsername = targetUsername

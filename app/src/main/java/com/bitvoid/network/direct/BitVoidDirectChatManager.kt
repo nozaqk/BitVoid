@@ -54,6 +54,7 @@ data class DirectSession(
 object BitVoidUserPrefs {
     private const val PREFS_NAME = "bitvoid_user_identity"
     private const val KEY_USERNAME = "username"
+    private const val KEY_DISCOVERABLE = "user_id_discoverable"
     private val random = SecureRandom()
 
     fun loadOrCreate(context: Context): String {
@@ -66,6 +67,18 @@ object BitVoidUserPrefs {
         val generated = "user-$suffix"
         prefs.edit().putString(KEY_USERNAME, generated).apply()
         return generated
+    }
+
+    fun isDiscoverable(context: Context): Boolean {
+        return context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_DISCOVERABLE, true)
+    }
+
+    fun setDiscoverable(context: Context, discoverable: Boolean) {
+        context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_DISCOVERABLE, discoverable)
+            .apply()
     }
 
     fun saveUsername(context: Context, rawUsername: String): Result<String> {
@@ -120,6 +133,7 @@ object BitVoidDirectChatManager {
     )
 
     private val registeredUsers = ConcurrentHashMap<String, String>() // lower -> display username
+    private val userDiscoverability = ConcurrentHashMap<String, Boolean>()
     private val userLastSeenMs = ConcurrentHashMap<String, Long>()
     private val threads = ConcurrentHashMap<String, InternalThread>()
     private val sessionTokens = ConcurrentHashMap<String, DirectSession>()
@@ -133,7 +147,7 @@ object BitVoidDirectChatManager {
     private val _conversationsFlow = MutableStateFlow<List<DirectConversationSummary>>(emptyList())
     val conversationsFlow: StateFlow<List<DirectConversationSummary>> = _conversationsFlow.asStateFlow()
 
-    fun registerUser(rawUsername: String): Result<String> {
+    fun registerUser(rawUsername: String, isDiscoverable: Boolean? = null): Result<String> {
         val clean = BitVoidUserPrefs.normalizeUsernameOrNull(rawUsername)
             ?: return Result.failure(
                 IllegalArgumentException(
@@ -142,6 +156,11 @@ object BitVoidDirectChatManager {
             )
         val key = clean.lowercase(Locale.US)
         registeredUsers[key] = clean
+        if (isDiscoverable != null) {
+            userDiscoverability[key] = isDiscoverable
+        } else {
+            userDiscoverability.putIfAbsent(key, true)
+        }
         userLastSeenMs[key] = System.currentTimeMillis()
         publishUsers()
         return Result.success(clean)
@@ -305,6 +324,7 @@ object BitVoidDirectChatManager {
 
     fun clearAllForTests() {
         registeredUsers.clear()
+        userDiscoverability.clear()
         userLastSeenMs.clear()
         threads.clear()
         sessionTokens.clear()
@@ -335,13 +355,17 @@ object BitVoidDirectChatManager {
         userLastSeenMs.forEach { (key, lastSeen) ->
             if (nowMs - lastSeen > USER_PRESENCE_TTL_MS && userLastSeenMs.remove(key, lastSeen)) {
                 registeredUsers.remove(key)
+                userDiscoverability.remove(key)
             }
         }
     }
 
     private fun publishUsers() {
         pruneStaleUsers()
-        _knownUsersFlow.value = registeredUsers.values.sortedBy { it.lowercase(Locale.US) }
+        _knownUsersFlow.value = registeredUsers
+            .filterKeys { userDiscoverability[it] != false }
+            .values
+            .sortedBy { it.lowercase(Locale.US) }
     }
 
     private fun publishConversations(perspectiveUsername: String) {

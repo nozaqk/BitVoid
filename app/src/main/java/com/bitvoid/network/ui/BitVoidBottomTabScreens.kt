@@ -19,7 +19,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Forum
@@ -37,7 +36,6 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.WifiTethering
-import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Settings
@@ -58,6 +56,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -110,13 +110,13 @@ fun BitVoidBottomNavigationBar(
                 val selectedIcon = when (tab) {
                     AppBottomTab.HOME -> Icons.Filled.Home
                     AppBottomTab.HUB -> Icons.Filled.Forum
-                    AppBottomTab.UPLOAD -> Icons.Filled.CloudUpload
+                    AppBottomTab.PCHAT -> Icons.Filled.Person
                     AppBottomTab.SETTINGS -> Icons.Filled.Settings
                 }
                 val unselectedIcon = when (tab) {
                     AppBottomTab.HOME -> Icons.Outlined.Home
                     AppBottomTab.HUB -> Icons.Outlined.Forum
-                    AppBottomTab.UPLOAD -> Icons.Outlined.CloudUpload
+                    AppBottomTab.PCHAT -> Icons.Filled.Person
                     AppBottomTab.SETTINGS -> Icons.Outlined.Settings
                 }
                 NavigationBarItem(
@@ -368,8 +368,10 @@ fun HostQrCodeDialog(
 fun SettingsAutonomousCard(
     hostState: HostState,
     myUsername: String,
+    isUserIdDiscoverable: Boolean,
     missingPermissionsCount: Int,
     onCopyUsername: (String, String) -> Unit,
+    onSetUserIdDiscoverable: (Boolean) -> Unit,
     onSaveBroadcastCredentials: (String, String) -> Result<Unit>,
     onBroadcastSaved: (String) -> Unit,
     onRequestPermissions: () -> Unit,
@@ -428,7 +430,7 @@ fun SettingsAutonomousCard(
                     )
                 }
                 Text(
-                    text = "Your fixed Username ID cannot be changed. Share it so peers can message you directly from the Hub.",
+                    text = "Your fixed User ID is used for private chat and calls in P.Chat. Choose whether it appears automatically to other users on this node.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = VoidTextSecondary
                 )
@@ -469,6 +471,45 @@ fun SettingsAutonomousCard(
                             modifier = Modifier.size(18.dp)
                         )
                     }
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(VoidObsidian)
+                        .border(1.dp, VoidBorder, RoundedCornerShape(10.dp))
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "SHOW MY USER ID IN P.CHAT",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (isUserIdDiscoverable) VoidMint else VoidTextPrimary
+                        )
+                        Text(
+                            text = if (isUserIdDiscoverable) {
+                                "Other users on this node see @$myUsername automatically."
+                            } else {
+                                "Hidden from the automatic list; users can still add your exact ID with +."
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = VoidTextSecondary
+                        )
+                    }
+                    Switch(
+                        checked = isUserIdDiscoverable,
+                        onCheckedChange = onSetUserIdDiscoverable,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = VoidObsidian,
+                            checkedTrackColor = VoidMint,
+                            uncheckedThumbColor = VoidTextSecondary,
+                            uncheckedTrackColor = VoidSurface
+                        ),
+                        modifier = Modifier.testTag("settings_user_discoverability_switch")
+                    )
                 }
             }
         }

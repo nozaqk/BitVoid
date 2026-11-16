@@ -482,9 +482,9 @@ class BitVoidLocalServerTest {
     }
 
     @Test
-    fun `bottom tabs match Home Hub Upload Settings and autonomous loopback URL is allowed`() {
+    fun `bottom tabs match Home Hub P Chat Settings and autonomous loopback URL is allowed`() {
         val labels = com.bitvoid.network.model.AppBottomTab.entries.map { it.label }
-        assertEquals(listOf("Home", "Hub", "Upload", "Settings"), labels)
+        assertEquals(listOf("Home", "Hub", "P.Chat", "Settings"), labels)
 
         val normalizedLoopback = BitVoidClientManager.normalizeLocalPortalUrl("http://127.0.0.1:$testPort")
         assertEquals("http://127.0.0.1:$testPort", normalizedLoopback)
@@ -553,6 +553,150 @@ class BitVoidLocalServerTest {
         } finally {
             repo.release()
         }
+    }
+
+    @Test
+    fun `hidden private channel stays visible and keyless to its creator only`() = runBlocking {
+        val hidden = BitVoidChannelManager.createChannel(
+            rawName = "Owner Ghost Room",
+            isPublic = false,
+            rawChannelId = "CH-OWNER-77",
+            rawPrivateKey = "owner-secret-key",
+            isHidden = true,
+            creatorUsername = "owner-77"
+        ).getOrThrow()
+
+        val anonymousDirectory = URL("http://127.0.0.1:$testPort/api/channels")
+            .readText()
+        assertFalse(anonymousDirectory.contains(hidden.channelId))
+        assertFalse(anonymousDirectory.contains(hidden.name))
+
+        val otherDirectory = URL("http://127.0.0.1:$testPort/api/channels?username=other-22")
+            .readText()
+        assertFalse(otherDirectory.contains(hidden.channelId))
+        assertFalse(otherDirectory.contains(hidden.name))
+
+        val creatorDirectory = JSONObject(
+            URL("http://127.0.0.1:$testPort/api/channels?username=owner-77").readText()
+        )
+        val listed = creatorDirectory.getJSONArray("channels")
+        val creatorSummary = (0 until listed.length())
+            .map { listed.getJSONObject(it) }
+            .first { it.optString("channelId") == hidden.channelId }
+        assertTrue(creatorSummary.getBoolean("isHidden"))
+        assertTrue(creatorSummary.getBoolean("isOwner"))
+        assertFalse(creatorSummary.getBoolean("requiresKey"))
+
+        val creatorRepo = BitVoidClientRepository()
+        val otherRepo = BitVoidClientRepository()
+        try {
+            creatorRepo.joinChannel(
+                hidden.channelId,
+                rawPrivateKey = null,
+                urlOverride = "http://127.0.0.1:$testPort",
+                username = "owner-77"
+            )
+            assertEquals(hidden.channelId, creatorRepo.activeChannelSession.value?.channelId)
+
+            otherRepo.joinChannel(
+                hidden.channelId,
+                rawPrivateKey = null,
+                urlOverride = "http://127.0.0.1:$testPort",
+                username = "other-22"
+            )
+            assertNull(otherRepo.activeChannelSession.value)
+        } finally {
+            creatorRepo.release()
+            otherRepo.release()
+        }
+    }
+
+    @Test
+    fun `channel edit and delete are restricted to the creator`() {
+        val created = BitVoidChannelManager.createChannel(
+            rawName = "Managed Room",
+            isPublic = true,
+            creatorUsername = "creator-11"
+        ).getOrThrow()
+
+        val deniedEdit = BitVoidChannelManager.updateChannel(
+            channelId = created.channelId,
+            rawName = "Hijacked Room",
+            isPublic = false,
+            rawPrivateKey = null,
+            mediaIds = emptySet(),
+            isHidden = true,
+            requesterUsername = "other-11"
+        )
+        assertTrue(deniedEdit.isFailure)
+        assertEquals("Managed Room", BitVoidChannelManager.getChannel(created.channelId)?.name)
+
+        val edited = BitVoidChannelManager.updateChannel(
+            channelId = created.channelId,
+            rawName = "Creator Room",
+            isPublic = false,
+            rawPrivateKey = "new-key",
+            mediaIds = emptySet(),
+            isHidden = true,
+            requesterUsername = "creator-11"
+        )
+        assertTrue(edited.isSuccess)
+        assertTrue(edited.getOrThrow().isHidden)
+
+        assertTrue(
+            BitVoidChannelManager.deleteChannelByCreator(created.channelId, "other-11").isFailure
+        )
+        assertNotNull(BitVoidChannelManager.getChannel(created.channelId))
+        assertTrue(
+            BitVoidChannelManager.deleteChannelByCreator(created.channelId, "creator-11").isSuccess
+        )
+        assertNull(BitVoidChannelManager.getChannel(created.channelId))
+    }
+
+    @Test
+    fun `hidden user id is omitted from discovery but exact id chat still opens`() {
+        val baseUrl = "http://127.0.0.1:$testPort"
+
+        fun postJson(path: String, body: String): Pair<Int, String> {
+            val conn = (URL("$baseUrl$path").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json")
+                outputStream.write(body.toByteArray(StandardCharsets.UTF_8))
+            }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val responseBody = stream?.readBytes()?.let { String(it, StandardCharsets.UTF_8) }.orEmpty()
+            conn.disconnect()
+            return code to responseBody
+        }
+
+        assertEquals(
+            200,
+            postJson(
+                "/api/users/register",
+                """{"username":"visible-01","discoverable":true}"""
+            ).first
+        )
+        assertEquals(
+            200,
+            postJson(
+                "/api/users/register",
+                """{"username":"hidden-01","discoverable":false}"""
+            ).first
+        )
+
+        val users = JSONObject(URL("$baseUrl/api/users").readText()).getJSONArray("users")
+        val discovered = (0 until users.length()).map { users.getString(it) }
+        assertTrue("visible-01" in discovered)
+        assertFalse("hidden-01" in discovered)
+
+        val exactOpen = postJson(
+            "/api/dm/open",
+            """{"myUsername":"visible-01","targetUsername":"hidden-01"}"""
+        )
+        assertEquals(200, exactOpen.first)
+        assertEquals("hidden-01", JSONObject(exactOpen.second).getString("peerUsername"))
     }
 
     @Test

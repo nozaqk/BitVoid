@@ -405,7 +405,13 @@ class BitVoidLocalServer(
 
                 // Channel GET endpoints
                 rawUri == "/api/channels" -> {
-                    serveChannelsListJson(ephemeralToken, isHead = (method == Method.HEAD))
+                    @Suppress("DEPRECATION")
+                    val username = session.parms["username"]
+                    serveChannelsListJson(
+                        username = username,
+                        ephemeralToken = ephemeralToken,
+                        isHead = (method == Method.HEAD)
+                    )
                 }
 
                 rawUri.startsWith("/api/channels/") && rawUri.endsWith("/media") -> {
@@ -746,19 +752,29 @@ class BitVoidLocalServer(
     // Channel API Handlers
     // ───────────────────────────────────────────────────────────────────────────
 
-    private fun serveChannelsListJson(ephemeralToken: String, isHead: Boolean): Response {
+    private fun serveChannelsListJson(
+        username: String?,
+        ephemeralToken: String,
+        isHead: Boolean
+    ): Response {
         val diskItems = BitVoidMediaManager.refreshFromDisk(context)
         BitVoidChannelManager.syncMediaCatalog(diskItems)
 
-        // Hidden channels are intentionally excluded from all directory listings;
-        // peers must enter the exact Private Channel ID to unlock and join them.
-        val listedChannels = BitVoidChannelManager.getListedChannelSnapshots()
+        // Hidden channels stay invisible to everyone except their creator. The creator receives
+        // the ID and can enter directly without retyping the private ID/key.
+        val listedChannels = BitVoidChannelManager.getChannelSnapshotsForUser(username)
         val publicList = listedChannels.filter { it.isPublic }
         val privateList = listedChannels.filter { !it.isPublic }
 
-        val publicJson = publicList.joinToString(",") { ch -> channelSummaryJson(ch, revealId = true) }
-        val privateJson = privateList.joinToString(",") { ch -> channelSummaryJson(ch, revealId = false) }
-        val combinedJson = listedChannels.joinToString(",") { ch -> channelSummaryJson(ch, revealId = ch.isPublic) }
+        fun summary(channel: BitVoidChannel): String {
+            val isOwner = !username.isNullOrBlank() &&
+                channel.creatorUsername.equals(username.trim().removePrefix("@"), ignoreCase = true)
+            return channelSummaryJson(channel, revealId = channel.isPublic || isOwner, isOwner = isOwner)
+        }
+
+        val publicJson = publicList.joinToString(",") { summary(it) }
+        val privateJson = privateList.joinToString(",") { summary(it) }
+        val combinedJson = listedChannels.joinToString(",") { summary(it) }
 
         val payload =
             """{"session":"$ephemeralToken","publicCount":${publicList.size},"privateCount":${privateList.size},"publicChannels":[$publicJson],"privateChannels":[$privateJson],"channels":[$combinedJson]}"""
@@ -772,14 +788,25 @@ class BitVoidLocalServer(
         )
     }
 
-    private fun channelSummaryJson(ch: BitVoidChannel, revealId: Boolean): String {
+    private fun channelSummaryJson(
+        ch: BitVoidChannel,
+        revealId: Boolean,
+        isOwner: Boolean = false
+    ): String {
         val livePeers = ch.activeParticipants.count { it.isWebSocketConnected }
-        return if (revealId) {
-            """{"channelId":"${jsonEscape(ch.channelId)}","name":"${jsonEscape(ch.name)}","isPublic":true,"locked":false,"requiresKey":false,"hasPrivateKey":false,"mediaCount":${ch.mediaList.size},"activePeers":$livePeers,"messageCount":${ch.messageCount}}"""
-        } else {
-            // Strictly omit channelId, privateKey, and mediaList for locked private channels
-            """{"name":"${jsonEscape(ch.name)}","isPublic":false,"locked":true,"requiresKey":true,"hasPrivateKey":${!ch.privateKey.isNullOrBlank()},"mediaCount":${ch.mediaList.size},"activePeers":$livePeers,"messageCount":${ch.messageCount}}"""
-        }
+        return JSONObject().apply {
+            if (revealId) put("channelId", ch.channelId)
+            put("name", ch.name)
+            put("isPublic", ch.isPublic)
+            put("isHidden", ch.isHidden)
+            put("isOwner", isOwner)
+            put("locked", !ch.isPublic && !isOwner)
+            put("requiresKey", !ch.isPublic && !isOwner)
+            put("hasPrivateKey", !ch.privateKey.isNullOrBlank())
+            put("mediaCount", ch.mediaList.size)
+            put("activePeers", livePeers)
+            put("messageCount", ch.messageCount)
+        }.toString()
     }
 
     private fun handleChannelJoin(session: IHTTPSession, ephemeralToken: String): Response {
@@ -1527,7 +1554,8 @@ class BitVoidLocalServer(
             )
         }
         val username = json.optString("username", "")
-        val res = BitVoidDirectChatManager.registerUser(username)
+        val discoverable = if (json.has("discoverable")) json.optBoolean("discoverable", true) else null
+        val res = BitVoidDirectChatManager.registerUser(username, discoverable)
         if (res.isFailure) {
             return buildPaddedTextResponse(
                 status = Response.Status.BAD_REQUEST,
@@ -4135,11 +4163,19 @@ class BitVoidLocalServer(
                   privateChannelsEl.innerHTML = '<div class="muted-note">No private channels active.</div>';
                 } else {
                   privateChannelsEl.innerHTML = prvChannels.map(function (c) {
-                    return '<button type="button" class="wa-chan-row wa-chan-locked" data-locked-name="' + esc(c.name) + '">' +
+                    var owned = !!c.isOwner && !!c.channelId;
+                    var attrs = owned
+                      ? (' data-channel-id="' + esc(c.channelId) + '"')
+                      : (' data-locked-name="' + esc(c.name) + '"');
+                    var cls = 'wa-chan-row' + (owned ? '' : ' wa-chan-locked');
+                    var sub = owned
+                      ? ((c.isHidden ? 'Your hidden channel' : 'Your private channel') + ' · Tap to open (' + c.mediaCount + ' media)')
+                      : ('Private · Tap &amp; enter ID (' + c.mediaCount + ' media)');
+                    return '<button type="button" class="' + cls + '"' + attrs + '>' +
                       '<div class="wa-avatar wa-avatar-lock">ID</div>' +
                       '<div class="wa-chan-info">' +
                         '<div class="wa-chan-title">' + esc(c.name) + '</div>' +
-                        '<div class="wa-chan-sub">Private · Tap &amp; enter ID (' + c.mediaCount + ' media)</div>' +
+                        '<div class="wa-chan-sub">' + sub + '</div>' +
                       '</div></button>';
                   }).join('');
                 }
@@ -4160,7 +4196,9 @@ class BitVoidLocalServer(
                     }).catch(function () {});
                 }
 
-                fetch('/api/channels', { cache: 'no-store' })
+                var channelUsername = (dmMyInput.value || '').trim().replace(/^@/, '');
+                var channelListUrl = '/api/channels' + (channelUsername ? ('?username=' + encodeURIComponent(channelUsername)) : '');
+                fetch(channelListUrl, { cache: 'no-store' })
                   .then(function (r) { return r.json(); })
                   .then(function (data) {
                     var pub = data.publicChannels || [];
