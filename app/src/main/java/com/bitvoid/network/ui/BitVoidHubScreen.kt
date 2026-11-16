@@ -85,6 +85,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bitvoid.network.call.BitVoidCallState
+import com.bitvoid.network.call.DirectCallPhase
 import com.bitvoid.network.channel.BitVoidChannel
 import com.bitvoid.network.channel.BitVoidChannelManager
 import com.bitvoid.network.client.ClientChannelSession
@@ -1579,7 +1580,7 @@ private fun WhatsAppDirectChatSpace(
         pendingCallAction = null
     }
 
-    fun launchDirectCallWithPermissions(withVideo: Boolean) {
+    fun launchDirectCallWithPermissions(withVideo: Boolean, accepting: Boolean = false) {
         val hasAudio = ContextCompat.checkSelfPermission(
             context,
             Manifest.permission.RECORD_AUDIO
@@ -1589,12 +1590,21 @@ private fun WhatsAppDirectChatSpace(
             Manifest.permission.CAMERA
         ) == PackageManager.PERMISSION_GRANTED
         val startCallAction = {
-            callActions.onStartDirectCall(
-                session.dmId,
-                session.peerUsername,
-                session.token,
-                withVideo
-            )
+            if (accepting) {
+                callActions.onAcceptDirectCall(
+                    session.dmId,
+                    session.peerUsername,
+                    session.token,
+                    withVideo
+                )
+            } else {
+                callActions.onStartDirectCall(
+                    session.dmId,
+                    session.peerUsername,
+                    session.token,
+                    withVideo
+                )
+            }
         }
         val needsCam = withVideo && !hasCam
         if (hasAudio && !needsCam) {
@@ -1726,7 +1736,99 @@ private fun WhatsAppDirectChatSpace(
                 callActions = callActions
             )
             HorizontalDivider(thickness = 1.dp, color = VoidBorder)
-        } else if (remoteCallStatus != null && remoteCallStatus.isActive) {
+        } else if (remoteCallStatus?.directCallPhase == DirectCallPhase.RINGING &&
+            remoteCallStatus.isIncoming
+        ) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF10201A)),
+                border = BorderStroke(1.dp, VoidMint),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+                    .testTag("dm_incoming_call_prompt")
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "INCOMING ${if (remoteCallStatus.withVideo) "VIDEO" else "VOICE"} CALL",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = VoidMint,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "@${remoteCallStatus.callerUsername} is calling. Media will not connect until you accept.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = VoidTextPrimary
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                callActions.onDeclineDirectCall(session.dmId, session.token)
+                            },
+                            border = BorderStroke(1.dp, VoidCrimson),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidCrimson),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("dm_decline_call_button")
+                        ) { Text("DECLINE") }
+                        Button(
+                            onClick = {
+                                launchDirectCallWithPermissions(
+                                    withVideo = remoteCallStatus.withVideo,
+                                    accepting = true
+                                )
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = VoidMint,
+                                contentColor = VoidObsidian
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("dm_accept_call_button")
+                        ) { Text("ACCEPT") }
+                    }
+                }
+            }
+            HorizontalDivider(thickness = 1.dp, color = VoidBorder)
+        } else if (remoteCallStatus?.directCallPhase == DirectCallPhase.RINGING &&
+            remoteCallStatus.isOutgoing
+        ) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF101A20)),
+                border = BorderStroke(1.dp, VoidCyan.copy(alpha = 0.8f)),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+                    .testTag("dm_outgoing_call_ringing")
+            ) {
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    CircularProgressIndicator(color = VoidCyan, modifier = Modifier.size(24.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("RINGING @${session.peerUsername}…", color = VoidCyan, fontWeight = FontWeight.Bold)
+                        Text(
+                            if (remoteCallStatus.withVideo) "Video call invitation" else "Voice call invitation",
+                            color = VoidTextSecondary,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                    TextButton(
+                        onClick = { callActions.onCancelDirectCall(session.dmId, session.token) },
+                        modifier = Modifier.testTag("dm_cancel_call_button")
+                    ) { Text("CANCEL", color = VoidCrimson) }
+                }
+            }
+            HorizontalDivider(thickness = 1.dp, color = VoidBorder)
+        } else if (remoteCallStatus?.directCallPhase == DirectCallPhase.ACCEPTED) {
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF0E1B18)),
                 border = BorderStroke(1.dp, VoidMint.copy(alpha = 0.7f)),
@@ -1734,53 +1836,14 @@ private fun WhatsAppDirectChatSpace(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 10.dp, vertical = 8.dp)
-                    .testTag("dm_active_call_banner")
+                    .testTag("dm_call_connecting_banner")
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "@${session.peerUsername} IS ON A LIVE CALL",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = VoidMint,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "${remoteCallStatus.participantCount} active · Tap to join over Wi-Fi",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = VoidTextSecondary
-                        )
-                    }
-                    OutlinedButton(
-                        onClick = { launchDirectCallWithPermissions(withVideo = false) },
-                        border = BorderStroke(1.dp, VoidCyan),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidCyan),
-                        contentPadding = PaddingValues(horizontal = 10.dp),
-                        modifier = Modifier
-                            .height(48.dp)
-                            .testTag("dm_join_voice_banner_button")
-                    ) {
-                        Text("VOICE", style = MaterialTheme.typography.labelSmall)
-                    }
-                    Button(
-                        onClick = { launchDirectCallWithPermissions(withVideo = true) },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = VoidMint,
-                            contentColor = VoidObsidian
-                        ),
-                        contentPadding = PaddingValues(horizontal = 12.dp),
-                        modifier = Modifier
-                            .height(48.dp)
-                            .testTag("dm_join_video_banner_button")
-                    ) {
-                        Text("VIDEO", style = MaterialTheme.typography.labelSmall)
-                    }
-                }
+                Text(
+                    text = "CALL ACCEPTED · CONNECTING SECURE MEDIA…",
+                    color = VoidMint,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(14.dp)
+                )
             }
             HorizontalDivider(thickness = 1.dp, color = VoidBorder)
         }

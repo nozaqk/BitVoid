@@ -212,6 +212,15 @@ fun BitVoidDashboard(
             onStartDirectCall = { dmId, peerUsername, token, withVideo ->
                 viewModel.startDirectCall(dmId, peerUsername, token, withVideo)
             },
+            onAcceptDirectCall = { dmId, peerUsername, token, withVideo ->
+                viewModel.acceptDirectCall(dmId, peerUsername, token, withVideo)
+            },
+            onDeclineDirectCall = { dmId, token ->
+                viewModel.declineDirectCall(dmId, token)
+            },
+            onCancelDirectCall = { dmId, token ->
+                viewModel.cancelDirectCall(dmId, token)
+            },
             onUploadClassroomDocument = { roomId, uri, isDirect ->
                 viewModel.uploadClassroomDocument(roomId, uri, isDirect)
             },
@@ -751,7 +760,8 @@ private fun CompactDashboardContent(
                                 hostState = hostState,
                                 onToggleHost = onToggleHost,
                                 onOpenProtocolDialog = onOpenProtocolDialog,
-                                onOpenQrDialog = onOpenQrDialog
+                                onOpenQrDialog = onOpenQrDialog,
+                                onOpenHotspotSettings = onOpenHotspotSettings
                             )
                         }
                     }
@@ -910,7 +920,8 @@ private fun WideDashboardContent(
                             hostState = hostState,
                             onToggleHost = onToggleHost,
                             onOpenProtocolDialog = onOpenProtocolDialog,
-                            onOpenQrDialog = onOpenQrDialog
+                            onOpenQrDialog = onOpenQrDialog,
+                            onOpenHotspotSettings = onOpenHotspotSettings
                         )
                     }
                 }
@@ -1024,7 +1035,8 @@ private fun HostPowerControlCard(
     hostState: HostState,
     onToggleHost: () -> Unit,
     onOpenProtocolDialog: () -> Unit,
-    onOpenQrDialog: () -> Unit
+    onOpenQrDialog: () -> Unit,
+    onOpenHotspotSettings: () -> Unit
 ) {
     val isActive = hostState.status == HotspotStatus.ACTIVE ||
         hostState.status == HotspotStatus.SERVER_ONLY
@@ -1176,6 +1188,54 @@ private fun HostPowerControlCard(
                     },
                     accentColor = if (hostState.publicCount > 0 && isActive) VoidMint else VoidAmber
                 )
+
+                if (hostState.needsOpenHotspotSetupBanner) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = VoidAmber.copy(alpha = 0.12f)),
+                        border = BorderStroke(1.dp, VoidAmber.copy(alpha = 0.8f)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("open_hotspot_setup_banner")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "FINISH OPEN NETWORK BROADCAST",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = VoidAmber,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Android must create the password-free hotspot. Set Network name to '${hostState.configuredSsid}', choose No password / Open, and turn it on. BitVoid will detect it automatically.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = VoidTextPrimary
+                            )
+                            Button(
+                                onClick = onOpenHotspotSettings,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = VoidAmber,
+                                    contentColor = VoidObsidian
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp)
+                                    .testTag("open_android_hotspot_settings")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.WifiTethering,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("OPEN ANDROID HOTSPOT SETTINGS")
+                            }
+                        }
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
@@ -1334,7 +1394,11 @@ private fun HostCredentialsCard(
                     color = VoidCyan
                 )
                 StatusChip(
-                    label = if (hostState.isServerRunning) "HTTP :${hostState.port} UP" else "HTTP STANDBY",
+                    label = when {
+                        hostState.isSecureServerRunning -> "HTTPS :${hostState.securePort} UP"
+                        hostState.isServerRunning -> "HTTP :${hostState.port} UP"
+                        else -> "PORTAL STANDBY"
+                    },
                     accentColor = if (hostState.isServerRunning) VoidMint else VoidTextSecondary
                 )
             }
@@ -1413,6 +1477,28 @@ private fun HostCredentialsCard(
                 valueColor = VoidMint,
                 onCopy = { onCopy("Portal URL", hostState.effectivePortalUrl) }
             )
+
+            if (hostState.isSecureServerRunning) {
+                CredentialRow(
+                    label = "SECURE VIDEO CALL PORTAL (CAMERA + MIC)",
+                    value = hostState.securePortalUrl,
+                    canCopy = true,
+                    valueColor = VoidCyan,
+                    onCopy = { onCopy("Secure Portal URL", hostState.securePortalUrl) }
+                )
+                CredentialRow(
+                    label = "ONE-TIME BROWSER CERTIFICATE SETUP",
+                    value = "${hostState.effectivePortalUrl}/secure-setup",
+                    canCopy = true,
+                    valueColor = VoidAmber,
+                    onCopy = {
+                        onCopy(
+                            "Secure Browser Setup",
+                            "${hostState.effectivePortalUrl}/secure-setup"
+                        )
+                    }
+                )
+            }
         }
     }
 }

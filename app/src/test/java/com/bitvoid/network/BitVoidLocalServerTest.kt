@@ -3,6 +3,7 @@ package com.bitvoid.network
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.bitvoid.network.call.BitVoidSignalingServer
+import com.bitvoid.network.call.DirectCallPhase
 import com.bitvoid.network.channel.BitVoidChannelManager
 import com.bitvoid.network.client.BitVoidClientManager
 import com.bitvoid.network.client.BitVoidClientRepository
@@ -18,6 +19,8 @@ import java.net.HttpURLConnection
 import java.net.Socket
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -102,6 +105,8 @@ class BitVoidLocalServerTest {
         assertFalse(html.contains("id=\"toggle-media-btn\""))
         assertTrue(html.contains("id=\"voice-call-btn\""))
         assertTrue(html.contains("id=\"video-call-btn\""))
+        assertTrue(html.contains("/call/invite"))
+        assertTrue(html.contains("Camera and microphone require trusted HTTPS"))
         assertTrue(html.contains("id=\"dm-presence-status\""))
         assertTrue(html.contains("id=\"live-class-btn\" class=\"btn-ghost hidden\""))
         assertFalse(html.contains("msg-att-preview"))
@@ -129,6 +134,28 @@ class BitVoidLocalServerTest {
         assertEquals("bitvoid", body.getString("service"))
         assertEquals("gateway", body.getString("nodeType"))
         assertEquals(1, body.getInt("protocolVersion"))
+    }
+
+    @Test
+    fun `secure browser setup exports a valid local root certificate`() {
+        val certConn = URL("http://127.0.0.1:$testPort/bitvoid-local-ca.crt")
+            .openConnection() as HttpURLConnection
+        assertEquals(200, certConn.responseCode)
+        assertEquals("application/x-x509-ca-cert", certConn.contentType)
+        assertTrue(certConn.getHeaderField("Content-Disposition").contains("bitvoid-local-ca.crt"))
+        val certificate = CertificateFactory.getInstance("X.509")
+            .generateCertificate(certConn.inputStream) as X509Certificate
+        assertTrue(certificate.basicConstraints >= 0)
+        assertTrue(certificate.subjectX500Principal.name.contains("BitVoid Local Root CA"))
+        certConn.disconnect()
+
+        val setupConn = URL("http://127.0.0.1:$testPort/secure-setup")
+            .openConnection() as HttpURLConnection
+        assertEquals(200, setupConn.responseCode)
+        val setupHtml = setupConn.inputStream.bufferedReader().readText()
+        assertTrue(setupHtml.contains("Download certificate"))
+        assertTrue(setupHtml.contains("Open secure BitVoid"))
+        setupConn.disconnect()
     }
 
     @Test
@@ -1206,6 +1233,31 @@ class BitVoidLocalServerTest {
             }
             assertEquals(401, eveStatus.responseCode)
             eveStatus.disconnect()
+
+            // Caller rings first; recipient sees an incoming prompt state and explicitly accepts
+            // before either peer is allowed into WebRTC signaling.
+            assertTrue(
+                aliceRepo.requestDirectCall(
+                    dmId,
+                    aliceSession.token,
+                    withVideo = true,
+                    urlOverride = baseUrl
+                ).isSuccess
+            )
+            bobRepo.fetchDirectCallStatus(dmId, bobSession.token, baseUrl)
+            val ringing = bobRepo.activeDirectCallStatus.value
+            assertNotNull(ringing)
+            assertEquals(DirectCallPhase.RINGING, ringing!!.directCallPhase)
+            assertTrue(ringing.isIncoming)
+            assertEquals("alice-call", ringing.callerUsername)
+            assertTrue(ringing.withVideo)
+
+            assertTrue(bobRepo.acceptDirectCall(dmId, bobSession.token, baseUrl).isSuccess)
+            aliceRepo.fetchDirectCallStatus(dmId, aliceSession.token, baseUrl)
+            assertEquals(
+                DirectCallPhase.ACCEPTED,
+                aliceRepo.activeDirectCallStatus.value?.directCallPhase
+            )
 
             aliceWs = okClient.newWebSocket(
                 Request.Builder()

@@ -11,6 +11,7 @@ import androidx.lifecycle.viewModelScope
 import com.bitvoid.network.call.BitVoidCallManager
 import com.bitvoid.network.call.BitVoidCallState
 import com.bitvoid.network.call.BitVoidDocumentPreviewer
+import com.bitvoid.network.call.DirectCallPhase
 import com.bitvoid.network.call.DocumentPreviewKind
 import com.bitvoid.network.call.LiveClassMaterial
 import com.bitvoid.network.call.ParticipantRole
@@ -124,6 +125,8 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     private val _currentMaterialBitmap = MutableStateFlow<ImageBitmap?>(null)
     private val _isLoadingMaterialPreview = MutableStateFlow(false)
     private val _materialPreviewError = MutableStateFlow<String?>(null)
+    private var pendingOutgoingDirectCall: Triple<String, String, Boolean>? = null
+    private var openingIncomingCallDmId: String? = null
 
     private data class CallSessionMeta(
         val callState: BitVoidCallState,
@@ -392,6 +395,53 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             }
         }
         viewModelScope.launch {
+            clientRepository.activeDirectCallStatus.collect { status ->
+                val pending = pendingOutgoingDirectCall ?: return@collect
+                if (status?.roomId != pending.first) return@collect
+                when (status.directCallPhase) {
+                    DirectCallPhase.ACCEPTED -> {
+                        val session = activeDirectSession.value
+                        if (session != null && session.dmId == pending.first &&
+                            callManager.activeRoomId.value != session.dmId
+                        ) {
+                            pendingOutgoingDirectCall = null
+                            connectAcceptedDirectCall(session, pending.third)
+                        }
+                    }
+                    DirectCallPhase.DECLINED -> {
+                        pendingOutgoingDirectCall = null
+                        _extraCallError.value = "@${pending.second} declined the call."
+                    }
+                    DirectCallPhase.CANCELED, DirectCallPhase.MISSED, DirectCallPhase.ENDED -> {
+                        pendingOutgoingDirectCall = null
+                    }
+                    else -> Unit
+                }
+            }
+        }
+        viewModelScope.launch {
+            delay(1_000L)
+            while (isActive) {
+                val incoming = clientRepository.fetchIncomingDirectCall(_myUsername.value)
+                if (incoming != null) {
+                    if (activeDirectSession.value?.dmId != incoming.dmId &&
+                        openingIncomingCallDmId != incoming.dmId
+                    ) {
+                        openingIncomingCallDmId = incoming.dmId
+                        clientRepository.openDirectChat(
+                            myUsername = _myUsername.value,
+                            targetUsername = incoming.callerUsername
+                        )
+                        openingIncomingCallDmId = null
+                    }
+                    if (activeDirectSession.value?.dmId == incoming.dmId) {
+                        _selectedBottomTab.value = AppBottomTab.HUB
+                    }
+                }
+                delay(1_000L)
+            }
+        }
+        viewModelScope.launch {
             callManager.activeRoomId.collect { roomId ->
                 if (roomId == null) {
                     _loadedMaterialDecks.value = emptyMap()
@@ -566,6 +616,11 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         val currentState = hostState.value
         if (currentState.isEngineLocked) {
             BitVoidForegroundService.stopNode(appContext)
+        } else if (currentState.selectedSecurityMode == HotspotSecurityMode.OPEN_VISIBLE) {
+            // Android reserves custom password-free hotspot configuration for the System UI.
+            // Start the local vault, then take the user to the one supported broadcast control.
+            BitVoidForegroundService.startOpenBroadcast(appContext)
+            openHotspotTetherSettings()
         } else {
             BitVoidForegroundService.startHostNode(
                 context = appContext,
@@ -577,6 +632,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     fun startOpenBroadcastMode() {
         selectHotspotSecurityMode(HotspotSecurityMode.OPEN_VISIBLE)
         BitVoidForegroundService.startOpenBroadcast(appContext)
+        openHotspotTetherSettings()
     }
 
     fun startServerOnlyMode() {
@@ -1058,17 +1114,59 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             _extraCallError.value = null
             ensureLocalGatewayReadyIfNeeded()
             syncGatewayToLocalIfAvailable()
-            callManager.startOrJoinSession(
-                gatewayBaseUrl = clientRepository.gatewayBaseUrl.value,
-                channelId = dmId,
-                channelName = "@$peerUsername",
-                displayName = _myUsername.value,
-                channelToken = token,
-                mode = SignalingSessionMode.VOICE_VIDEO_CALL,
-                role = ParticipantRole.SPEAKER,
-                startWithVideo = withVideo
-            )
+            clientRepository.requestDirectCall(dmId, token, withVideo)
+                .onSuccess {
+                    pendingOutgoingDirectCall = Triple(dmId, peerUsername, withVideo)
+                }
+                .onFailure { error ->
+                    _extraCallError.value = error.message ?: "Unable to ring @$peerUsername."
+                }
         }
+    }
+
+    fun acceptDirectCall(dmId: String, peerUsername: String, token: String, withVideo: Boolean) {
+        viewModelScope.launch {
+            _extraCallError.value = null
+            clientRepository.acceptDirectCall(dmId, token)
+                .onSuccess {
+                    val session = activeDirectSession.value
+                    if (session != null && session.dmId == dmId) {
+                        connectAcceptedDirectCall(session, withVideo)
+                    }
+                }
+                .onFailure { error ->
+                    _extraCallError.value = error.message ?: "Unable to accept the call."
+                }
+        }
+    }
+
+    fun declineDirectCall(dmId: String, token: String) {
+        viewModelScope.launch {
+            clientRepository.declineDirectCall(dmId, token)
+                .onFailure { error ->
+                    _extraCallError.value = error.message ?: "Unable to decline the call."
+                }
+        }
+    }
+
+    fun cancelDirectCall(dmId: String, token: String) {
+        pendingOutgoingDirectCall = null
+        viewModelScope.launch {
+            clientRepository.cancelOrEndDirectCall(dmId, token, action = "cancel")
+        }
+    }
+
+    private fun connectAcceptedDirectCall(session: ClientDirectSession, withVideo: Boolean) {
+        callManager.startOrJoinSession(
+            gatewayBaseUrl = clientRepository.gatewayBaseUrl.value,
+            channelId = session.dmId,
+            channelName = "@${session.peerUsername}",
+            displayName = _myUsername.value,
+            channelToken = session.token,
+            mode = SignalingSessionMode.VOICE_VIDEO_CALL,
+            role = ParticipantRole.SPEAKER,
+            startWithVideo = withVideo
+        )
     }
 
     fun uploadClassroomDocument(roomId: String, uri: Uri, isDirect: Boolean) {
@@ -1147,7 +1245,18 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun leaveCallSession() {
+        val directSession = activeDirectSession.value
+            ?.takeIf { callManager.activeRoomId.value == it.dmId }
         callManager.leaveSession()
+        if (directSession != null) {
+            viewModelScope.launch {
+                clientRepository.cancelOrEndDirectCall(
+                    directSession.dmId,
+                    directSession.token,
+                    action = "end"
+                )
+            }
+        }
         if (hostState.value.isServerRunning ||
             clientState.value.connectionStatus == ClientConnectionStatus.CONNECTED
         ) {
