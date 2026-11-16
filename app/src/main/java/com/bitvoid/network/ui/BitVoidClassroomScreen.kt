@@ -651,20 +651,34 @@ fun BitVoidClassroomScreen(
             it.peerId != callUiState.myPeerId && it.isScreenSharing
         }
         val teacherPeer = callUiState.participants.firstOrNull { it.role == ParticipantRole.HOST_TEACHER }
+        val arrangedParticipants = callUiState.participants.sortedWith(
+            compareByDescending<SignalingPeer> { it.isScreenSharing }
+                .thenByDescending { it.role == ParticipantRole.HOST_TEACHER }
+                .thenBy { it.displayName.lowercase() }
+        )
         val remotePresenter = if (isLiveClassSession) {
             screenSharingPeer
                 ?.let { peer -> callUiState.remoteVideoTracks[peer.peerId]?.let { peer to it } }
                 ?: teacherPeer
-                    ?.takeIf { it.peerId != callUiState.myPeerId }
+                    ?.takeIf { it.peerId != callUiState.myPeerId && it.isVideoOn }
                     ?.let { tp -> callUiState.remoteVideoTracks[tp.peerId]?.let { tp to it } }
-                ?: callUiState.remoteVideoTracks.entries.firstOrNull()?.let { (pid, track) ->
-                    val p = callUiState.participants.firstOrNull { it.peerId == pid }
-                        ?: SignalingPeer(pid, pid, ParticipantRole.SPEAKER, channelId)
-                    p to track
-                }
+                ?: callUiState.remoteVideoTracks.entries
+                    .firstOrNull { (pid, _) ->
+                        callUiState.participants.firstOrNull { it.peerId == pid }
+                            ?.let { it.isVideoOn || it.isScreenSharing } == true
+                    }
+                    ?.let { (pid, track) ->
+                        val p = callUiState.participants.firstOrNull { it.peerId == pid }
+                            ?: SignalingPeer(pid, pid, ParticipantRole.SPEAKER, channelId)
+                        p to track
+                    }
         } else {
             null
         }
+        val hasFeaturedMedia = isLiveClassSession &&
+            (callUiState.isScreenSharing ||
+                remotePresenter != null ||
+                (callUiState.localVideoTrack != null && callUiState.isCameraEnabled))
 
         if (showQaChatDrawer) {
             Column(
@@ -860,160 +874,126 @@ fun BitVoidClassroomScreen(
                     }
                 }
 
-                // Featured Presenter Stage
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF05070A)),
-                border = BorderStroke(1.5.dp, VoidMint.copy(alpha = 0.65f)),
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(if ((isLiveClassSession && showDocsStage) || showQaChatDrawer) 170.dp else 220.dp)
-            ) {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    when {
-                        isLiveClassSession && callUiState.isScreenSharing -> {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(16.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Cast,
-                                    contentDescription = null,
-                                    tint = VoidCyan,
-                                    modifier = Modifier.size(38.dp)
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = "SHARING YOUR SCREEN LIVE",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = VoidCyan,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = "All connected students & peers see your screen in real time",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = VoidTextSecondary
-                                )
-                                Spacer(modifier = Modifier.height(10.dp))
-                                Button(
-                                    onClick = callActions.onStopScreenShare,
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = VoidCrimson,
-                                        contentColor = VoidTextPrimary
-                                    ),
-                                    modifier = Modifier.height(48.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Filled.StopScreenShare,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp)
+                // A large stage is useful only while someone is actively presenting video or a screen.
+                // Otherwise participant tiles move up and use the space instead of showing an empty box.
+                if (hasFeaturedMedia) {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF05070A)),
+                        border = BorderStroke(1.5.dp, VoidMint.copy(alpha = 0.65f)),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(if ((isLiveClassSession && showDocsStage) || showQaChatDrawer) 170.dp else 220.dp)
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            when {
+                                isLiveClassSession && callUiState.isScreenSharing -> {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(16.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Cast,
+                                            contentDescription = null,
+                                            tint = VoidCyan,
+                                            modifier = Modifier.size(38.dp)
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = "SHARING YOUR SCREEN LIVE",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            color = VoidCyan,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = "All connected students & peers see your screen in real time",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = VoidTextSecondary
+                                        )
+                                        Spacer(modifier = Modifier.height(10.dp))
+                                        Button(
+                                            onClick = callActions.onStopScreenShare,
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = VoidCrimson,
+                                                contentColor = VoidTextPrimary
+                                            ),
+                                            modifier = Modifier.height(48.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.StopScreenShare,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("STOP SCREEN SHARE", style = MaterialTheme.typography.labelMedium)
+                                        }
+                                    }
+                                }
+
+                                remotePresenter != null -> {
+                                    val (presenterPeer, presenterTrack) = remotePresenter
+                                    WebRtcVideoSurface(
+                                        videoTrack = presenterTrack,
+                                        eglBaseContext = callUiState.eglBaseContext,
+                                        mirror = false,
+                                        modifier = Modifier.fillMaxSize()
                                     )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("STOP SCREEN SHARE", style = MaterialTheme.typography.labelMedium)
+                                    StageVideoOverlayLabel(
+                                        text = "${presenterPeer.displayName} · ${if (presenterPeer.isScreenSharing) "SCREEN SHARE" else presenterPeer.role.label}",
+                                        accent = if (presenterPeer.role == ParticipantRole.HOST_TEACHER) VoidMint else VoidCyan,
+                                        modifier = Modifier
+                                            .align(Alignment.BottomStart)
+                                            .padding(10.dp)
+                                    )
+                                }
+
+                                isLiveClassSession &&
+                                    callUiState.localVideoTrack != null &&
+                                    callUiState.isCameraEnabled -> {
+                                    WebRtcVideoSurface(
+                                        videoTrack = callUiState.localVideoTrack,
+                                        eglBaseContext = callUiState.eglBaseContext,
+                                        mirror = callUiState.isUsingFrontCamera,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                    StageVideoOverlayLabel(
+                                        text = "YOU (${callUiState.localRole.label})",
+                                        accent = VoidMint,
+                                        modifier = Modifier
+                                            .align(Alignment.BottomStart)
+                                            .padding(10.dp)
+                                    )
+                                }
+                            }
+
+                            // Self PiP thumbnail if watching remote presenter while local camera is enabled
+                            if (remotePresenter != null &&
+                                callUiState.localVideoTrack != null &&
+                                callUiState.isCameraEnabled &&
+                                !callUiState.isScreenSharing
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(8.dp)
+                                        .size(width = 88.dp, height = 112.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .border(1.5.dp, VoidMint, RoundedCornerShape(10.dp))
+                                ) {
+                                    WebRtcVideoSurface(
+                                        videoTrack = callUiState.localVideoTrack,
+                                        eglBaseContext = callUiState.eglBaseContext,
+                                        mirror = callUiState.isUsingFrontCamera,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
                                 }
                             }
                         }
-
-                        remotePresenter != null -> {
-                            val (presenterPeer, presenterTrack) = remotePresenter
-                            WebRtcVideoSurface(
-                                videoTrack = presenterTrack,
-                                eglBaseContext = callUiState.eglBaseContext,
-                                mirror = false,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                            StageVideoOverlayLabel(
-                                text = "${presenterPeer.displayName} · ${if (presenterPeer.isScreenSharing) "SCREEN SHARE" else presenterPeer.role.label}",
-                                accent = if (presenterPeer.role == ParticipantRole.HOST_TEACHER) VoidMint else VoidCyan,
-                                modifier = Modifier
-                                    .align(Alignment.BottomStart)
-                                    .padding(10.dp)
-                            )
-                        }
-
-                        isLiveClassSession &&
-                            callUiState.localVideoTrack != null &&
-                            callUiState.isCameraEnabled -> {
-                            WebRtcVideoSurface(
-                                videoTrack = callUiState.localVideoTrack,
-                                eglBaseContext = callUiState.eglBaseContext,
-                                mirror = callUiState.isUsingFrontCamera,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                            StageVideoOverlayLabel(
-                                text = "YOU (${callUiState.localRole.label})",
-                                accent = VoidMint,
-                                modifier = Modifier
-                                    .align(Alignment.BottomStart)
-                                    .padding(10.dp)
-                            )
-                        }
-
-                        else -> {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(16.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Groups,
-                                    contentDescription = null,
-                                    tint = VoidMint,
-                                    modifier = Modifier.size(34.dp)
-                                )
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(
-                                    text = if (callUiState.sessionMode == SignalingSessionMode.LIVE_CLASSROOM) {
-                                        "AUDIO / PRESENTATION STAGE READY"
-                                    } else {
-                                        "LOCAL VOICE CALL ACTIVE"
-                                    },
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = VoidMint,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = if (isLiveClassSession) {
-                                        "Tap Camera or Share Screen below to broadcast live video"
-                                    } else {
-                                        "Audio-only call · camera and video are disabled"
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = VoidTextSecondary
-                                )
-                            }
-                        }
-                    }
-
-                    // Self PiP thumbnail if watching remote presenter while local camera is enabled
-                    if (remotePresenter != null &&
-                        callUiState.localVideoTrack != null &&
-                        callUiState.isCameraEnabled &&
-                        !callUiState.isScreenSharing
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(8.dp)
-                                .size(width = 88.dp, height = 112.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .border(1.5.dp, VoidMint, RoundedCornerShape(10.dp))
-                        ) {
-                            WebRtcVideoSurface(
-                                videoTrack = callUiState.localVideoTrack,
-                                eglBaseContext = callUiState.eglBaseContext,
-                                mirror = callUiState.isUsingFrontCamera,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
                     }
                 }
-            }
 
             // Participant Grid (Speakers & Viewers)
             Text(
@@ -1027,7 +1007,7 @@ fun BitVoidClassroomScreen(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                callUiState.participants.chunked(2).forEach { pair ->
+                arrangedParticipants.chunked(2).forEach { pair ->
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
