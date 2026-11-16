@@ -19,9 +19,9 @@ enum class SignalingSessionMode(val label: String) {
 }
 
 enum class ParticipantRole(val label: String) {
-    HOST_TEACHER("HOST / TEACHER"),
+    HOST_TEACHER("HOST"),
     SPEAKER("SPEAKER"),
-    STUDENT_VIEWER("STUDENT / VIEWER")
+    STUDENT_VIEWER("")
 }
 
 enum class DirectCallPhase {

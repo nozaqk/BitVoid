@@ -3501,6 +3501,7 @@ class BitVoidLocalServer(
                   <button id="voice-call-btn" class="call-icon-btn hidden" type="button" title="Start voice call" aria-label="Start voice call">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.2 3.5 9.7 7.9 7.9 10c1.3 2.8 3.4 4.9 6.2 6.2l2.1-1.8 4.4 2.5-.7 3.1c-.2.8-.9 1.4-1.8 1.4C9.6 20.9 3.1 14.4 2.6 5.9c0-.9.6-1.6 1.4-1.8l3.2-.6Z"/></svg>
                   </button>
+                  <button id="rtc-leave-btn" class="btn-danger hidden" type="button">LEAVE</button>
                   <button id="exit-channel-btn" class="btn-danger hidden" type="button">EXIT</button>
                 </div>
               </header>
@@ -3534,7 +3535,7 @@ class BitVoidLocalServer(
                 </div>
 
                 <div id="live-launcher-controls" class="live-controls-bar">
-                  <button id="rtc-start-class-host-btn" class="btn-primary" type="button">START LIVE CLASS (TEACHER)</button>
+                  <button id="rtc-start-class-host-btn" class="btn-primary" type="button">START LIVE CLASS (HOST)</button>
                   <button id="rtc-join-class-student-btn" class="btn-cyan" type="button">JOIN LIVE CLASS (STUDENT)</button>
                   <button id="rtc-start-call-btn" class="btn-amber" type="button">START VOICE CALL</button>
                 </div>
@@ -3547,11 +3548,6 @@ class BitVoidLocalServer(
 
                 <div id="live-active-controls" class="live-controls-bar hidden">
                   <button id="rtc-mute-btn" class="btn-ghost" type="button">MIC ON</button>
-                  <button id="rtc-cam-btn" class="btn-ghost" type="button">CAM OFF</button>
-                  <button id="rtc-share-screen-btn" class="btn-cyan" type="button">SHARE SCREEN</button>
-                  <input id="rtc-doc-input" type="file" hidden accept=".pdf,.ppt,.pptx,.doc,.docx,.txt,.csv,.png,.jpg,.jpeg,.webp,*/*">
-                  <button id="rtc-upload-doc-btn" class="btn-amber" type="button">UPLOAD DOC / PPT / PDF</button>
-                  <button id="rtc-leave-btn" class="btn-danger" type="button">LEAVE</button>
                   <button id="rtc-end-session-btn" class="btn-danger hidden" type="button">END CLASS</button>
                 </div>
 
@@ -3660,10 +3656,6 @@ class BitVoidLocalServer(
               var rtcJoinClassStudentBtn = document.getElementById('rtc-join-class-student-btn');
               var rtcStartCallBtn = document.getElementById('rtc-start-call-btn');
               var rtcMuteBtn = document.getElementById('rtc-mute-btn');
-              var rtcCamBtn = document.getElementById('rtc-cam-btn');
-              var rtcShareScreenBtn = document.getElementById('rtc-share-screen-btn');
-              var rtcDocInput = document.getElementById('rtc-doc-input');
-              var rtcUploadDocBtn = document.getElementById('rtc-upload-doc-btn');
               var rtcLeaveBtn = document.getElementById('rtc-leave-btn');
               var rtcEndSessionBtn = document.getElementById('rtc-end-session-btn');
               var directIncomingControls = document.getElementById('direct-incoming-controls');
@@ -4665,11 +4657,7 @@ class BitVoidLocalServer(
                   liveJoinIdRow.classList.add('hidden');
                   liveActiveControls.classList.remove('hidden');
                   rtcMuteBtn.textContent = rtcMuted ? 'MIC MUTED' : 'MIC ON';
-                  rtcCamBtn.classList.toggle('hidden', !liveClassMode);
-                  rtcShareScreenBtn.classList.toggle('hidden', !liveClassMode);
-                  rtcUploadDocBtn.classList.toggle('hidden', !liveClassMode);
-                  rtcCamBtn.textContent = rtcVideoOn ? 'CAM ON' : 'CAM OFF';
-                  rtcShareScreenBtn.textContent = rtcScreenSharing ? 'STOP SHARE' : 'SHARE SCREEN';
+                  rtcLeaveBtn.classList.remove('hidden');
                   if (liveClassMode && rtcRole === 'HOST_TEACHER') {
                     rtcEndSessionBtn.classList.remove('hidden');
                   } else {
@@ -4678,6 +4666,7 @@ class BitVoidLocalServer(
                 } else {
                   liveLauncherControls.classList.toggle('hidden', !!activeDm || generalChat);
                   liveActiveControls.classList.add('hidden');
+                  rtcLeaveBtn.classList.add('hidden');
                 }
               }
 
@@ -4777,18 +4766,21 @@ class BitVoidLocalServer(
                     var label = document.createElement('span');
                     label.className = 'live-tile-label';
                     label.textContent = (isSelf ? 'YOU' : (peer.displayName || peer.peerId)) +
-                      (isPresenting ? ' · PRESENTING' : (isTeacher ? ' · TEACHER' : ''));
+                      (isPresenting ? ' · PRESENTING' : (isTeacher ? ' · HOST' : ''));
                     tile.appendChild(label);
                   } else {
+                    // Only the host carries a role word; students are identified by their ID.
                     var roleLabel = peer.role === 'HOST_TEACHER'
-                      ? 'TEACHER'
-                      : (peer.role === 'STUDENT_VIEWER' ? 'STUDENT' : 'SPEAKER');
+                      ? 'HOST'
+                      : (peer.role === 'SPEAKER' ? 'SPEAKER' : '');
                     var audioLabel = peer.isMuted ? 'MUTED' : 'MIC LIVE';
-                    var mediaLabel = isLiveClass ? 'CAMERA OFF' : 'VOICE ONLY';
+                    var subtitle = [roleLabel, audioLabel]
+                      .filter(function (part) { return !!part; })
+                      .join(' · ');
                     appendRtcWaitingState(
                       tile,
                       (isSelf ? 'YOU · ' : '') + (peer.displayName || peer.peerId),
-                      roleLabel + ' · ' + audioLabel + ' · ' + mediaLabel,
+                      subtitle,
                       peer.displayName || peer.peerId
                     );
                   }
@@ -5013,8 +5005,8 @@ class BitVoidLocalServer(
                 rtcMuted = (role === 'STUDENT_VIEWER');
                 renderRtcVideoTiles();
 
-                var wantsVideo = mode === 'LIVE_CLASSROOM' &&
-                  startWithVideo !== false && role !== 'STUDENT_VIEWER';
+                // Live classes are audio-first: the stage no longer exposes camera controls.
+                var wantsVideo = false;
                 var mediaPromise = startWithMedia
                   ? navigator.mediaDevices.getUserMedia({ audio: true, video: wantsVideo })
                       .catch(function (err) {
@@ -5307,45 +5299,6 @@ class BitVoidLocalServer(
                 }
                 joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true, null, null, false);
               });
-              rtcUploadDocBtn.addEventListener('click', function () {
-                if (!rtcRoomId || rtcMode !== 'LIVE_CLASSROOM') return;
-                rtcDocInput.value = '';
-                rtcDocInput.click();
-              });
-              rtcDocInput.addEventListener('change', function () {
-                var file = rtcDocInput.files && rtcDocInput.files[0];
-                if (!file || !rtcRoomId) return;
-                var fd = new FormData();
-                fd.append('file', file, file.name);
-                var headers = activeDm
-                  ? { 'X-DM-Token': activeDm.token }
-                  : (activeChannel && activeChannel.token ? { 'X-Channel-Token': activeChannel.token } : {});
-                rtcUploadDocBtn.disabled = true;
-                rtcUploadDocBtn.textContent = 'UPLOADING...';
-                fetch('/api/live-class/' + encodeURIComponent(rtcRoomId) + '/materials', {
-                  method: 'POST',
-                  headers: headers,
-                  body: fd
-                })
-                  .then(function (r) {
-                    if (!r.ok) throw new Error('Material upload failed (HTTP ' + r.status + ')');
-                    return r.json();
-                  })
-                  .then(function (d) {
-                    if (Array.isArray(d.materials)) rtcMaterials = d.materials;
-                    if (d.activeMaterialId) rtcActiveMaterialId = d.activeMaterialId;
-                    rtcActivePageIndex = d.activePageIndex || 0;
-                    renderLiveMaterials();
-                  })
-                  .catch(function (err) {
-                    showRtcError(err.message || 'Unable to upload presentation material.');
-                  })
-                  .finally(function () {
-                    rtcUploadDocBtn.disabled = false;
-                    rtcUploadDocBtn.textContent = 'UPLOAD DOC / PPT / PDF';
-                    rtcDocInput.value = '';
-                  });
-              });
               rtcSlidePrevBtn.addEventListener('click', function () {
                 if (rtcActivePageIndex > 0) {
                   rtcActivePageIndex = rtcActivePageIndex - 1;
@@ -5363,65 +5316,44 @@ class BitVoidLocalServer(
                 }
               });
               rtcMuteBtn.addEventListener('click', function () {
-                rtcMuted = !rtcMuted;
-                if (rtcLocalStream) {
-                  rtcLocalStream.getAudioTracks().forEach(function (t) { t.enabled = !rtcMuted; });
-                }
-                updateRtcControlsUi();
-                sendRtcMediaState();
-              });
-              rtcCamBtn.addEventListener('click', function () {
-                if (rtcMode !== 'LIVE_CLASSROOM') return;
-                rtcVideoOn = !rtcVideoOn;
-                if (rtcLocalStream && rtcLocalStream.getVideoTracks().length > 0) {
-                  rtcLocalStream.getVideoTracks().forEach(function (t) { t.enabled = rtcVideoOn; });
-                  updateRtcControlsUi();
-                  renderRtcVideoTiles();
-                  sendRtcMediaState();
-                } else if (rtcVideoOn && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-                  navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-                    .then(function (camStream) {
-                      var vTrack = camStream.getVideoTracks()[0];
-                      if (!rtcLocalStream) rtcLocalStream = camStream;
-                      else if (vTrack) rtcLocalStream.addTrack(vTrack);
-                      if (!rtcScreenSharing && vTrack) {
-                        replaceRtcOutgoingVideoTrack(vTrack);
+                // Listeners join without a captured track; the MIC control acquires one on demand.
+                if (!rtcLocalStream || rtcLocalStream.getAudioTracks().length === 0) {
+                  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    showRtcError('This browser does not expose microphone controls.');
+                    return;
+                  }
+                  navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+                    .then(function (micStream) {
+                      var micTrack = micStream.getAudioTracks()[0];
+                      if (!micTrack) return;
+                      if (rtcLocalStream) {
+                        rtcLocalStream.addTrack(micTrack);
+                      } else {
+                        rtcLocalStream = micStream;
                       }
+                      rtcMuted = false;
+                      micTrack.enabled = true;
+                      Object.keys(rtcPeers).forEach(function (pid) {
+                        var audioTransceiver = rtcPeers[pid].getTransceivers().find(function (tr) {
+                          return tr.receiver && tr.receiver.track && tr.receiver.track.kind === 'audio';
+                        });
+                        if (audioTransceiver && audioTransceiver.sender) {
+                          audioTransceiver.sender.replaceTrack(micTrack).catch(function () {});
+                        }
+                      });
                       updateRtcControlsUi();
                       renderRtcVideoTiles();
                       sendRtcMediaState();
                     })
                     .catch(function () {
-                      rtcVideoOn = false;
-                      showRtcError('No camera permission or camera unavailable.');
+                      showRtcError('Microphone permission denied or unavailable.');
                     });
+                  return;
                 }
-              });
-              rtcShareScreenBtn.addEventListener('click', function () {
-                if (rtcMode !== 'LIVE_CLASSROOM') return;
-                if (rtcScreenSharing) {
-                  stopRtcScreenShare();
-                } else if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
-                  navigator.mediaDevices.getDisplayMedia({ video: true, audio: false })
-                    .then(function (screenStream) {
-                      var screenTrack = screenStream.getVideoTracks()[0];
-                      if (!screenTrack) throw new Error('No screen video track was returned.');
-                      rtcScreenStream = screenStream;
-                      rtcScreenSharing = true;
-                      screenTrack.onended = function () {
-                        if (rtcScreenSharing) stopRtcScreenShare();
-                      };
-                      replaceRtcOutgoingVideoTrack(screenTrack);
-                      updateRtcControlsUi();
-                      renderRtcVideoTiles();
-                      sendRtcMediaState();
-                    })
-                    .catch(function (err) {
-                      showRtcError('Screen sharing permission cancelled or unavailable: ' + ((err && err.message) || 'unsupported browser'));
-                    });
-                } else {
-                  showRtcError('This phone browser cannot capture the screen. Use the SCREEN control in the BitVoid Android app, or share from Chrome/Edge/Firefox on desktop.');
-                }
+                rtcMuted = !rtcMuted;
+                rtcLocalStream.getAudioTracks().forEach(function (t) { t.enabled = !rtcMuted; });
+                updateRtcControlsUi();
+                sendRtcMediaState();
               });
               rtcLeaveBtn.addEventListener('click', function () {
                 var leavingDirectCall = activeDm && rtcRoomId === activeDm.dmId;
