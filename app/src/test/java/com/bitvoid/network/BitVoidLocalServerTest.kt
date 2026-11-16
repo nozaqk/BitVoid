@@ -107,7 +107,11 @@ class BitVoidLocalServerTest {
         assertTrue(html.contains("id=\"video-call-btn\""))
         assertTrue(html.contains("/call/invite"))
         assertTrue(html.contains("Camera and microphone require trusted HTTPS"))
-        assertTrue(html.contains("id=\"dm-presence-status\""))
+        assertTrue(html.contains("id=\"pchat-users-list\""))
+        assertTrue(html.contains("id=\"pchat-add-user-btn\""))
+        assertTrue(html.contains("id=\"pchat-discoverable-toggle\""))
+        assertTrue(html.contains("id=\"pchat-add-dialog\""))
+        assertTrue(html.contains("/api/users/status?username="))
         assertTrue(html.contains("id=\"live-class-btn\" class=\"btn-ghost hidden\""))
         assertFalse(html.contains("msg-att-preview"))
         assertFalse(html.contains("msg-att-img"))
@@ -116,7 +120,9 @@ class BitVoidLocalServerTest {
         assertTrue(html.contains("General Chat"))
         assertTrue(html.contains("PUBLIC"))
         assertTrue(html.contains("PRIVATE"))
-        assertTrue(html.contains("id=\"dm-my-username\" type=\"text\" placeholder=\"Your Username ID\" readonly"))
+        assertFalse(html.contains("DIRECT CHAT (USERNAME ID)"))
+        assertFalse(html.contains("id=\"dm-my-username\""))
+        assertFalse(html.contains("id=\"dm-target-username\""))
         conn.disconnect()
     }
 
@@ -143,17 +149,32 @@ class BitVoidLocalServerTest {
         assertEquals(200, certConn.responseCode)
         assertEquals("application/x-x509-ca-cert", certConn.contentType)
         assertTrue(certConn.getHeaderField("Content-Disposition").contains("bitvoid-local-ca.crt"))
+        assertTrue(certConn.getHeaderField("X-BitVoid-CA-SHA256").matches(Regex("([0-9A-F]{2}:){31}[0-9A-F]{2}")))
+        val pemBytes = certConn.inputStream.readBytes()
+        assertTrue(String(pemBytes, StandardCharsets.US_ASCII).startsWith("-----BEGIN CERTIFICATE-----"))
         val certificate = CertificateFactory.getInstance("X.509")
-            .generateCertificate(certConn.inputStream) as X509Certificate
+            .generateCertificate(pemBytes.inputStream()) as X509Certificate
         assertTrue(certificate.basicConstraints >= 0)
         assertTrue(certificate.subjectX500Principal.name.contains("BitVoid Local Root CA"))
         certConn.disconnect()
+
+        val derConn = URL("http://127.0.0.1:$testPort/bitvoid-local-ca.cer")
+            .openConnection() as HttpURLConnection
+        assertEquals(200, derConn.responseCode)
+        assertEquals("application/pkix-cert", derConn.contentType)
+        assertTrue(derConn.getHeaderField("Content-Disposition").contains("bitvoid-local-ca.cer"))
+        val derCertificate = CertificateFactory.getInstance("X.509")
+            .generateCertificate(derConn.inputStream) as X509Certificate
+        assertTrue(certificate.encoded.contentEquals(derCertificate.encoded))
+        derConn.disconnect()
 
         val setupConn = URL("http://127.0.0.1:$testPort/secure-setup")
             .openConnection() as HttpURLConnection
         assertEquals(200, setupConn.responseCode)
         val setupHtml = setupConn.inputStream.bufferedReader().readText()
-        assertTrue(setupHtml.contains("Download certificate"))
+        assertTrue(setupHtml.contains("Save / install CA (.crt)"))
+        assertTrue(setupHtml.contains("DER fallback (.cer)"))
+        assertTrue(setupHtml.contains("Certificate Trust Settings"))
         assertTrue(setupHtml.contains("Open secure BitVoid"))
         setupConn.disconnect()
     }
@@ -709,6 +730,16 @@ class BitVoidLocalServerTest {
         val discovered = (0 until users.length()).map { users.getString(it) }
         assertTrue("visible-01" in discovered)
         assertFalse("hidden-01" in discovered)
+
+        val exactHiddenStatus = JSONObject(
+            URL("$baseUrl/api/users/status?username=hidden-01").readText()
+        )
+        assertEquals("hidden-01", exactHiddenStatus.getString("username"))
+        assertTrue(exactHiddenStatus.getBoolean("available"))
+        assertFalse(
+            JSONObject(URL("$baseUrl/api/users/status?username=missing-01").readText())
+                .getBoolean("available")
+        )
 
         val exactOpen = postJson(
             "/api/dm/open",

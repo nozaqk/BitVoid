@@ -8,9 +8,11 @@ import java.net.InetAddress
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.KeyStore
+import java.security.MessageDigest
 import java.security.PrivateKey
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
+import java.util.Base64
 import java.util.Date
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
@@ -104,6 +106,24 @@ object BitVoidTlsManager {
     @Synchronized
     fun caCertificateDer(context: Context): ByteArray {
         return loadOrCreateAuthority(context.applicationContext).certificate.encoded
+    }
+
+    /** PEM is the most consistently importable form across Android, Windows, macOS, and iOS. */
+    @Synchronized
+    fun caCertificatePem(context: Context): ByteArray {
+        val der = loadOrCreateAuthority(context.applicationContext).certificate.encoded
+        val encoded = Base64.getMimeEncoder(64, "\n".toByteArray(Charsets.US_ASCII))
+            .encodeToString(der)
+        return ("-----BEGIN CERTIFICATE-----\n" + encoded +
+            "\n-----END CERTIFICATE-----\n").toByteArray(Charsets.US_ASCII)
+    }
+
+    @Synchronized
+    fun caCertificateSha256Fingerprint(context: Context): String {
+        val der = loadOrCreateAuthority(context.applicationContext).certificate.encoded
+        return MessageDigest.getInstance("SHA-256")
+            .digest(der)
+            .joinToString(":") { byte -> "%02X".format(byte.toInt() and 0xFF) }
     }
 
     private fun loadOrCreateAuthority(context: Context): CertificateAuthority {
