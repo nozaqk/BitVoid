@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.WifiFind
@@ -59,6 +60,7 @@ import com.bitvoid.network.ui.theme.VoidTextSecondary
 @Composable
 fun BitVoidClientHubContent(
     clientState: ClientState,
+    onBack: () -> Unit,
     onScanNetworks: () -> Unit,
     onConnectNode: (String) -> Unit,
     onOpenWifiSettings: () -> Unit,
@@ -81,6 +83,7 @@ fun BitVoidClientHubContent(
         ClientGatewayBarCard(
             clientState = clientState,
             selectedSsid = selectedSsid,
+            onBack = onBack,
             onScanNetworks = onScanNetworks,
             onConnectNode = { onConnectNode(selectedSsid) },
             onSelectDiscoveredNetwork = { selectedSsid = it.ssid },
@@ -93,6 +96,7 @@ fun BitVoidClientHubContent(
 private fun ClientGatewayBarCard(
     clientState: ClientState,
     selectedSsid: String,
+    onBack: () -> Unit,
     onScanNetworks: () -> Unit,
     onConnectNode: () -> Unit,
     onSelectDiscoveredNetwork: (DiscoveredNetwork) -> Unit,
@@ -126,12 +130,19 @@ private fun ClientGatewayBarCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Filled.WifiFind,
-                        contentDescription = null,
-                        tint = VoidMint,
-                        modifier = Modifier.size(22.dp)
-                    )
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .testTag("client_back_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back to Home",
+                            tint = VoidMint,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
                     Text(
                         text = "WI-FI SCAN",
                         style = MaterialTheme.typography.titleMedium,
