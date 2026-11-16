@@ -1066,7 +1066,7 @@ class BitVoidLocalServerTest {
     }
 
     @Test
-    fun `portal html keeps live class video features but exposes voice-only calls`() {
+    fun `portal html exposes an audio-first live class stage with top-bar leave`() {
         BitVoidChannelManager.ensureDefaultChannel()
         val conn = URL("http://127.0.0.1:$testPort/").openConnection() as HttpURLConnection
         assertEquals(200, conn.responseCode)
@@ -1083,11 +1083,14 @@ class BitVoidLocalServerTest {
         assertTrue(html.contains("rtc-start-call-btn"))
         assertTrue(html.contains("START VOICE CALL"))
         assertFalse(html.contains("START VOICE / VIDEO CALL"))
-        assertTrue(html.contains("rtc-share-screen-btn"))
+        assertTrue(html.contains("rtc-leave-btn"))
+        assertTrue(html.contains("var subtitle = [roleLabel, audioLabel]"))
+        assertFalse(html.contains("rtc-share-screen-btn"))
+        assertFalse(html.contains("rtc-cam-btn"))
+        assertFalse(html.contains("rtc-upload-doc-btn"))
         assertTrue(html.contains("direct-incoming-controls"))
         assertTrue(html.contains("meeting-active"))
         assertTrue(html.contains("var peers = rtcParticipantList.slice();"))
-        assertTrue(html.contains("roleLabel + ' · ' + audioLabel + ' · ' + mediaLabel"))
         assertFalse(html.contains("Camera is off · audio meeting stage is ready"))
         assertFalse(html.contains("Meeting participants"))
         assertTrue(html.contains("Calls are unavailable in General Chat"))
@@ -1269,12 +1272,12 @@ class BitVoidLocalServerTest {
 
         val baseUrl = "http://127.0.0.1:$testPort"
 
-        // 0. Portal HTML exposes Meet slide upload, Live Class code pill, and join-by-ID inputs
+        // 0. Portal HTML exposes the Live Class code pill and join-by-ID inputs
         val portalConn = URL("$baseUrl/").openConnection() as HttpURLConnection
         assertEquals(200, portalConn.responseCode)
         val portalHtml = String(portalConn.inputStream.readBytes(), StandardCharsets.UTF_8)
         portalConn.disconnect()
-        assertTrue(portalHtml.contains("rtc-upload-doc-btn"))
+        assertFalse(portalHtml.contains("rtc-upload-doc-btn"))
         assertTrue(portalHtml.contains("live-class-code-pill"))
         assertTrue(portalHtml.contains("sidebar-class-code-input"))
         assertTrue(portalHtml.contains("live-join-id-row"))

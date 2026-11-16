@@ -1015,7 +1015,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                 channelToken = token,
                 mode = SignalingSessionMode.LIVE_CLASSROOM,
                 role = ParticipantRole.HOST_TEACHER,
-                startWithVideo = true
+                startWithVideo = false
             )
         }
     }
@@ -1067,7 +1067,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                         channelToken = info.token,
                         mode = SignalingSessionMode.LIVE_CLASSROOM,
                         role = ParticipantRole.HOST_TEACHER,
-                        startWithVideo = true,
+                        startWithVideo = false,
                         presetClassCode = info.classCode
                     )
                     clientRepository.fetchLiveClasses(_myUsername.value)
@@ -1110,7 +1110,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                     channelToken = info.token,
                     mode = SignalingSessionMode.LIVE_CLASSROOM,
                     role = if (isCreator) ParticipantRole.HOST_TEACHER else ParticipantRole.STUDENT_VIEWER,
-                    startWithVideo = isCreator,
+                    startWithVideo = false,
                     presetClassCode = info.classCode
                 )
             }.onFailure { err ->
@@ -1143,7 +1143,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                         channelToken = info.token,
                         mode = SignalingSessionMode.LIVE_CLASSROOM,
                         role = if (isCreator) ParticipantRole.HOST_TEACHER else ParticipantRole.STUDENT_VIEWER,
-                        startWithVideo = isCreator,
+                        startWithVideo = false,
                         presetClassCode = info.classCode
                     )
                 }.onFailure { err ->

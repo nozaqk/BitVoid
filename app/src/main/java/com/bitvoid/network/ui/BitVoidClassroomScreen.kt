@@ -47,9 +47,7 @@ import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
-import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Cast
-import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Groups
@@ -58,9 +56,6 @@ import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.PresentToAll
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.StopScreenShare
-import androidx.compose.material.icons.filled.UploadFile
-import androidx.compose.material.icons.filled.Videocam
-import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -424,7 +419,7 @@ fun BitVoidClassroomScreen(
                             }
                         } else {
                             Text(
-                                text = "Host a Live Classroom with camera and screen presentation, or launch a peer-to-peer voice call across connected Wi-Fi devices.",
+                                text = "Host a Live Classroom for live audio lessons, or launch a peer-to-peer voice call across connected Wi-Fi devices.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = VoidTextSecondary
                             )
@@ -452,7 +447,7 @@ fun BitVoidClassroomScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "START LIVE CLASS (HOST / TEACHER)",
+                                text = "START LIVE CLASS (HOST)",
                                 style = MaterialTheme.typography.labelLarge
                             )
                         }
@@ -580,7 +575,8 @@ fun BitVoidClassroomScreen(
                 Column {
                     Text(
                         text = if (callUiState.sessionMode == SignalingSessionMode.LIVE_CLASSROOM) {
-                            "$channelName · ${callUiState.localRole.label}"
+                            val roleLabel = callUiState.localRole.label
+                            if (roleLabel.isBlank()) channelName else "$channelName · $roleLabel"
                         } else {
                             "VOICE CALL · ${callUiState.participants.size.coerceAtLeast(1)} PEERS"
                         },
@@ -770,50 +766,12 @@ fun BitVoidClassroomScreen(
                 }
 
                 if (isLiveClassSession) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        OutlinedButton(
-                            onClick = {
-                                documentPickerLauncher.launch(
-                                    arrayOf(
-                                        "application/pdf",
-                                        "application/vnd.ms-powerpoint",
-                                        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                                        "application/msword",
-                                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                        "text/*",
-                                        "image/*",
-                                        "*/*"
-                                    )
-                                )
-                            },
-                            border = BorderStroke(1.dp, VoidAmber),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidAmber),
-                            contentPadding = PaddingValues(horizontal = 10.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .testTag("classroom_upload_doc_button")
+                    if (callUiState.roomMaterials.isNotEmpty() || showDocsStage) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                imageVector = Icons.Filled.UploadFile,
-                                contentDescription = "Upload document, PPT, or PDF to live class",
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = if (callUiState.isUploadingMaterial) "UPLOADING..." else "UPLOAD DOC / PPT / PDF",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-
-                        if (callUiState.roomMaterials.isNotEmpty() || showDocsStage) {
                             OutlinedButton(
                                 onClick = { showDocsStage = !showDocsStage },
                                 border = BorderStroke(1.dp, if (showDocsStage) VoidCyan else VoidBorder),
@@ -942,7 +900,10 @@ fun BitVoidClassroomScreen(
                                         modifier = Modifier.fillMaxSize()
                                     )
                                     StageVideoOverlayLabel(
-                                        text = "${presenterPeer.displayName} · ${if (presenterPeer.isScreenSharing) "SCREEN SHARE" else presenterPeer.role.label}",
+                                        text = listOf(
+                                            presenterPeer.displayName,
+                                            if (presenterPeer.isScreenSharing) "SCREEN SHARE" else presenterPeer.role.label
+                                        ).filter { it.isNotBlank() }.joinToString(" · "),
                                         accent = if (presenterPeer.role == ParticipantRole.HOST_TEACHER) VoidMint else VoidCyan,
                                         modifier = Modifier
                                             .align(Alignment.BottomStart)
@@ -960,7 +921,9 @@ fun BitVoidClassroomScreen(
                                         modifier = Modifier.fillMaxSize()
                                     )
                                     StageVideoOverlayLabel(
-                                        text = "YOU (${callUiState.localRole.label})",
+                                        text = listOf("YOU", callUiState.localRole.label)
+                                            .filter { it.isNotBlank() }
+                                            .joinToString(" · "),
                                         accent = VoidMint,
                                         modifier = Modifier
                                             .align(Alignment.BottomStart)
@@ -1071,34 +1034,6 @@ fun BitVoidClassroomScreen(
                 testTag = "classroom_mic_button"
             )
 
-            if (isLiveClassSession) {
-                CallDockButton(
-                    icon = if (callUiState.isCameraEnabled) Icons.Filled.Videocam else Icons.Filled.VideocamOff,
-                    label = if (callUiState.isCameraEnabled) "CAM ON" else "CAM",
-                    active = callUiState.isCameraEnabled,
-                    activeColor = VoidMint,
-                    inactiveColor = VoidTextSecondary,
-                    onClick = {
-                        if (!callUiState.isCameraEnabled) {
-                            runWithCamMicPermissions { callActions.onToggleCamera() }
-                        } else {
-                            callActions.onToggleCamera()
-                        }
-                    },
-                    testTag = "classroom_camera_button"
-                )
-
-                CallDockButton(
-                    icon = Icons.Filled.Cameraswitch,
-                    label = "FLIP",
-                    active = callUiState.isCameraEnabled,
-                    activeColor = VoidCyan,
-                    inactiveColor = VoidTextSecondary,
-                    onClick = callActions.onSwitchCamera,
-                    testTag = "classroom_flip_button"
-                )
-            }
-
             CallDockButton(
                 icon = if (callUiState.isSpeakerphoneOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
                 label = if (callUiState.isSpeakerphoneOn) "SPKR" else "EAR",
@@ -1107,34 +1042,6 @@ fun BitVoidClassroomScreen(
                 inactiveColor = VoidTextSecondary,
                 onClick = callActions.onToggleSpeakerphone,
                 testTag = "classroom_speaker_button"
-            )
-
-            if (isLiveClassSession) {
-                CallDockButton(
-                    icon = if (callUiState.isScreenSharing) Icons.Filled.StopScreenShare else Icons.Filled.PresentToAll,
-                    label = if (callUiState.isScreenSharing) "STOP" else "SCREEN",
-                    active = callUiState.isScreenSharing,
-                    activeColor = VoidAmber,
-                    inactiveColor = VoidCyan,
-                    onClick = {
-                        if (callUiState.isScreenSharing) {
-                            callActions.onStopScreenShare()
-                        } else {
-                            requestSystemScreenShare()
-                        }
-                    },
-                    testTag = "classroom_screenshare_button"
-                )
-            }
-
-            CallDockButton(
-                icon = Icons.Filled.Chat,
-                label = if (isDirectRoom) "CHAT" else "Q&A",
-                active = showQaChatDrawer,
-                activeColor = VoidMint,
-                inactiveColor = VoidTextSecondary,
-                onClick = { showQaChatDrawer = !showQaChatDrawer },
-                testTag = "classroom_chat_toggle_button"
             )
         }
         }
@@ -1290,22 +1197,23 @@ private fun ParticipantGridTile(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        Text(
-                            text = buildString {
-                                append(
-                                    when (peer.role) {
-                                        ParticipantRole.HOST_TEACHER -> "TEACHER"
-                                        ParticipantRole.SPEAKER -> "SPEAKER"
-                                        ParticipantRole.STUDENT_VIEWER -> "STUDENT"
-                                    }
-                                )
-                                if (peer.isScreenSharing) append(" · SCREEN")
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (peer.role == ParticipantRole.HOST_TEACHER) VoidMint else VoidTextSecondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        // Only the host carries a role word; students are identified by their ID.
+                        val roleText = buildString {
+                            if (peer.role == ParticipantRole.HOST_TEACHER) append("HOST")
+                            if (peer.isScreenSharing) {
+                                if (isNotEmpty()) append(" · ")
+                                append("SCREEN")
+                            }
+                        }
+                        if (roleText.isNotEmpty()) {
+                            Text(
+                                text = roleText,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (peer.role == ParticipantRole.HOST_TEACHER) VoidMint else VoidTextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                     Icon(
                         imageVector = if (peer.isMuted) Icons.Filled.MicOff else Icons.Filled.Mic,
@@ -1330,7 +1238,11 @@ private fun ParticipantBadgeChip(peer: SignalingPeer) {
             .padding(horizontal = 8.dp, vertical = 4.dp)
     ) {
         Text(
-            text = "${peer.displayName} · ${if (peer.role == ParticipantRole.HOST_TEACHER) "TEACHER" else "PEER"}",
+            text = peer.displayName + when (peer.role) {
+                ParticipantRole.HOST_TEACHER -> " · HOST"
+                ParticipantRole.SPEAKER -> " · SPEAKER"
+                ParticipantRole.STUDENT_VIEWER -> ""
+            },
             style = MaterialTheme.typography.labelSmall,
             color = accent
         )

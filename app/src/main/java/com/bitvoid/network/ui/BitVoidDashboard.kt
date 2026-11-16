@@ -1276,7 +1276,7 @@ private fun HostCredentialsCard(
 
             if (hostState.isSecureServerRunning) {
                 CredentialRow(
-                    label = "SECURE VOICE CALL / LIVE CLASS PORTAL (MIC + CLASS CAMERA)",
+                    label = "SECURE VOICE CALL / LIVE CLASS PORTAL (MIC + HOST STAGE)",
                     value = hostState.securePortalUrl,
                     canCopy = true,
                     valueColor = VoidCyan,
