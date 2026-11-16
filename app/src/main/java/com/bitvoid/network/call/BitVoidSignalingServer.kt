@@ -23,6 +23,26 @@ enum class ParticipantRole(val label: String) {
     STUDENT_VIEWER("STUDENT / VIEWER")
 }
 
+enum class DirectCallPhase {
+    IDLE,
+    RINGING,
+    ACCEPTED,
+    DECLINED,
+    CANCELED,
+    ENDED,
+    MISSED
+}
+
+data class DirectCallInvitation(
+    val dmId: String,
+    val callerUsername: String,
+    val calleeUsername: String,
+    val withVideo: Boolean,
+    val phase: DirectCallPhase,
+    val createdAtMs: Long,
+    val updatedAtMs: Long
+)
+
 data class SignalingPeer(
     val peerId: String,
     val displayName: String,
@@ -109,6 +129,8 @@ object BitVoidSignalingServer {
     private val CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".toCharArray()
     private val rooms = ConcurrentHashMap<String, InternalRoom>()
     private val classCodeToRoomId = ConcurrentHashMap<String, String>()
+    private val directCallInvitations = ConcurrentHashMap<String, DirectCallInvitation>()
+    private const val DIRECT_CALL_RING_TIMEOUT_MS = 180_000L
 
     private val _roomsFlow = MutableStateFlow<Map<String, SignalingRoomState>>(emptyMap())
     val roomsFlow: StateFlow<Map<String, SignalingRoomState>> = _roomsFlow.asStateFlow()
@@ -126,7 +148,8 @@ object BitVoidSignalingServer {
         if (cleanRoom.isEmpty()) return false
 
         if (cleanRoom.startsWith("dm__", ignoreCase = false)) {
-            return BitVoidDirectChatManager.validateToken(token, requiredDmId = cleanRoom) != null
+            return BitVoidDirectChatManager.validateToken(token, requiredDmId = cleanRoom) != null &&
+                isDirectCallAccepted(cleanRoom)
         }
 
         if (cleanRoom.startsWith("LC-", ignoreCase = false)) {
@@ -293,6 +316,125 @@ object BitVoidSignalingServer {
                 isHidden = room.isHidden
             )
         }
+    }
+
+    @Synchronized
+    fun requestDirectCall(session: com.bitvoid.network.direct.DirectSession, withVideo: Boolean): DirectCallInvitation {
+        val now = System.currentTimeMillis()
+        val current = currentDirectCallInvitation(session.dmId)
+        if (current != null && current.phase in setOf(DirectCallPhase.RINGING, DirectCallPhase.ACCEPTED)) {
+            if (!current.callerUsername.equals(session.myUsername, ignoreCase = true)) {
+                throw IllegalStateException("@${current.callerUsername} is already calling you.")
+            }
+            return current
+        }
+        val invite = DirectCallInvitation(
+            dmId = session.dmId,
+            callerUsername = session.myUsername,
+            calleeUsername = session.peerUsername,
+            withVideo = withVideo,
+            phase = DirectCallPhase.RINGING,
+            createdAtMs = now,
+            updatedAtMs = now
+        )
+        directCallInvitations[session.dmId] = invite
+        return invite
+    }
+
+    @Synchronized
+    fun respondToDirectCall(
+        session: com.bitvoid.network.direct.DirectSession,
+        accept: Boolean
+    ): DirectCallInvitation? {
+        val current = currentDirectCallInvitation(session.dmId) ?: return null
+        if (!current.calleeUsername.equals(session.myUsername, ignoreCase = true) ||
+            current.phase != DirectCallPhase.RINGING
+        ) {
+            return null
+        }
+        val updated = current.copy(
+            phase = if (accept) DirectCallPhase.ACCEPTED else DirectCallPhase.DECLINED,
+            updatedAtMs = System.currentTimeMillis()
+        )
+        directCallInvitations[session.dmId] = updated
+        return updated
+    }
+
+    @Synchronized
+    fun cancelOrEndDirectCall(session: com.bitvoid.network.direct.DirectSession): DirectCallInvitation? {
+        val current = currentDirectCallInvitation(session.dmId) ?: return null
+        val isParticipant = current.callerUsername.equals(session.myUsername, ignoreCase = true) ||
+            current.calleeUsername.equals(session.myUsername, ignoreCase = true)
+        if (!isParticipant) return null
+        val updated = current.copy(
+            phase = if (current.phase == DirectCallPhase.RINGING) {
+                DirectCallPhase.CANCELED
+            } else {
+                DirectCallPhase.ENDED
+            },
+            updatedAtMs = System.currentTimeMillis()
+        )
+        directCallInvitations[session.dmId] = updated
+        if (current.phase == DirectCallPhase.ACCEPTED) {
+            endSession(session.dmId)
+        }
+        return updated
+    }
+
+    @Synchronized
+    fun currentDirectCallInvitation(dmId: String): DirectCallInvitation? {
+        val current = directCallInvitations[dmId] ?: return null
+        if (current.phase == DirectCallPhase.RINGING &&
+            System.currentTimeMillis() - current.createdAtMs > DIRECT_CALL_RING_TIMEOUT_MS
+        ) {
+            val missed = current.copy(
+                phase = DirectCallPhase.MISSED,
+                updatedAtMs = System.currentTimeMillis()
+            )
+            directCallInvitations[dmId] = missed
+            return missed
+        }
+        return current
+    }
+
+    fun isDirectCallAccepted(dmId: String): Boolean {
+        return currentDirectCallInvitation(dmId)?.phase == DirectCallPhase.ACCEPTED
+    }
+
+    fun incomingDirectCallFor(rawUsername: String?): DirectCallInvitation? {
+        val username = rawUsername?.trim()?.removePrefix("@")?.takeIf { it.isNotEmpty() } ?: return null
+        return directCallInvitations.values
+            .mapNotNull { currentDirectCallInvitation(it.dmId) }
+            .filter { it.phase == DirectCallPhase.RINGING }
+            .filter { it.calleeUsername.equals(username, ignoreCase = true) }
+            .minByOrNull { it.createdAtMs }
+    }
+
+    fun directCallStatusToJson(dmId: String, session: com.bitvoid.network.direct.DirectSession): String {
+        val roomState = getRoomState(dmId)
+        val invite = currentDirectCallInvitation(dmId)
+        return JSONObject().apply {
+            put("roomId", dmId)
+            put("isActive", roomState?.isActive == true && invite?.phase == DirectCallPhase.ACCEPTED)
+            put("mode", SignalingSessionMode.VOICE_VIDEO_CALL.name)
+            put("hostPeerId", roomState?.hostPeerId.orEmpty())
+            put("participantCount", roomState?.peers?.size ?: 0)
+            put("peers", peersToJsonArray(roomState?.peers.orEmpty()))
+            put("callPhase", invite?.phase?.name ?: DirectCallPhase.IDLE.name)
+            put("callerUsername", invite?.callerUsername.orEmpty())
+            put("calleeUsername", invite?.calleeUsername.orEmpty())
+            put("withVideo", invite?.withVideo == true)
+            put("isIncoming", invite?.let {
+                it.phase == DirectCallPhase.RINGING &&
+                    it.calleeUsername.equals(session.myUsername, ignoreCase = true)
+            } == true)
+            put("isOutgoing", invite?.let {
+                it.phase == DirectCallPhase.RINGING &&
+                    it.callerUsername.equals(session.myUsername, ignoreCase = true)
+            } == true)
+            put("createdAtMs", invite?.createdAtMs ?: 0L)
+            put("updatedAtMs", invite?.updatedAtMs ?: 0L)
+        }.toString()
     }
 
     fun joinRoom(
@@ -605,6 +747,11 @@ object BitVoidSignalingServer {
     }
 
     fun endSession(roomId: String, requestedByPeerId: String? = null) {
+        if (roomId.startsWith("dm__", ignoreCase = false)) {
+            directCallInvitations.computeIfPresent(roomId) { _, invite ->
+                invite.copy(phase = DirectCallPhase.ENDED, updatedAtMs = System.currentTimeMillis())
+            }
+        }
         val room = rooms.remove(roomId) ?: return
         synchronized(room) {
             room.classCode?.let { classCodeToRoomId.remove(it) }
@@ -690,6 +837,7 @@ object BitVoidSignalingServer {
         }
         rooms.clear()
         classCodeToRoomId.clear()
+        directCallInvitations.clear()
         publishRoomsSnapshot()
     }
 

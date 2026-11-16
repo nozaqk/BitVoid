@@ -322,6 +322,28 @@ class BitVoidLocalServer(
                     handleDirectMessagePost(dmId, session, authToken, ephemeralToken)
                 }
 
+                method == Method.POST && rawUri.startsWith("/api/dm/") && rawUri.endsWith("/call/invite") -> {
+                    val dmId = extractDmIdFromPath(rawUri, "/call/invite")
+                    handleDirectCallInvite(dmId, session, authToken, ephemeralToken)
+                }
+
+                method == Method.POST && rawUri.startsWith("/api/dm/") && rawUri.endsWith("/call/accept") -> {
+                    val dmId = extractDmIdFromPath(rawUri, "/call/accept")
+                    handleDirectCallResponse(dmId, authToken, ephemeralToken, accept = true)
+                }
+
+                method == Method.POST && rawUri.startsWith("/api/dm/") && rawUri.endsWith("/call/decline") -> {
+                    val dmId = extractDmIdFromPath(rawUri, "/call/decline")
+                    handleDirectCallResponse(dmId, authToken, ephemeralToken, accept = false)
+                }
+
+                method == Method.POST && rawUri.startsWith("/api/dm/") &&
+                    (rawUri.endsWith("/call/cancel") || rawUri.endsWith("/call/end")) -> {
+                    val suffix = if (rawUri.endsWith("/call/cancel")) "/call/cancel" else "/call/end"
+                    val dmId = extractDmIdFromPath(rawUri, suffix)
+                    handleDirectCallCancelOrEnd(dmId, authToken, ephemeralToken)
+                }
+
                 // Live Class & Shared Presentation Materials POST endpoints
                 method == Method.POST && rawUri == "/api/live-class/start" -> {
                     requireSameWifiNode(session)
@@ -359,6 +381,14 @@ class BitVoidLocalServer(
 
                 rawUri == "/api/node" -> {
                     serveNodeIdentity(ephemeralToken, isHead = (method == Method.HEAD))
+                }
+
+                rawUri == "/bitvoid-local-ca.crt" -> {
+                    serveLocalCaCertificate(ephemeralToken, isHead = (method == Method.HEAD))
+                }
+
+                rawUri == "/secure-setup" -> {
+                    serveSecureBrowserSetup(ephemeralToken, isHead = (method == Method.HEAD))
                 }
 
                 isCaptivePortalProbe(normalizedPath, sanitizedHeaders) -> {
@@ -412,6 +442,13 @@ class BitVoidLocalServer(
                 rawUri == "/api/users" -> {
                     requireSameWifiNode(session)
                     serveUsersListJson(ephemeralToken, isHead = (method == Method.HEAD))
+                }
+
+                rawUri == "/api/calls/incoming" -> {
+                    requireSameWifiNode(session)
+                    @Suppress("DEPRECATION")
+                    val username = session.parms["username"]
+                    serveIncomingCallJson(username, ephemeralToken, isHead = (method == Method.HEAD))
                 }
 
                 rawUri.startsWith("/api/dm/") && rawUri.endsWith("/messages") -> {
@@ -660,6 +697,51 @@ class BitVoidLocalServer(
         return response
     }
 
+    private fun serveLocalCaCertificate(ephemeralToken: String, isHead: Boolean): Response {
+        val bytes = BitVoidTlsManager.caCertificateDer(context)
+        val response = newFixedLengthResponse(
+            Response.Status.OK,
+            "application/x-x509-ca-cert",
+            ByteArrayInputStream(if (isHead) ByteArray(0) else bytes),
+            bytes.size.toLong()
+        )
+        response.setGzipEncoding(false)
+        response.addHeader("Content-Length", bytes.size.toString())
+        response.addHeader("Content-Disposition", "attachment; filename=bitvoid-local-ca.crt")
+        response.addHeader("Cache-Control", "no-store")
+        response.addHeader("X-BitVoid-Session", ephemeralToken)
+        if (!isHead) totalBytesServed.addAndGet(bytes.size.toLong())
+        return response
+    }
+
+    private fun serveSecureBrowserSetup(ephemeralToken: String, isHead: Boolean): Response {
+        val state = BitVoidNodeStateHolder.hostState.value
+        val secureUrl = state.securePortalUrl
+        val body = """
+            <!doctype html>
+            <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+            <title>BitVoid secure browser setup</title>
+            <style>
+            body{margin:0;background:#07100d;color:#eef8f4;font:16px system-ui,sans-serif}.wrap{max-width:720px;margin:auto;padding:28px 18px 52px}
+            .card{background:#101c18;border:1px solid #2a4840;border-radius:18px;padding:22px;margin:16px 0}h1,h2{color:#74f6c3}code{color:#7dddf2;overflow-wrap:anywhere}
+            a,.button{color:#07100d;background:#74f6c3;text-decoration:none;font-weight:800;border-radius:10px;padding:13px 16px;display:inline-block;margin:6px 8px 6px 0}.muted{color:#aec2ba}
+            </style></head><body><main class="wrap"><h1>Secure camera and microphone setup</h1>
+            <div class="card"><h2>1. Download the BitVoid local CA</h2><p>This one-time trust step lets a browser treat the private LAN gateway as HTTPS.</p><a class="button" href="/bitvoid-local-ca.crt" download>Download certificate</a></div>
+            <div class="card"><h2>2. Install and trust it</h2><p><b>Android:</b> Settings → Security / Encryption & credentials → Install a certificate → CA certificate.</p><p><b>Windows:</b> open the file → Install Certificate → Local Machine → Trusted Root Certification Authorities.</p><p><b>macOS/iOS:</b> install the profile, then enable full trust for the BitVoid Local Root CA.</p><p class="muted">Only install a certificate from the phone currently hosting your trusted BitVoid node. Remove it when you no longer use that node.</p></div>
+            <div class="card"><h2>3. Open the secure portal</h2><p><code>${htmlEscape(secureUrl)}</code></p><a class="button" id="secure-portal-link" href="${htmlEscape(secureUrl)}">Open secure BitVoid</a><p class="muted">If the browser still warns, fully close it after installing the certificate and reopen this address. Camera and microphone permission prompts appear only on the HTTPS page.</p></div>
+            </main><script>
+            (function(){var u=new URLSearchParams(location.search).get('username');if(!u)return;var a=document.getElementById('secure-portal-link');a.href=${JSONObject.quote(secureUrl)}+'?username='+encodeURIComponent(u);})();
+            </script></body></html>
+        """.trimIndent()
+        return buildPaddedTextResponse(
+            status = Response.Status.OK,
+            mimeType = "text/html; charset=utf-8",
+            body = body,
+            token = ephemeralToken,
+            isHead = isHead
+        )
+    }
+
     // ───────────────────────────────────────────────────────────────────────────
     // Channel API Handlers
     // ───────────────────────────────────────────────────────────────────────────
@@ -844,14 +926,84 @@ class BitVoidLocalServer(
         ephemeralToken: String,
         isHead: Boolean
     ): Response {
-        BitVoidDirectChatManager.validateToken(authToken, requiredDmId = dmId)
+        val directSession = BitVoidDirectChatManager.validateToken(authToken, requiredDmId = dmId)
             ?: return unauthorizedResponse(ephemeralToken)
         return buildPaddedTextResponse(
             status = Response.Status.OK,
             mimeType = "application/json; charset=utf-8",
-            body = BitVoidSignalingServer.roomStatusToJson(dmId),
+            body = BitVoidSignalingServer.directCallStatusToJson(dmId, directSession),
             token = ephemeralToken,
             isHead = isHead
+        )
+    }
+
+    private fun handleDirectCallInvite(
+        dmId: String,
+        session: IHTTPSession,
+        authToken: String?,
+        ephemeralToken: String
+    ): Response {
+        val directSession = BitVoidDirectChatManager.validateToken(authToken, requiredDmId = dmId)
+            ?: return unauthorizedResponse(ephemeralToken)
+        val body = runCatching { JSONObject(readPostBody(session)) }.getOrDefault(JSONObject())
+        return try {
+            BitVoidSignalingServer.requestDirectCall(
+                session = directSession,
+                withVideo = body.optBoolean("withVideo", false)
+            )
+            buildPaddedTextResponse(
+                status = Response.Status.OK,
+                mimeType = "application/json; charset=utf-8",
+                body = BitVoidSignalingServer.directCallStatusToJson(dmId, directSession),
+                token = ephemeralToken
+            )
+        } catch (e: IllegalStateException) {
+            buildPaddedTextResponse(
+                status = Response.Status.CONFLICT,
+                mimeType = "application/json; charset=utf-8",
+                body = JSONObject().put("error", "call_conflict")
+                    .put("detail", e.message ?: "Another call is already ringing.").toString(),
+                token = ephemeralToken
+            )
+        }
+    }
+
+    private fun handleDirectCallResponse(
+        dmId: String,
+        authToken: String?,
+        ephemeralToken: String,
+        accept: Boolean
+    ): Response {
+        val directSession = BitVoidDirectChatManager.validateToken(authToken, requiredDmId = dmId)
+            ?: return unauthorizedResponse(ephemeralToken)
+        val updated = BitVoidSignalingServer.respondToDirectCall(directSession, accept)
+            ?: return buildPaddedTextResponse(
+                status = Response.Status.CONFLICT,
+                mimeType = "application/json; charset=utf-8",
+                body = """{"error":"call_not_ringing","detail":"This invitation is no longer waiting for your response."}""",
+                token = ephemeralToken
+            )
+        return buildPaddedTextResponse(
+            status = Response.Status.OK,
+            mimeType = "application/json; charset=utf-8",
+            body = BitVoidSignalingServer.directCallStatusToJson(updated.dmId, directSession),
+            token = ephemeralToken
+        )
+    }
+
+    private fun handleDirectCallCancelOrEnd(
+        dmId: String,
+        authToken: String?,
+        ephemeralToken: String
+    ): Response {
+        val directSession = BitVoidDirectChatManager.validateToken(authToken, requiredDmId = dmId)
+            ?: return unauthorizedResponse(ephemeralToken)
+        BitVoidSignalingServer.cancelOrEndDirectCall(directSession)
+        return buildPaddedTextResponse(
+            status = Response.Status.OK,
+            mimeType = "application/json; charset=utf-8",
+            body = BitVoidSignalingServer.directCallStatusToJson(dmId, directSession),
+            token = ephemeralToken
         )
     }
 
@@ -1402,6 +1554,29 @@ class BitVoidLocalServer(
             status = Response.Status.OK,
             mimeType = "application/json; charset=utf-8",
             body = """{"count":${users.size},"users":[$usersJson]}""",
+            token = ephemeralToken,
+            isHead = isHead
+        )
+    }
+
+    private fun serveIncomingCallJson(
+        username: String?,
+        ephemeralToken: String,
+        isHead: Boolean
+    ): Response {
+        val invite = BitVoidSignalingServer.incomingDirectCallFor(username)
+        val payload = JSONObject().apply {
+            put("hasIncomingCall", invite != null)
+            put("dmId", invite?.dmId.orEmpty())
+            put("callerUsername", invite?.callerUsername.orEmpty())
+            put("calleeUsername", invite?.calleeUsername.orEmpty())
+            put("withVideo", invite?.withVideo == true)
+            put("createdAtMs", invite?.createdAtMs ?: 0L)
+        }.toString()
+        return buildPaddedTextResponse(
+            status = Response.Status.OK,
+            mimeType = "application/json; charset=utf-8",
+            body = payload,
             token = ephemeralToken,
             isHead = isHead
         )
@@ -3246,12 +3421,17 @@ class BitVoidLocalServer(
               var rtcMuted = false;
               var rtcVideoOn = false;
               var rtcScreenSharing = false;
+              var directCallPromptOpen = false;
+              var directCallConnecting = false;
+              var directCallIncomingOpenPending = false;
+              var directCallLastPhase = 'IDLE';
               try {
-                var storedUser = localStorage.getItem('bv_username');
+                var queryUser = new URLSearchParams(location.search).get('username');
+                var storedUser = queryUser || localStorage.getItem('bv_username');
                 if (!storedUser) {
                   storedUser = 'web-' + Math.floor(1000 + Math.random() * 9000);
-                  localStorage.setItem('bv_username', storedUser);
                 }
+                localStorage.setItem('bv_username', storedUser);
                 dmMyInput.value = storedUser;
               } catch (e) {
                 dmMyInput.value = 'web-' + Math.floor(1000 + Math.random() * 9000);
@@ -3652,6 +3832,9 @@ class BitVoidLocalServer(
                   .then(function (data) {
                     activeChannel = null;
                     activeDm = data;
+                    directCallPromptOpen = false;
+                    directCallConnecting = false;
+                    directCallLastPhase = 'IDLE';
                     seenMsgIds = {};
                     chatBox.innerHTML = '';
                     activeTitle.textContent = '@' + data.peerUsername;
@@ -3683,7 +3866,8 @@ class BitVoidLocalServer(
                   .catch(function (err) {
                     dmErr.textContent = err.message || 'Unable to start direct chat';
                     dmErr.classList.remove('hidden');
-                  });
+                  })
+                  .then(function () { directCallIncomingOpenPending = false; });
               }
 
               function connectDirectWs(dmId, token) {
@@ -3730,17 +3914,57 @@ class BitVoidLocalServer(
                   })
                     .then(function (r) { return r.ok ? r.json() : null; })
                     .then(function (st) {
-                      if (!st) return;
-                      if (st.isActive) {
+                      if (!st || !activeDm) return;
+                      var phase = st.callPhase || 'IDLE';
+                      directCallLastPhase = phase;
+                      if (phase === 'RINGING' && st.isOutgoing) {
                         voiceCallBtn.classList.add('active');
-                        videoCallBtn.classList.add('active');
-                        voiceCallBtn.title = 'Join active call (' + (st.participantCount || 1) + ' peers)';
-                        videoCallBtn.title = 'Join active video call (' + (st.participantCount || 1) + ' peers)';
-                        if (!rtcSocket) {
-                          liveRoomStatusEl.textContent = 'Direct call ringing/active · ' + (st.participantCount || 1) + ' peer(s)';
-                          renderRtcParticipants(st.peers || []);
+                        videoCallBtn.classList.toggle('active', !!st.withVideo);
+                        liveStagePanel.classList.remove('hidden');
+                        liveRoomStatusEl.textContent = 'Ringing @' + activeDm.peerUsername + ' · waiting for accept or decline';
+                      } else if (phase === 'RINGING' && st.isIncoming && !directCallPromptOpen && !rtcSocket) {
+                        directCallPromptOpen = true;
+                        liveStagePanel.classList.remove('hidden');
+                        liveRoomStatusEl.textContent = 'Incoming ' + (st.withVideo ? 'video' : 'voice') + ' call from @' + st.callerUsername;
+                        var accepted = window.confirm(
+                          'Incoming ' + (st.withVideo ? 'video' : 'voice') + ' call from @' + st.callerUsername + '.\n\nAccept this call? Camera and microphone connect only after you accept.'
+                        );
+                        if (accepted && !window.isSecureContext) {
+                          directCallPromptOpen = false;
+                          window.alert('To accept, first install the BitVoid local certificate and reopen the trusted HTTPS portal. The caller will keep ringing while you complete setup.');
+                          window.location.href = '/secure-setup?username=' + encodeURIComponent(activeDm.myUsername || '');
+                          return;
                         }
-                      } else if (!rtcSocket) {
+                        var responseAction = accepted ? 'accept' : 'decline';
+                        fetch('/api/dm/' + encodeURIComponent(activeDm.dmId) + '/call/' + responseAction, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json', 'X-DM-Token': activeDm.token },
+                          body: '{}'
+                        }).then(function (r) {
+                          if (!r.ok) throw new Error('Call response failed (HTTP ' + r.status + ')');
+                          return r.json();
+                        }).then(function () {
+                          directCallPromptOpen = false;
+                          if (accepted) {
+                            directCallConnecting = true;
+                            joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true, null, null, !!st.withVideo);
+                          } else {
+                            liveRoomStatusEl.textContent = 'Call declined';
+                          }
+                        }).catch(function (err) {
+                          directCallPromptOpen = false;
+                          showRtcError(err.message || 'Unable to answer call.');
+                        });
+                      } else if (phase === 'ACCEPTED' && !rtcSocket && !directCallConnecting &&
+                          st.callerUsername && st.callerUsername.toLowerCase() === String(activeDm.myUsername).toLowerCase()) {
+                        directCallConnecting = true;
+                        joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true, null, null, !!st.withVideo);
+                      } else if (phase === 'DECLINED' && !rtcSocket) {
+                        voiceCallBtn.classList.remove('active');
+                        videoCallBtn.classList.remove('active');
+                        liveRoomStatusEl.textContent = '@' + activeDm.peerUsername + ' declined the call';
+                      } else if ((phase === 'MISSED' || phase === 'CANCELED' || phase === 'ENDED' || phase === 'IDLE') && !rtcSocket) {
+                        directCallConnecting = false;
                         voiceCallBtn.classList.remove('active');
                         videoCallBtn.classList.remove('active');
                         voiceCallBtn.title = 'Start voice call';
@@ -3923,6 +4147,19 @@ class BitVoidLocalServer(
               }
 
               function pollChannelsAndFeed() {
+                var incomingUsername = (dmMyInput.value || '').trim().replace(/^@/, '');
+                if (incomingUsername && !directCallIncomingOpenPending) {
+                  fetch('/api/calls/incoming?username=' + encodeURIComponent(incomingUsername), { cache: 'no-store' })
+                    .then(function (r) { return r.ok ? r.json() : null; })
+                    .then(function (incoming) {
+                      if (!incoming || !incoming.hasIncomingCall || !incoming.callerUsername) return;
+                      if (!activeDm || activeDm.dmId !== incoming.dmId) {
+                        directCallIncomingOpenPending = true;
+                        openDirectChat(incomingUsername, incoming.callerUsername);
+                      }
+                    }).catch(function () {});
+                }
+
                 fetch('/api/channels', { cache: 'no-store' })
                   .then(function (r) { return r.json(); })
                   .then(function (data) {
@@ -4236,6 +4473,20 @@ class BitVoidLocalServer(
                 liveRoomStatusEl.textContent = 'Left live session';
               }
 
+              function mediaPermissionMessage(err) {
+                var name = err && err.name ? err.name : '';
+                if (name === 'NotAllowedError' || name === 'SecurityError') {
+                  return 'Camera or microphone permission was blocked. Use the browser site controls to allow both, then try again.';
+                }
+                if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+                  return 'No usable camera or microphone was found. Connect a device and check operating-system privacy settings.';
+                }
+                if (name === 'NotReadableError' || name === 'TrackStartError') {
+                  return 'The camera or microphone is busy in another app. Close that app and try again.';
+                }
+                return 'Unable to start camera or microphone: ' + ((err && err.message) || name || 'unknown browser error');
+              }
+
               function joinRtcSession(mode, role, startWithMedia, roomOverride, presetClassCode, startWithVideo) {
                 var targetRoom = roomOverride || (activeDm ? activeDm.dmId : (activeChannel ? activeChannel.channelId : ''));
                 var targetToken = activeDm ? activeDm.token : (activeChannel ? activeChannel.token : '');
@@ -4246,6 +4497,19 @@ class BitVoidLocalServer(
                 }
                 if (typeof RTCPeerConnection === 'undefined') {
                   showRtcError('WebRTC is not supported by this browser.');
+                  directCallConnecting = false;
+                  return;
+                }
+                if (startWithMedia && !window.isSecureContext) {
+                  showRtcError('Camera and microphone require trusted HTTPS. Open /secure-setup, install the BitVoid local CA, then use the secure portal URL.');
+                  liveStagePanel.classList.remove('hidden');
+                  liveRoomStatusEl.innerHTML = 'Secure browser setup required · <a href="/secure-setup?username=' + encodeURIComponent(activeDm ? activeDm.myUsername : (dmMyInput.value || '')) + '">OPEN SETUP</a>';
+                  directCallConnecting = false;
+                  return;
+                }
+                if (startWithMedia && (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)) {
+                  showRtcError('This browser does not expose camera/microphone controls. Use a current Chrome, Edge, Firefox, or Safari over the secure portal URL.');
+                  directCallConnecting = false;
                   return;
                 }
                 leaveRtcSession();
@@ -4259,11 +4523,14 @@ class BitVoidLocalServer(
                 rtcMuted = (role === 'STUDENT_VIEWER');
 
                 var wantsVideo = startWithVideo !== false && role !== 'STUDENT_VIEWER';
-                var mediaPromise = (startWithMedia && navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
+                var mediaPromise = startWithMedia
                   ? navigator.mediaDevices.getUserMedia({ audio: true, video: wantsVideo })
-                      .catch(function () {
-                        return navigator.mediaDevices.getUserMedia({ audio: true, video: false })
-                          .catch(function () { return null; });
+                      .catch(function (err) {
+                        if (wantsVideo && (err.name === 'NotFoundError' || err.name === 'OverconstrainedError')) {
+                          showRtcError('Camera unavailable; continuing as a voice call.');
+                          return navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                        }
+                        throw err;
                       })
                   : Promise.resolve(null);
 
@@ -4306,6 +4573,7 @@ class BitVoidLocalServer(
                   };
                   rtcSocket.onclose = function () {
                     rtcSocket = null;
+                    directCallConnecting = false;
                     updateRtcControlsUi();
                   };
                   rtcSocket.onmessage = function (ev) {
@@ -4383,11 +4651,22 @@ class BitVoidLocalServer(
                       }
                     } catch (e) {}
                   };
+                }).catch(function (err) {
+                  directCallConnecting = false;
+                  cleanupRtcPeersAndMedia();
+                  showRtcError(mediaPermissionMessage(err));
+                  liveRoomStatusEl.textContent = 'Camera / microphone access required before media can connect';
                 });
               }
 
               function startDirectCall(withVideo) {
                 if (!activeDm) return;
+                if (!window.isSecureContext) {
+                  liveStagePanel.classList.remove('hidden');
+                  showRtcError('Browser calls require the trusted HTTPS portal. Complete the one-time certificate setup first.');
+                  liveRoomStatusEl.innerHTML = 'Secure browser setup required · <a href="/secure-setup?username=' + encodeURIComponent(activeDm.myUsername || '') + '">OPEN SETUP</a>';
+                  return;
+                }
                 refreshPeerPresence().then(function (available) {
                   if (!available) {
                     dmErr.textContent = 'Call unavailable: @' + activeDm.peerUsername + ' is not active on this Wi-Fi node.';
@@ -4395,7 +4674,25 @@ class BitVoidLocalServer(
                     openSidebar();
                     return;
                   }
-                  joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true, null, null, withVideo);
+                  fetch('/api/dm/' + encodeURIComponent(activeDm.dmId) + '/call/invite', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-DM-Token': activeDm.token },
+                    body: JSON.stringify({ withVideo: !!withVideo })
+                  }).then(function (r) {
+                    if (!r.ok) {
+                      return r.json().then(function (d) {
+                        throw new Error((d && d.detail) || ('Unable to start call (HTTP ' + r.status + ')'));
+                      });
+                    }
+                    return r.json();
+                  }).then(function () {
+                    liveStagePanel.classList.remove('hidden');
+                    voiceCallBtn.classList.add('active');
+                    videoCallBtn.classList.toggle('active', !!withVideo);
+                    liveRoomStatusEl.textContent = 'Ringing @' + activeDm.peerUsername + ' · media waits for acceptance';
+                  }).catch(function (err) {
+                    showRtcError(err.message || 'Unable to ring this user.');
+                  });
                 });
               }
 
@@ -4406,6 +4703,14 @@ class BitVoidLocalServer(
               voiceCallBtn.addEventListener('click', function () { startDirectCall(false); });
               videoCallBtn.addEventListener('click', function () { startDirectCall(true); });
               closeLiveStageBtn.addEventListener('click', function () {
+                if (activeDm && directCallLastPhase === 'RINGING') {
+                  fetch('/api/dm/' + encodeURIComponent(activeDm.dmId) + '/call/cancel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-DM-Token': activeDm.token },
+                    body: '{}'
+                  }).catch(function () {});
+                  directCallLastPhase = 'CANCELED';
+                }
                 liveStagePanel.classList.add('hidden');
               });
               liveCopyCodeBtn.addEventListener('click', function () {
@@ -4570,7 +4875,16 @@ class BitVoidLocalServer(
                   showRtcError('Screen sharing requires Chrome/Desktop browser or native Android app.');
                 }
               });
-              rtcLeaveBtn.addEventListener('click', leaveRtcSession);
+              rtcLeaveBtn.addEventListener('click', function () {
+                if (activeDm && rtcRoomId === activeDm.dmId) {
+                  fetch('/api/dm/' + encodeURIComponent(activeDm.dmId) + '/call/end', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-DM-Token': activeDm.token },
+                    body: '{}'
+                  }).catch(function () {});
+                }
+                leaveRtcSession();
+              });
               rtcEndSessionBtn.addEventListener('click', function () {
                 if (rtcSocket && rtcSocket.readyState === 1) {
                   rtcSocket.send(JSON.stringify({ type: 'end_session', roomId: rtcRoomId }));

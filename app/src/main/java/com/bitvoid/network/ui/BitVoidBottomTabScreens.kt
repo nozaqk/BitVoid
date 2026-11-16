@@ -203,16 +203,25 @@ fun HostNetworkProtocolDialog(
                         color = VoidMint,
                         fontWeight = FontWeight.Bold
                     )
-                    ProtocolDetailRow("Transport", "HTTP/1.1 + WebSocket (0.0.0.0:${hostState.port})")
-                    ProtocolDetailRow("Streaming", "HTTP 206 Partial Content · 4KB Padded")
-                    ProtocolDetailRow("Captive Portal", "HTTP 302 Auto-Redirect Enabled")
-                    ProtocolDetailRow("SSID Visibility", "Always Visible (Hidden Network OFF)")
                     ProtocolDetailRow(
-                        "Autonomous Mode",
-                        "Works without Phone Wi-Fi or Hotspot ON"
+                        "Transport",
+                        "HTTP/1.1 :${hostState.port} + trusted HTTPS/WSS :${hostState.securePort}"
+                    )
+                    ProtocolDetailRow("Streaming", "HTTP 206 Partial Content · 4KB Padded")
+                    ProtocolDetailRow("Captive Portal", "HTTP discovery + certificate setup")
+                    ProtocolDetailRow(
+                        "Wireless Broadcast",
+                        when (hostState.status) {
+                            HotspotStatus.ACTIVE -> "Active · actual SSID: ${hostState.ssid}"
+                            HotspotStatus.STARTING -> "Waiting for Android hotspot"
+                            else -> "Not active · existing Wi-Fi gateway only"
+                        }
                     )
                     if (hostState.isServerRunning) {
-                        ProtocolDetailRow("Active Gateway", hostState.effectivePortalUrl)
+                        ProtocolDetailRow("Discovery Gateway", hostState.effectivePortalUrl)
+                        if (hostState.isSecureServerRunning) {
+                            ProtocolDetailRow("Secure Media Gateway", hostState.securePortalUrl)
+                        }
                     }
                 }
 
@@ -590,7 +599,7 @@ fun SettingsAutonomousCard(
             }
         }
 
-        // Autonomous Zero-Wi-Fi / Zero-Hotspot Engine Card
+        // Local gateway and real radio-broadcast status card
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = VoidSurface),
@@ -614,13 +623,13 @@ fun SettingsAutonomousCard(
                         modifier = Modifier.size(18.dp)
                     )
                     Text(
-                        text = "AUTONOMOUS LOCAL ENGINE",
+                        text = "LOCAL GATEWAY & RADIO STATUS",
                         style = MaterialTheme.typography.labelLarge,
                         color = VoidMint
                     )
                 }
                 Text(
-                    text = "BitVoid binds its encrypted HTTP/WebSocket vault directly on 0.0.0.0:${hostState.port}. Phone Wi-Fi and Portable Hotspot do NOT need to be turned on to host, upload, stream, or chat.",
+                    text = "The vault can run locally without a radio broadcast, but nearby devices can connect only through the phone's existing Wi-Fi, a real Android hotspot, or a Wi-Fi Direct group. BitVoid never labels a server-only state as broadcasting.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = VoidTextSecondary
                 )
@@ -638,8 +647,15 @@ fun SettingsAutonomousCard(
                         if (hostState.isServerRunning) "RUNNING (${hostState.effectivePortalUrl})" else "STANDBY"
                     )
                     ProtocolDetailRow("Configured SSID", hostState.configuredSsid)
-                    ProtocolDetailRow("Security Mode", hostState.selectedSecurityMode.title)
-                    ProtocolDetailRow("Hidden SSID", "OFF (Always Discoverable)")
+                    ProtocolDetailRow("Requested Security", hostState.selectedSecurityMode.title)
+                    ProtocolDetailRow(
+                        "Actual Broadcast",
+                        if (hostState.status == HotspotStatus.ACTIVE) {
+                            "${hostState.ssid} · ${hostState.securityLabel}"
+                        } else {
+                            "NONE"
+                        }
+                    )
                 }
 
                 Row(

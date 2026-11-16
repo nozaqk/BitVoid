@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import com.bitvoid.network.call.BitVoidDocumentPreviewer
 import com.bitvoid.network.call.BitVoidSignalingServer
+import com.bitvoid.network.call.DirectCallPhase
 import com.bitvoid.network.call.LiveClassMaterial
 import com.bitvoid.network.call.ParticipantRole
 import com.bitvoid.network.call.RenderedMaterialDeck
@@ -98,6 +99,14 @@ data class ClientDirectSession(
     val token: String
 )
 
+data class IncomingDirectCall(
+    val dmId: String,
+    val callerUsername: String,
+    val calleeUsername: String,
+    val withVideo: Boolean,
+    val createdAtMs: Long
+)
+
 data class ChannelCallStatus(
     val roomId: String = "",
     val isActive: Boolean = false,
@@ -105,7 +114,13 @@ data class ChannelCallStatus(
     val hostPeerId: String = "",
     val classCode: String? = null,
     val participantCount: Int = 0,
-    val peers: List<SignalingPeer> = emptyList()
+    val peers: List<SignalingPeer> = emptyList(),
+    val directCallPhase: DirectCallPhase = DirectCallPhase.IDLE,
+    val callerUsername: String = "",
+    val calleeUsername: String = "",
+    val withVideo: Boolean = false,
+    val isIncoming: Boolean = false,
+    val isOutgoing: Boolean = false
 )
 
 data class LiveClassJoinInfo(
@@ -782,6 +797,71 @@ class BitVoidClientRepository {
         }
     }
 
+    suspend fun requestDirectCall(
+        dmId: String,
+        token: String,
+        withVideo: Boolean,
+        urlOverride: String? = null
+    ): Result<Unit> = postDirectCallAction(
+        dmId = dmId,
+        token = token,
+        action = "invite",
+        body = JSONObject().put("withVideo", withVideo).toString(),
+        urlOverride = urlOverride
+    )
+
+    suspend fun acceptDirectCall(
+        dmId: String,
+        token: String,
+        urlOverride: String? = null
+    ): Result<Unit> = postDirectCallAction(dmId, token, "accept", "{}", urlOverride)
+
+    suspend fun declineDirectCall(
+        dmId: String,
+        token: String,
+        urlOverride: String? = null
+    ): Result<Unit> = postDirectCallAction(dmId, token, "decline", "{}", urlOverride)
+
+    suspend fun cancelOrEndDirectCall(
+        dmId: String,
+        token: String,
+        action: String = "end",
+        urlOverride: String? = null
+    ): Result<Unit> = postDirectCallAction(dmId, token, action, "{}", urlOverride)
+
+    private suspend fun postDirectCallAction(
+        dmId: String,
+        token: String,
+        action: String,
+        body: String,
+        urlOverride: String?
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val targetBase = (urlOverride?.let { setGatewayBaseUrl(it) } ?: _gatewayBaseUrl.value)
+                .trimEnd('/')
+            val encodedDm = URLEncoder.encode(dmId, StandardCharsets.UTF_8.name())
+                .replace("+", "%20")
+            val request = Request.Builder()
+                .url("$targetBase/api/dm/$encodedDm/call/$action")
+                .header("X-DM-Token", token)
+                .post(body.toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+            okHttpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val payload = runCatching { JSONObject(response.body?.string().orEmpty()) }.getOrNull()
+                    throw IOException(
+                        payload?.optString("detail")?.takeIf { it.isNotBlank() }
+                            ?: "Call request failed (${response.code})."
+                    )
+                }
+            }
+            fetchDirectCallStatus(dmId, token, targetBase)
+            Result.success(Unit)
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
+    }
+
     suspend fun fetchDirectCallStatus(
         dmId: String? = null,
         token: String? = null,
@@ -835,7 +915,15 @@ class BitVoidClientRepository {
                             hostPeerId = json.optString("hostPeerId", ""),
                             classCode = null,
                             participantCount = json.optInt("participantCount", peers.size),
-                            peers = peers
+                            peers = peers,
+                            directCallPhase = runCatching {
+                                DirectCallPhase.valueOf(json.optString("callPhase", DirectCallPhase.IDLE.name))
+                            }.getOrDefault(DirectCallPhase.IDLE),
+                            callerUsername = json.optString("callerUsername", ""),
+                            calleeUsername = json.optString("calleeUsername", ""),
+                            withVideo = json.optBoolean("withVideo", false),
+                            isIncoming = json.optBoolean("isIncoming", false),
+                            isOutgoing = json.optBoolean("isOutgoing", false)
                         )
                     }
                 }
@@ -851,7 +939,7 @@ class BitVoidClientRepository {
                 val cur = _activeDirectSession.value ?: break
                 if (cur.dmId != session.dmId) break
                 fetchDirectCallStatus(cur.dmId, cur.token, baseUrl)
-                delay(2800L)
+                delay(1000L)
             }
         }
     }
@@ -1238,6 +1326,40 @@ class BitVoidClientRepository {
                     }
                 }
             } catch (_: Exception) {
+            }
+        }
+    }
+
+    suspend fun fetchIncomingDirectCall(
+        username: String,
+        urlOverride: String? = null
+    ): IncomingDirectCall? {
+        val clean = username.trim().removePrefix("@")
+        if (clean.isEmpty()) return null
+        val targetBase = (urlOverride?.let { setGatewayBaseUrl(it) } ?: _gatewayBaseUrl.value)
+            .trimEnd('/')
+        return withContext(Dispatchers.IO) {
+            try {
+                val encodedUser = URLEncoder.encode(clean, StandardCharsets.UTF_8.name())
+                    .replace("+", "%20")
+                val request = Request.Builder()
+                    .url("$targetBase/api/calls/incoming?username=$encodedUser")
+                    .get()
+                    .build()
+                okHttpClient.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) return@use null
+                    val json = JSONObject(response.body?.string().orEmpty())
+                    if (!json.optBoolean("hasIncomingCall", false)) return@use null
+                    IncomingDirectCall(
+                        dmId = json.optString("dmId"),
+                        callerUsername = json.optString("callerUsername"),
+                        calleeUsername = json.optString("calleeUsername"),
+                        withVideo = json.optBoolean("withVideo", false),
+                        createdAtMs = json.optLong("createdAtMs", 0L)
+                    )
+                }
+            } catch (_: Exception) {
+                null
             }
         }
     }

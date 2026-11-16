@@ -56,6 +56,8 @@ data class HostState(
     val gatewayIp: String = "",
     val boundEndpoints: List<String> = emptyList(),
     val port: Int = 8080,
+    val securePort: Int = 8443,
+    val isSecureServerRunning: Boolean = false,
     val sharedFiles: List<BitVoidMediaItem> = emptyList(),
     val activeSessionsCount: Int = 0,
     val bytesServed: Long = 0L,
@@ -89,6 +91,13 @@ data class HostState(
             "http://$gatewayIp:$port"
         } else {
             "— offline —"
+        }
+
+    val securePortalUrl: String
+        get() = if (isSecureServerRunning && gatewayIp.isNotBlank()) {
+            "https://$gatewayIp:$securePort"
+        } else {
+            "— secure portal starting —"
         }
 
     companion object {
