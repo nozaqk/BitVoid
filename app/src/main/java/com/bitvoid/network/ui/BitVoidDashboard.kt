@@ -58,7 +58,6 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PowerSettingsNew
@@ -140,7 +139,6 @@ import com.bitvoid.network.model.ClientConnectionStatus
 import com.bitvoid.network.model.ClientState
 import com.bitvoid.network.model.DiscoveredNetwork
 import com.bitvoid.network.model.HostState
-import com.bitvoid.network.model.HotspotSecurityMode
 import com.bitvoid.network.model.HotspotStatus
 import com.bitvoid.network.model.NodeMode
 import com.bitvoid.network.ui.theme.VoidAmber
@@ -518,7 +516,6 @@ fun BitVoidDashboard(
     if (showProtocolDialog) {
         HostNetworkProtocolDialog(
             hostState = hostState,
-            onSelectMode = { viewModel.selectHotspotSecurityMode(it) },
             onDismiss = { showProtocolDialog = false }
         )
     }
@@ -663,7 +660,6 @@ private fun CompactDashboardContent(
                                 onToggleHost = onToggleHost,
                                 onOpenProtocolDialog = onOpenProtocolDialog,
                                 onOpenQrDialog = onOpenQrDialog,
-                                onOpenHotspotSettings = onOpenHotspotSettings,
                                 onOpenClientNode = { onSelectMode(NodeMode.CLIENT) }
                             )
                         }
@@ -797,7 +793,6 @@ private fun WideDashboardContent(
                             onToggleHost = onToggleHost,
                             onOpenProtocolDialog = onOpenProtocolDialog,
                             onOpenQrDialog = onOpenQrDialog,
-                            onOpenHotspotSettings = onOpenHotspotSettings,
                             onOpenClientNode = onOpenClientNode
                         )
                     }
@@ -895,7 +890,6 @@ private fun HostPowerControlCard(
     onToggleHost: () -> Unit,
     onOpenProtocolDialog: () -> Unit,
     onOpenQrDialog: () -> Unit,
-    onOpenHotspotSettings: () -> Unit,
     onOpenClientNode: () -> Unit
 ) {
     val isActive = hostState.status == HotspotStatus.ACTIVE ||
@@ -978,11 +972,7 @@ private fun HostPowerControlCard(
                                     color = VoidTextPrimary
                                 )
                                 Text(
-                                    text = if (hostState.selectedSecurityMode == HotspotSecurityMode.OPEN_VISIBLE) {
-                                        "OPEN (VISIBLE) · HTTP/WS :${hostState.port}"
-                                    } else {
-                                        "WPA2-PSK (VISIBLE) · HTTP/WS :${hostState.port}"
-                                    },
+                                    text = "WPA2-PSK (VISIBLE) · HTTP/WS :${hostState.port}",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = VoidCyan
                                 )
@@ -1078,54 +1068,6 @@ private fun HostPowerControlCard(
                     accentColor = if (hostState.publicCount > 0 && isActive) VoidMint else VoidAmber
                 )
 
-                if (hostState.needsOpenHotspotSetupBanner) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = VoidAmber.copy(alpha = 0.12f)),
-                        border = BorderStroke(1.dp, VoidAmber.copy(alpha = 0.8f)),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("open_hotspot_setup_banner")
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text(
-                                text = "FINISH OPEN NETWORK BROADCAST",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = VoidAmber,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = "Android must create the password-free hotspot. Set Network name to '${hostState.configuredSsid}', choose No password / Open, and turn it on. BitVoid will detect it automatically.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = VoidTextPrimary
-                            )
-                            Button(
-                                onClick = onOpenHotspotSettings,
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = VoidAmber,
-                                    contentColor = VoidObsidian
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(48.dp)
-                                    .testTag("open_android_hotspot_settings")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.WifiTethering,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("OPEN ANDROID HOTSPOT SETTINGS")
-                            }
-                        }
-                    }
-                }
-
                 Spacer(modifier = Modifier.height(12.dp))
 
                 // Large Tactical Power Core Button
@@ -1179,10 +1121,8 @@ private fun HostPowerControlCard(
 
                 Text(
                     text = when {
-                        hostState.status == HotspotStatus.ACTIVE && hostState.isOpenSecurity ->
-                            "OPEN ENGINE & PORTAL LIVE"
                         hostState.status == HotspotStatus.ACTIVE ->
-                            "WPA2 VISIBLE ENGINE & PORTAL LIVE"
+                            "PASSWORD-PROTECTED ENGINE & PORTAL LIVE"
                         hostState.status == HotspotStatus.SERVER_ONLY ->
                             "HTTP VAULT ONLINE (0.0.0.0:${hostState.port})"
                         hostState.status == HotspotStatus.STARTING ->
@@ -1203,19 +1143,8 @@ private fun HostPowerControlCard(
 
                 Surface(
                     shape = RoundedCornerShape(999.dp),
-                    color = if (hostState.isOpenSecurity) {
-                        VoidMint.copy(alpha = 0.14f)
-                    } else {
-                        VoidCyan.copy(alpha = 0.14f)
-                    },
-                    border = BorderStroke(
-                        1.dp,
-                        if (hostState.isOpenSecurity) {
-                            VoidMint.copy(alpha = 0.65f)
-                        } else {
-                            VoidCyan.copy(alpha = 0.65f)
-                        }
-                    ),
+                    color = VoidCyan.copy(alpha = 0.14f),
+                    border = BorderStroke(1.dp, VoidCyan.copy(alpha = 0.65f)),
                     modifier = Modifier.testTag("host_security_status_badge")
                 ) {
                     Row(
@@ -1224,19 +1153,15 @@ private fun HostPowerControlCard(
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Icon(
-                            imageVector = if (hostState.isOpenSecurity) {
-                                Icons.Filled.LockOpen
-                            } else {
-                                Icons.Filled.Lock
-                            },
+                            imageVector = Icons.Filled.Lock,
                             contentDescription = null,
-                            tint = if (hostState.isOpenSecurity) VoidMint else VoidCyan,
+                            tint = VoidCyan,
                             modifier = Modifier.size(14.dp)
                         )
                         Text(
                             text = hostState.securityLabel,
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (hostState.isOpenSecurity) VoidMint else VoidCyan,
+                            color = VoidCyan,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -1296,42 +1221,28 @@ private fun HostCredentialsCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp))
-                    .background(
-                        if (hostState.isOpenSecurity) {
-                            VoidMint.copy(alpha = 0.1f)
-                        } else {
-                            VoidCyan.copy(alpha = 0.1f)
-                        }
-                    )
-                    .border(
-                        1.dp,
-                        if (hostState.isOpenSecurity) VoidMint.copy(alpha = 0.55f) else VoidCyan.copy(alpha = 0.55f),
-                        RoundedCornerShape(8.dp)
-                    )
+                    .background(VoidCyan.copy(alpha = 0.1f))
+                    .border(1.dp, VoidCyan.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Icon(
-                    imageVector = if (hostState.isOpenSecurity) Icons.Filled.LockOpen else Icons.Filled.Lock,
+                    imageVector = Icons.Filled.Lock,
                     contentDescription = null,
-                    tint = if (hostState.isOpenSecurity) VoidMint else VoidCyan,
+                    tint = VoidCyan,
                     modifier = Modifier.size(16.dp)
                 )
                 Text(
                     text = hostState.securityLabel,
                     style = MaterialTheme.typography.labelMedium,
-                    color = if (hostState.isOpenSecurity) VoidMint else VoidCyan,
+                    color = VoidCyan,
                     fontWeight = FontWeight.Bold
                 )
             }
 
             CredentialRow(
-                label = if (hostState.isOpenSecurity) {
-                    "VISIBLE SSID (OPEN · NO PASSWORD)"
-                } else {
-                    "VISIBLE SSID (WPA2-PSK)"
-                },
+                label = "VISIBLE SSID (WPA2-PSK)",
                 value = if (hostState.ssid.isNotBlank()) {
                     hostState.ssid
                 } else {
@@ -1342,22 +1253,17 @@ private fun HostCredentialsCard(
                 onCopy = { onCopy("SSID", hostState.effectiveSsid) }
             )
 
-            if (!hostState.isOpenSecurity || hostState.passphrase.isNotBlank()) {
-                val displayPassphrase = hostState.passphrase.ifBlank {
-                    hostState.configuredPassphrase.ifBlank { BitVoidNetworkConfig.DEFAULT_WPA2_PASSPHRASE }
-                }
-                CredentialRow(
-                    label = if (hostState.isOpenSecurity && hostState.passphrase.isNotBlank()) {
-                        "HOTSPOT PASSPHRASE (OS REQUIRED)"
-                    } else {
-                        "WPA2 PASSPHRASE"
-                    },
-                    value = displayPassphrase,
-                    canCopy = displayPassphrase.isNotBlank(),
-                    valueColor = VoidMint,
-                    onCopy = { onCopy("Hotspot Passphrase", displayPassphrase) }
-                )
-            }
+            val displayPassphrase = hostState.passphrase
+                .takeIf { it.isNotBlank() && !it.startsWith("Managed by") }
+                ?: hostState.configuredPassphrase
+                    .ifBlank { BitVoidNetworkConfig.DEFAULT_WPA2_PASSPHRASE }
+            CredentialRow(
+                label = "WPA2 PASSPHRASE",
+                value = displayPassphrase,
+                canCopy = displayPassphrase.isNotBlank(),
+                valueColor = VoidMint,
+                onCopy = { onCopy("Hotspot Passphrase", displayPassphrase) }
+            )
 
             CredentialRow(
                 label = "CAPTIVE PORTAL AUTO-REDIRECT TARGET",

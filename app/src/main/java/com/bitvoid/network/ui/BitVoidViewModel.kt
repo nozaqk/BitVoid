@@ -42,7 +42,6 @@ import com.bitvoid.network.model.BitVoidNetworkPrefs
 import com.bitvoid.network.model.ClientConnectionStatus
 import com.bitvoid.network.model.ClientState
 import com.bitvoid.network.model.HostState
-import com.bitvoid.network.model.HotspotSecurityMode
 import com.bitvoid.network.model.HotspotStatus
 import com.bitvoid.network.model.NodeMode
 import com.bitvoid.network.service.BitVoidForegroundService
@@ -546,10 +545,8 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                 )
             } else {
                 current.copy(
-                    selectedSecurityMode = saved.securityMode,
                     isHiddenSsid = saved.isHiddenSsid,
-                    isOpenSecurity = saved.securityMode == HotspotSecurityMode.OPEN_VISIBLE,
-                    securityLabel = saved.securityMode.badgeLabel,
+                    securityLabel = BitVoidNetworkConfig.WPA2_SECURITY_LABEL,
                     configuredSsid = saved.ssid,
                     configuredPassphrase = saved.passphrase
                 )
@@ -596,30 +593,6 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun selectHotspotSecurityMode(mode: HotspotSecurityMode) {
-        BitVoidNetworkPrefs.saveSecurityMode(appContext, mode)
-        BitVoidNodeStateHolder.updateHostState { current ->
-            if (current.isEngineLocked) {
-                current
-            } else {
-                val config = BitVoidNetworkConfig(
-                    securityMode = mode,
-                    ssid = current.configuredSsid,
-                    passphrase = current.configuredPassphrase,
-                    isHiddenSsid = BitVoidNetworkConfig.ENFORCED_VISIBLE_SSID
-                )
-                current.copy(
-                    selectedSecurityMode = config.securityMode,
-                    isHiddenSsid = config.isHiddenSsid,
-                    isOpenSecurity = config.securityMode == HotspotSecurityMode.OPEN_VISIBLE,
-                    securityLabel = config.securityMode.badgeLabel,
-                    needsOpenHotspotSetupBanner = false,
-                    errorMessage = null
-                )
-            }
-        }
-    }
-
     fun updateBroadcastSettings(rawSsid: String, rawPassphrase: String): Result<Unit> {
         val cleanSsid = rawSsid.trim()
         if (cleanSsid.isEmpty()) {
@@ -641,7 +614,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                 configuredSsid = cleanSsid,
                 configuredPassphrase = cleanPass,
                 ssid = if (updateLiveAutonomousFields) cleanSsid else current.ssid,
-                passphrase = if (updateLiveAutonomousFields && !current.isOpenSecurity) cleanPass else current.passphrase
+                passphrase = if (updateLiveAutonomousFields) cleanPass else current.passphrase
             )
         }
         return Result.success(Unit)
@@ -651,23 +624,9 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         val currentState = hostState.value
         if (currentState.isEngineLocked) {
             BitVoidForegroundService.stopNode(appContext)
-        } else if (currentState.selectedSecurityMode == HotspotSecurityMode.OPEN_VISIBLE) {
-            // Android reserves custom password-free hotspot configuration for the System UI.
-            // Start the local vault, then take the user to the one supported broadcast control.
-            BitVoidForegroundService.startOpenBroadcast(appContext)
-            openHotspotTetherSettings()
         } else {
-            BitVoidForegroundService.startHostNode(
-                context = appContext,
-                securityMode = currentState.selectedSecurityMode
-            )
+            BitVoidForegroundService.startHostNode(appContext)
         }
-    }
-
-    fun startOpenBroadcastMode() {
-        selectHotspotSecurityMode(HotspotSecurityMode.OPEN_VISIBLE)
-        BitVoidForegroundService.startOpenBroadcast(appContext)
-        openHotspotTetherSettings()
     }
 
     fun startServerOnlyMode() {

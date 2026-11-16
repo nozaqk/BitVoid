@@ -28,7 +28,6 @@ import com.bitvoid.network.media.BitVoidMediaManager
 import com.bitvoid.network.model.BitVoidNetworkConfig
 import com.bitvoid.network.model.BitVoidNetworkPrefs
 import com.bitvoid.network.model.HostState
-import com.bitvoid.network.model.HotspotSecurityMode
 import com.bitvoid.network.model.HotspotStatus
 import com.bitvoid.network.server.BitVoidLocalServer
 import com.bitvoid.network.server.BitVoidTlsManager
@@ -49,32 +48,18 @@ class BitVoidForegroundService : Service() {
 
     companion object {
         const val ACTION_START_HOST_NODE = "com.bitvoid.network.action.START_HOST_NODE"
-        const val ACTION_START_OPEN_BROADCAST = "com.bitvoid.network.action.START_OPEN_BROADCAST"
         const val ACTION_START_SERVER_ONLY = "com.bitvoid.network.action.START_SERVER_ONLY"
         const val ACTION_STOP_NODE = "com.bitvoid.network.action.STOP_NODE"
         const val ACTION_REFRESH_FILES = "com.bitvoid.network.action.REFRESH_FILES"
 
-        const val EXTRA_SECURITY_MODE = "com.bitvoid.network.extra.SECURITY_MODE"
 
         private const val CHANNEL_ID = "bitvoid_node_channel"
         private const val NOTIFICATION_ID = 7070
-        const val DEFAULT_OPEN_SSID = BitVoidNetworkConfig.DEFAULT_VISIBLE_SSID
+        const val DEFAULT_SSID = BitVoidNetworkConfig.DEFAULT_VISIBLE_SSID
 
-        fun startHostNode(
-            context: Context,
-            securityMode: HotspotSecurityMode = BitVoidNodeStateHolder.hostState.value.selectedSecurityMode
-        ) {
+        fun startHostNode(context: Context) {
             val intent = Intent(context, BitVoidForegroundService::class.java).apply {
                 action = ACTION_START_HOST_NODE
-                putExtra(EXTRA_SECURITY_MODE, securityMode.name)
-            }
-            ContextCompat.startForegroundService(context, intent)
-        }
-
-        fun startOpenBroadcast(context: Context) {
-            val intent = Intent(context, BitVoidForegroundService::class.java).apply {
-                action = ACTION_START_OPEN_BROADCAST
-                putExtra(EXTRA_SECURITY_MODE, HotspotSecurityMode.OPEN_VISIBLE.name)
             }
             ContextCompat.startForegroundService(context, intent)
         }
@@ -109,7 +94,6 @@ class BitVoidForegroundService : Service() {
     private var secureLocalServer: BitVoidLocalServer? = null
     private var secureCertificateHosts: Set<String> = emptySet()
     private var secureServerError: String? = null
-    private var openHotspotWatchJob: Job? = null
     private var hotspotReservation: WifiManager.LocalOnlyHotspotReservation? = null
     private var wifiP2pManager: WifiP2pManager? = null
     private var wifiP2pChannel: WifiP2pManager.Channel? = null
@@ -141,15 +125,6 @@ class BitVoidForegroundService : Service() {
                 return START_STICKY
             }
 
-            ACTION_START_OPEN_BROADCAST -> {
-                if (!promoteToForeground("Binding open AP / wlan0 gateway (0.0.0.0:8080)...")) {
-                    stopSelf()
-                    return START_NOT_STICKY
-                }
-                startOpenVisibleHostNode()
-                return START_STICKY
-            }
-
             ACTION_START_SERVER_ONLY -> {
                 if (!promoteToForeground("Initializing local HTTP vault...")) {
                     stopSelf()
@@ -160,15 +135,11 @@ class BitVoidForegroundService : Service() {
             }
 
             ACTION_START_HOST_NODE, null -> {
-                val requestedMode = intent?.getStringExtra(EXTRA_SECURITY_MODE)?.let { raw ->
-                    runCatching { HotspotSecurityMode.valueOf(raw) }.getOrNull()
-                } ?: BitVoidNodeStateHolder.hostState.value.selectedSecurityMode
-
-                if (!promoteToForeground("Initializing BitVoid Host Engine (${requestedMode.name})...")) {
+                if (!promoteToForeground("Initializing password-protected BitVoid Host Engine...")) {
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                startFullHostNode(requestedMode)
+                startFullHostNode()
                 return START_STICKY
             }
         }
@@ -226,180 +197,19 @@ class BitVoidForegroundService : Service() {
         }
     }
 
-    private fun startFullHostNode(mode: HotspotSecurityMode) {
-        val prefsCfg = BitVoidNetworkPrefs.load(applicationContext)
-        val networkConfig = BitVoidNetworkConfig(
-            securityMode = mode,
-            ssid = prefsCfg.ssid,
-            passphrase = prefsCfg.passphrase,
-            isHiddenSsid = BitVoidNetworkConfig.ENFORCED_VISIBLE_SSID
-        )
+    private fun startFullHostNode() {
+        val networkConfig = BitVoidNetworkPrefs.load(applicationContext)
         BitVoidNodeStateHolder.updateHostState {
             it.copy(
                 status = HotspotStatus.STARTING,
-                selectedSecurityMode = networkConfig.securityMode,
                 isHiddenSsid = networkConfig.isHiddenSsid,
-                isOpenBroadcastMode = networkConfig.securityMode == HotspotSecurityMode.OPEN_VISIBLE,
-                needsOpenHotspotSetupBanner = false,
-                securityLabel = networkConfig.securityMode.badgeLabel,
+                securityLabel = BitVoidNetworkConfig.WPA2_SECURITY_LABEL,
                 configuredSsid = networkConfig.ssid,
                 configuredPassphrase = networkConfig.passphrase,
                 errorMessage = null
             )
         }
-        when (networkConfig.securityMode) {
-            HotspotSecurityMode.WPA2_VISIBLE -> startLocalOnlyHotspotWpa2()
-            HotspotSecurityMode.OPEN_VISIBLE -> startOpenVisibleHostNode()
-        }
-    }
-
-    /**
-     * OPEN_VISIBLE mode binds to a real Android system hotspot. Public Android APIs cannot
-     * silently create a custom-named password-free Soft AP, so when none exists the service
-     * stays in STARTING and watches System Hotspot settings instead of claiming a broadcast.
-     */
-    @Suppress("MissingPermission")
-    private fun startOpenVisibleHostNode() {
-        releaseHotspotOnly()
-        if (!ensureHttpServerRunning()) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            return
-        }
-
-        val prefsCfg = BitVoidNetworkPrefs.load(applicationContext)
-        if (isSystemWifiApEnabled()) {
-            val detection = detectActiveApAndWlanEndpoints()
-            val hotspotInfo = resolveSystemHotspotInfo()
-            val primaryIp = detection.primaryIp ?: "192.168.43.1"
-            val combinedIps = (detection.allEndpoints + "127.0.0.1").distinct()
-            val activeSsid = hotspotInfo.ssid ?: "Android hotspot (SSID unavailable)"
-            val actuallyOpen = hotspotInfo.isOpen == true
-            val urlList = combinedIps.map { "http://$it:${BitVoidLocalServer.DEFAULT_PORT}" }
-            val secureReady = ensureSecureServerRunning(combinedIps)
-
-            BitVoidNodeStateHolder.updateHostState {
-                it.copy(
-                    status = HotspotStatus.ACTIVE,
-                    isServerRunning = true,
-                    isOpenBroadcastMode = true,
-                    selectedSecurityMode = HotspotSecurityMode.OPEN_VISIBLE,
-                    isHiddenSsid = BitVoidNetworkConfig.ENFORCED_VISIBLE_SSID,
-                    needsOpenHotspotSetupBanner = false,
-                    isOpenSecurity = actuallyOpen,
-                    securityLabel = when (hotspotInfo.isOpen) {
-                        true -> HotspotSecurityMode.OPEN_VISIBLE.badgeLabel
-                        false -> "SYSTEM HOTSPOT SECURED"
-                        null -> "SYSTEM HOTSPOT (SECURITY UNKNOWN)"
-                    },
-                    configuredSsid = prefsCfg.ssid,
-                    configuredPassphrase = prefsCfg.passphrase,
-                    ssid = activeSsid,
-                    passphrase = hotspotInfo.passphrase.orEmpty(),
-                    gatewayIp = primaryIp,
-                    boundEndpoints = urlList,
-                    isSecureServerRunning = secureReady,
-                    uptimeSeconds = 0L,
-                    errorMessage = when {
-                        !activeSsid.equals(prefsCfg.ssid, ignoreCase = true) ->
-                            "Android is broadcasting '$activeSsid', not '${prefsCfg.ssid}'. Rename it in System Hotspot settings if supported."
-                        hotspotInfo.isOpen == false ->
-                            "Android is broadcasting this hotspot with a password. Choose No password/Open in System Hotspot settings for Open Network mode."
-                        hotspotInfo.isOpen == null ->
-                            "Android did not expose hotspot security details; verify No password/Open in System Hotspot settings."
-                        else -> secureServerError
-                    }
-                )
-            }
-            startUptimeTicker()
-            probeAssignedGatewayIp()
-            updateNotification("HOTSPOT ($activeSsid · ${if (actuallyOpen) "Open" else "OS security"}) · http://$primaryIp:${BitVoidLocalServer.DEFAULT_PORT}")
-            return
-        }
-
-        // Android's public APIs cannot silently create a custom-named, password-free Soft AP.
-        // Keep the vault alive, ask the user to enable the real System Hotspot, and watch until
-        // that visible broadcast appears instead of falsely reporting an open Wi-Fi network.
-        awaitSystemOpenHotspot(prefsCfg)
-    }
-
-    private fun awaitSystemOpenHotspot(prefsCfg: BitVoidNetworkConfig) {
-        val initialDetection = detectActiveApAndWlanEndpoints()
-        val initialIps = (initialDetection.allEndpoints + "127.0.0.1").distinct()
-        val initialIp = initialDetection.primaryIp ?: "127.0.0.1"
-        val secureReady = ensureSecureServerRunning(initialIps)
-        BitVoidNodeStateHolder.updateHostState {
-            it.copy(
-                status = HotspotStatus.STARTING,
-                isServerRunning = true,
-                isOpenBroadcastMode = true,
-                selectedSecurityMode = HotspotSecurityMode.OPEN_VISIBLE,
-                isOpenSecurity = true,
-                securityLabel = "OPEN HOTSPOT SETUP REQUIRED",
-                configuredSsid = prefsCfg.ssid,
-                configuredPassphrase = prefsCfg.passphrase,
-                ssid = "",
-                passphrase = "",
-                gatewayIp = initialIp,
-                boundEndpoints = initialIps.map { ip -> "http://$ip:${BitVoidLocalServer.DEFAULT_PORT}" },
-                isSecureServerRunning = secureReady,
-                needsOpenHotspotSetupBanner = true,
-                errorMessage = "In Android Hotspot settings, set Network name to '${prefsCfg.ssid}', choose No password/Open, then turn the hotspot on."
-            )
-        }
-        updateNotification("Open Android Hotspot settings · SSID ${prefsCfg.ssid} · Security: None")
-
-        openHotspotWatchJob?.cancel()
-        openHotspotWatchJob = serviceScope.launch {
-            while (isActive) {
-                delay(1_000L)
-                val detection = detectActiveApAndWlanEndpoints()
-                if (isSystemWifiApEnabled() || detection.hasDedicatedApInterface) {
-                    val hotspotInfo = resolveSystemHotspotInfo()
-                    val activeSsid = detection.detectedApSsid
-                        ?: hotspotInfo.ssid
-                        ?: "Android hotspot (SSID unavailable)"
-                    val actuallyOpen = hotspotInfo.isOpen == true
-                    val primaryIp = detection.primaryIp ?: "192.168.43.1"
-                    val combinedIps = (detection.allEndpoints + primaryIp + "127.0.0.1").distinct()
-                    val secureLive = ensureSecureServerRunning(combinedIps)
-                    BitVoidNodeStateHolder.updateHostState {
-                        it.copy(
-                            status = HotspotStatus.ACTIVE,
-                            isServerRunning = true,
-                            isOpenBroadcastMode = true,
-                            selectedSecurityMode = HotspotSecurityMode.OPEN_VISIBLE,
-                            needsOpenHotspotSetupBanner = false,
-                            isOpenSecurity = actuallyOpen,
-                            securityLabel = when (hotspotInfo.isOpen) {
-                                true -> HotspotSecurityMode.OPEN_VISIBLE.badgeLabel
-                                false -> "SYSTEM HOTSPOT SECURED"
-                                null -> "SYSTEM HOTSPOT (SECURITY UNKNOWN)"
-                            },
-                            ssid = activeSsid,
-                            passphrase = hotspotInfo.passphrase.orEmpty(),
-                            gatewayIp = primaryIp,
-                            boundEndpoints = combinedIps.map { ip -> "http://$ip:${BitVoidLocalServer.DEFAULT_PORT}" },
-                            isSecureServerRunning = secureLive,
-                            uptimeSeconds = 0L,
-                            errorMessage = when {
-                                !activeSsid.equals(prefsCfg.ssid, ignoreCase = true) ->
-                                    "Android is broadcasting '$activeSsid', not '${prefsCfg.ssid}'. Rename it in System Hotspot settings if supported."
-                                hotspotInfo.isOpen == false ->
-                                    "Android is broadcasting with a password. Choose No password/Open in System Hotspot settings."
-                                hotspotInfo.isOpen == null ->
-                                    "Android did not expose security details; verify No password/Open in System Hotspot settings."
-                                else -> secureServerError
-                            }
-                        )
-                    }
-                    startUptimeTicker()
-                    probeAssignedGatewayIp()
-                    updateNotification("HOTSPOT ($activeSsid · ${if (actuallyOpen) "Open" else "OS security"}) · http://$primaryIp:${BitVoidLocalServer.DEFAULT_PORT}")
-                    return@launch
-                }
-            }
-        }
+        startLocalOnlyHotspotWpa2()
     }
 
     private fun startEmbeddedServerOnly() {
@@ -412,15 +222,13 @@ class BitVoidForegroundService : Service() {
 
         val allEndpoints = (resolveAllNetworkIpv4s() + "127.0.0.1").distinct()
         val resolvedIp = allEndpoints.first()
-        val activeSsid = resolveConnectedWifiSsid() ?: DEFAULT_OPEN_SSID
+        val activeSsid = resolveConnectedWifiSsid() ?: DEFAULT_SSID
         val urlList = allEndpoints.map { "http://$it:${BitVoidLocalServer.DEFAULT_PORT}" }
         val secureReady = ensureSecureServerRunning(allEndpoints)
         BitVoidNodeStateHolder.updateHostState {
             it.copy(
                 status = HotspotStatus.SERVER_ONLY,
                 isServerRunning = true,
-                isOpenBroadcastMode = false,
-                needsOpenHotspotSetupBanner = false,
                 ssid = activeSsid,
                 passphrase = if (resolvedIp == "127.0.0.1") "" else "Managed by Wi-Fi / LAN",
                 gatewayIp = resolvedIp,
@@ -516,22 +324,15 @@ class BitVoidForegroundService : Service() {
         }
 
         val prefsCfg = BitVoidNetworkPrefs.load(applicationContext)
-        startHardwareBroadcastCascade(
-            prefsCfg = prefsCfg,
-            requestedOpenMode = false
-        )
+        startHardwareBroadcastCascade(prefsCfg)
     }
 
     @Suppress("MissingPermission")
-    private fun startHardwareBroadcastCascade(
-        prefsCfg: BitVoidNetworkConfig,
-        requestedOpenMode: Boolean
-    ) {
+    private fun startHardwareBroadcastCascade(prefsCfg: BitVoidNetworkConfig) {
         if (!hasHotspotPermission()) {
             activateAutonomousFallback(
                 prefsCfg = prefsCfg,
-                requestedOpenMode = requestedOpenMode,
-                radioHint = "Grant Nearby Wi-Fi / Location permission so nearby devices can discover the Wi-Fi broadcast."
+                radioHint = "Grant Nearby Wi-Fi / Location permission to create the password-protected Wi-Fi broadcast."
             )
             return
         }
@@ -547,36 +348,25 @@ class BitVoidForegroundService : Service() {
                 }
                 if (channel != null) {
                     val customNetworkName = BitVoidNetworkConfig.formatWifiDirectNetworkName(prefsCfg.ssid)
-                    val customPassphrase = prefsCfg.passphrase.ifBlank { BitVoidNetworkConfig.DEFAULT_WPA2_PASSPHRASE }
+                    val customPassphrase = prefsCfg.passphrase
                     val config = WifiP2pConfig.Builder()
                         .setNetworkName(customNetworkName)
                         .setPassphrase(customPassphrase)
                         .build()
 
+                    val launchGroup = {
+                        launchConfiguredP2pGroup(
+                            p2pMgr = p2pMgr,
+                            channel = channel,
+                            config = config,
+                            prefsCfg = prefsCfg,
+                            expectedSsid = customNetworkName,
+                            expectedPassphrase = customPassphrase
+                        )
+                    }
                     p2pMgr.removeGroup(channel, object : WifiP2pManager.ActionListener {
-                        override fun onSuccess() {
-                            launchConfiguredP2pGroup(
-                                p2pMgr = p2pMgr,
-                                channel = channel,
-                                config = config,
-                                prefsCfg = prefsCfg,
-                                expectedSsid = customNetworkName,
-                                expectedPassphrase = customPassphrase,
-                                requestedOpenMode = requestedOpenMode
-                            )
-                        }
-
-                        override fun onFailure(reason: Int) {
-                            launchConfiguredP2pGroup(
-                                p2pMgr = p2pMgr,
-                                channel = channel,
-                                config = config,
-                                prefsCfg = prefsCfg,
-                                expectedSsid = customNetworkName,
-                                expectedPassphrase = customPassphrase,
-                                requestedOpenMode = requestedOpenMode
-                            )
-                        }
+                        override fun onSuccess() = launchGroup()
+                        override fun onFailure(reason: Int) = launchGroup()
                     })
                     return
                 }
@@ -586,12 +376,7 @@ class BitVoidForegroundService : Service() {
 
         tryStartLocalOnlyHotspot(
             prefsCfg = prefsCfg,
-            requestedOpenMode = requestedOpenMode,
-            priorHint = if (!wifiManager.isWifiEnabled) {
-                "Device Wi-Fi is OFF."
-            } else {
-                null
-            }
+            priorHint = if (!wifiManager.isWifiEnabled) "Device Wi-Fi is OFF." else null
         )
     }
 
@@ -602,8 +387,7 @@ class BitVoidForegroundService : Service() {
         config: WifiP2pConfig,
         prefsCfg: BitVoidNetworkConfig,
         expectedSsid: String,
-        expectedPassphrase: String,
-        requestedOpenMode: Boolean
+        expectedPassphrase: String
     ) {
         try {
             p2pMgr.createGroup(channel, config, object : WifiP2pManager.ActionListener {
@@ -619,22 +403,23 @@ class BitVoidForegroundService : Service() {
                     p2pMgr.requestGroupInfo(channel) { group ->
                         val activeSsid = group?.networkName?.takeIf { it.isNotBlank() } ?: expectedSsid
                         val activePass = group?.passphrase?.takeIf { it.isNotBlank() } ?: expectedPassphrase
+                        if (activePass.isBlank()) {
+                            releaseHotspotOnly()
+                            activateAutonomousFallback(
+                                prefsCfg,
+                                "Android returned an unsecured Wi-Fi Direct group; BitVoid refused to publish it."
+                            )
+                            return@requestGroupInfo
+                        }
                         val detection = detectActiveApAndWlanEndpoints()
                         val primaryIp = detection.primaryIp ?: "192.168.49.1"
                         val combinedIps = (detection.allEndpoints + "192.168.49.1" + "127.0.0.1").distinct()
                         publishBroadcastActiveState(
                             prefsCfg = prefsCfg,
-                            requestedOpenMode = requestedOpenMode,
                             activeSsid = activeSsid,
                             activePassphrase = activePass,
                             primaryIp = primaryIp,
                             combinedIps = combinedIps,
-                            isOpenSecurity = false,
-                            customSecurityLabel = if (requestedOpenMode) {
-                                "WIFI BROADCAST LIVE (ANDROID P2P · OS KEY SHOWN BELOW)"
-                            } else {
-                                HotspotSecurityMode.WPA2_VISIBLE.badgeLabel
-                            },
                             radioHint = null
                         )
                     }
@@ -644,28 +429,26 @@ class BitVoidForegroundService : Service() {
                     isP2pGroupActive = false
                     tryStartLocalOnlyHotspot(
                         prefsCfg = prefsCfg,
-                        requestedOpenMode = requestedOpenMode,
                         priorHint = "Wi-Fi Direct code $reason"
                     )
                 }
             })
         } catch (_: SecurityException) {
             isP2pGroupActive = false
-            tryStartLocalOnlyHotspot(prefsCfg, requestedOpenMode, "Permission denied")
+            tryStartLocalOnlyHotspot(prefsCfg, "Permission denied")
         } catch (_: IllegalArgumentException) {
             isP2pGroupActive = false
-            tryStartLocalOnlyHotspot(prefsCfg, requestedOpenMode, "Invalid P2P config")
+            tryStartLocalOnlyHotspot(prefsCfg, "Invalid P2P config")
         }
     }
 
     @Suppress("MissingPermission", "DEPRECATION")
     private fun tryStartLocalOnlyHotspot(
         prefsCfg: BitVoidNetworkConfig,
-        requestedOpenMode: Boolean,
         priorHint: String?
     ) {
         if (!hasHotspotPermission()) {
-            activateAutonomousFallback(prefsCfg, requestedOpenMode, priorHint)
+            activateAutonomousFallback(prefsCfg, priorHint)
             return
         }
         try {
@@ -680,8 +463,8 @@ class BitVoidForegroundService : Service() {
                             return
                         }
 
-                        var activeSsid = ""
-                        var activePass = ""
+                        val activeSsid: String
+                        val activePass: String
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                             val softAp = reservation?.softApConfiguration
                             activeSsid = softAp?.ssid.orEmpty()
@@ -692,25 +475,26 @@ class BitVoidForegroundService : Service() {
                             activePass = wifiCfg?.preSharedKey.orEmpty()
                         }
 
-                        val resolvedSsid = activeSsid.ifBlank { prefsCfg.ssid.ifBlank { DEFAULT_OPEN_SSID } }
+                        if (activePass.isBlank()) {
+                            releaseHotspotOnly()
+                            activateAutonomousFallback(
+                                prefsCfg,
+                                "Android returned an unsecured local hotspot; BitVoid refused to use it."
+                            )
+                            return
+                        }
+
+                        val resolvedSsid = activeSsid.ifBlank { prefsCfg.ssid.ifBlank { DEFAULT_SSID } }
                         val detection = detectActiveApAndWlanEndpoints()
                         val primaryIp = detection.primaryIp ?: "192.168.43.1"
                         val combinedIps = (detection.allEndpoints + "192.168.43.1" + "127.0.0.1").distinct()
-                        val actuallyOpen = activePass.isBlank()
 
                         publishBroadcastActiveState(
                             prefsCfg = prefsCfg,
-                            requestedOpenMode = requestedOpenMode,
                             activeSsid = resolvedSsid,
                             activePassphrase = activePass,
                             primaryIp = primaryIp,
                             combinedIps = combinedIps,
-                            isOpenSecurity = actuallyOpen,
-                            customSecurityLabel = when {
-                                actuallyOpen -> HotspotSecurityMode.OPEN_VISIBLE.badgeLabel
-                                requestedOpenMode -> "SOFTAP BROADCAST LIVE (OS KEY SHOWN BELOW)"
-                                else -> HotspotSecurityMode.WPA2_VISIBLE.badgeLabel
-                            },
                             radioHint = null
                         )
                     }
@@ -718,8 +502,7 @@ class BitVoidForegroundService : Service() {
                     override fun onFailed(reason: Int) {
                         activateAutonomousFallback(
                             prefsCfg = prefsCfg,
-                            requestedOpenMode = requestedOpenMode,
-                            radioHint = "Enable device Wi-Fi or System Portable Hotspot so nearby devices see the network (code $reason)."
+                            radioHint = "Enable device Wi-Fi or a WPA2 System Hotspot so nearby devices can connect (code $reason)."
                         )
                     }
                 },
@@ -728,11 +511,10 @@ class BitVoidForegroundService : Service() {
         } catch (e: Exception) {
             activateAutonomousFallback(
                 prefsCfg = prefsCfg,
-                requestedOpenMode = requestedOpenMode,
                 radioHint = if (!wifiManager.isWifiEnabled) {
-                    "Device Wi-Fi is OFF — turn ON Wi-Fi or System Hotspot so other devices see the network."
+                    "Device Wi-Fi is OFF — turn on Wi-Fi or a password-protected System Hotspot."
                 } else {
-                    "Hotspot radio unavailable (${e.localizedMessage ?: priorHint ?: "unsupported"}). Use LAN URL or System Hotspot."
+                    "Secure hotspot radio unavailable (${e.localizedMessage ?: priorHint ?: "unsupported"}). Use the existing LAN gateway or a WPA2 System Hotspot."
                 }
             )
         }
@@ -740,7 +522,6 @@ class BitVoidForegroundService : Service() {
 
     private fun activateAutonomousFallback(
         prefsCfg: BitVoidNetworkConfig,
-        requestedOpenMode: Boolean,
         radioHint: String?
     ) {
         if (!ensureHttpServerRunning()) {
@@ -750,81 +531,73 @@ class BitVoidForegroundService : Service() {
         }
 
         val detection = detectActiveApAndWlanEndpoints()
-        val primaryIp = detection.primaryIp ?: "127.0.0.1"
-        val combinedIps = (detection.allEndpoints + "127.0.0.1").distinct()
-        val activeSsid = detection.detectedApSsid ?: prefsCfg.ssid.ifBlank { DEFAULT_OPEN_SSID }
-        val configuredPass = if (requestedOpenMode) {
-            ""
-        } else {
-            prefsCfg.passphrase.ifBlank { BitVoidNetworkConfig.DEFAULT_WPA2_PASSPHRASE }
-        }
-        if (detection.hasDedicatedApInterface) {
+        val systemHotspot = if (isSystemWifiApEnabled()) resolveSystemHotspotInfo() else null
+        val secureSystemHotspot = systemHotspot?.isOpen == false &&
+            !systemHotspot.passphrase.isNullOrBlank()
+        if (secureSystemHotspot) {
+            val primaryIp = detection.primaryIp ?: "192.168.43.1"
+            val combinedIps = (detection.allEndpoints + primaryIp + "127.0.0.1").distinct()
             publishBroadcastActiveState(
                 prefsCfg = prefsCfg,
-                requestedOpenMode = requestedOpenMode,
-                activeSsid = activeSsid,
-                activePassphrase = configuredPass,
+                activeSsid = systemHotspot?.ssid ?: prefsCfg.ssid,
+                activePassphrase = systemHotspot?.passphrase.orEmpty(),
                 primaryIp = primaryIp,
                 combinedIps = combinedIps,
-                isOpenSecurity = requestedOpenMode,
-                customSecurityLabel = if (requestedOpenMode) {
-                    HotspotSecurityMode.OPEN_VISIBLE.badgeLabel
-                } else {
-                    HotspotSecurityMode.WPA2_VISIBLE.badgeLabel
-                },
-                radioHint = null
+                radioHint = radioHint
             )
-        } else {
-            val secureReady = ensureSecureServerRunning(combinedIps)
-            BitVoidNodeStateHolder.updateHostState {
-                it.copy(
-                    status = HotspotStatus.SERVER_ONLY,
-                    isServerRunning = true,
-                    isOpenBroadcastMode = false,
-                    needsOpenHotspotSetupBanner = false,
-                    ssid = resolveConnectedWifiSsid().orEmpty(),
-                    passphrase = "Managed by connected Wi-Fi",
-                    gatewayIp = primaryIp,
-                    boundEndpoints = combinedIps.map { ip -> "http://$ip:${BitVoidLocalServer.DEFAULT_PORT}" },
-                    isSecureServerRunning = secureReady,
-                    errorMessage = radioHint
-                        ?: secureServerError
-                        ?: "No hotspot, Wi-Fi Direct group, or dedicated AP interface is active. The vault is available only on the phone's existing Wi-Fi."
-                )
-            }
-            startUptimeTicker()
-            probeAssignedGatewayIp()
-            updateNotification("Local vault online · No hotspot broadcast · http://$primaryIp:${BitVoidLocalServer.DEFAULT_PORT}")
+            return
         }
+
+        val primaryIp = detection.primaryIp ?: "127.0.0.1"
+        val combinedIps = (detection.allEndpoints + "127.0.0.1").distinct()
+        val secureReady = ensureSecureServerRunning(combinedIps)
+        val refusedUnsecuredHotspot = systemHotspot?.isOpen == true
+        BitVoidNodeStateHolder.updateHostState {
+            it.copy(
+                status = HotspotStatus.SERVER_ONLY,
+                isServerRunning = true,
+                securityLabel = BitVoidNetworkConfig.WPA2_SECURITY_LABEL,
+                ssid = resolveConnectedWifiSsid().orEmpty(),
+                passphrase = "Managed by connected Wi-Fi",
+                gatewayIp = primaryIp,
+                boundEndpoints = combinedIps.map { ip -> "http://$ip:${BitVoidLocalServer.DEFAULT_PORT}" },
+                isSecureServerRunning = secureReady,
+                errorMessage = when {
+                    refusedUnsecuredHotspot ->
+                        "An unsecured System Hotspot is active. BitVoid will not use it; enable WPA2/WPA3 protection in Android Hotspot settings."
+                    else -> radioHint
+                        ?: secureServerError
+                        ?: "No password-protected hotspot or Wi-Fi Direct group is active. The vault is available only on the phone's existing Wi-Fi."
+                }
+            )
+        }
+        startUptimeTicker()
+        probeAssignedGatewayIp()
+        updateNotification("Local vault online · No secure hotspot broadcast · http://$primaryIp:${BitVoidLocalServer.DEFAULT_PORT}")
     }
 
     private fun publishBroadcastActiveState(
         prefsCfg: BitVoidNetworkConfig,
-        requestedOpenMode: Boolean,
         activeSsid: String,
         activePassphrase: String,
         primaryIp: String,
         combinedIps: List<String>,
-        isOpenSecurity: Boolean,
-        customSecurityLabel: String,
         radioHint: String?
     ) {
-        val selectedMode = if (requestedOpenMode) {
-            HotspotSecurityMode.OPEN_VISIBLE
-        } else {
-            HotspotSecurityMode.WPA2_VISIBLE
+        if (activePassphrase.isBlank()) {
+            activateAutonomousFallback(
+                prefsCfg,
+                "An unsecured hotspot was detected and refused. BitVoid requires WPA2/WPA3 credentials."
+            )
+            return
         }
         val secureReady = ensureSecureServerRunning(combinedIps)
         BitVoidNodeStateHolder.updateHostState {
             it.copy(
                 status = HotspotStatus.ACTIVE,
                 isServerRunning = true,
-                isOpenBroadcastMode = requestedOpenMode,
-                selectedSecurityMode = selectedMode,
                 isHiddenSsid = BitVoidNetworkConfig.ENFORCED_VISIBLE_SSID,
-                needsOpenHotspotSetupBanner = false,
-                isOpenSecurity = isOpenSecurity,
-                securityLabel = customSecurityLabel,
+                securityLabel = BitVoidNetworkConfig.WPA2_SECURITY_LABEL,
                 configuredSsid = prefsCfg.ssid,
                 configuredPassphrase = prefsCfg.passphrase,
                 ssid = activeSsid,
@@ -838,7 +611,7 @@ class BitVoidForegroundService : Service() {
         }
         startUptimeTicker()
         probeAssignedGatewayIp()
-        updateNotification("SSID: $activeSsid · http://$primaryIp:${BitVoidLocalServer.DEFAULT_PORT}")
+        updateNotification("SECURE SSID: $activeSsid · http://$primaryIp:${BitVoidLocalServer.DEFAULT_PORT}")
     }
 
     @Suppress("DEPRECATION")
@@ -972,34 +745,40 @@ class BitVoidForegroundService : Service() {
                 val current = BitVoidNodeStateHolder.hostState.value
                 val urlList = combinedIps.map { "http://$it:${BitVoidLocalServer.DEFAULT_PORT}" }
                 val secureReady = ensureSecureServerRunning(combinedIps)
-                val resolvedSsid = if (isP2pGroupActive || hotspotReservation != null) {
-                    current.ssid
+                val systemHotspot = if (isSystemWifiApEnabled()) resolveSystemHotspotInfo() else null
+                val secureBroadcastActive = isP2pGroupActive ||
+                    hotspotReservation != null ||
+                    (systemHotspot?.isOpen == false && !systemHotspot.passphrase.isNullOrBlank())
+                val resolvedSsid = when {
+                    isP2pGroupActive || hotspotReservation != null -> current.ssid
+                    secureBroadcastActive -> systemHotspot?.ssid ?: current.ssid
+                    else -> current.ssid
+                }
+                val nextStatus = if (secureBroadcastActive) {
+                    HotspotStatus.ACTIVE
                 } else {
-                    detection.detectedApSsid ?: current.ssid
+                    HotspotStatus.SERVER_ONLY
                 }
                 if ((resolved != current.gatewayIp ||
                         urlList != current.boundEndpoints ||
-                        (resolvedSsid.isNotBlank() && resolvedSsid != current.ssid && current.selectedSecurityMode == HotspotSecurityMode.OPEN_VISIBLE)) &&
+                        nextStatus != current.status ||
+                        (resolvedSsid.isNotBlank() && resolvedSsid != current.ssid)) &&
                     (current.status == HotspotStatus.ACTIVE || current.status == HotspotStatus.SERVER_ONLY)
                 ) {
-                    val hasBroadcastInterface = isP2pGroupActive ||
-                        hotspotReservation != null ||
-                        detection.hasDedicatedApInterface
                     BitVoidNodeStateHolder.updateHostState {
                         it.copy(
-                            status = if (hasBroadcastInterface) HotspotStatus.ACTIVE else HotspotStatus.SERVER_ONLY,
+                            status = nextStatus,
                             ssid = resolvedSsid.ifBlank { it.ssid },
-                            needsOpenHotspotSetupBanner = false,
                             gatewayIp = resolved,
                             boundEndpoints = urlList,
                             isSecureServerRunning = secureReady
                         )
                     }
                     updateNotification(
-                        if (hasBroadcastInterface) {
-                            "BitVoid hotspot broadcast · http://$resolved:${BitVoidLocalServer.DEFAULT_PORT}"
+                        if (secureBroadcastActive) {
+                            "BitVoid secure hotspot broadcast · http://$resolved:${BitVoidLocalServer.DEFAULT_PORT}"
                         } else {
-                            "BitVoid local vault · No hotspot broadcast · http://$resolved:${BitVoidLocalServer.DEFAULT_PORT}"
+                            "BitVoid local vault · No secure hotspot broadcast · http://$resolved:${BitVoidLocalServer.DEFAULT_PORT}"
                         }
                     )
                 }
@@ -1056,8 +835,6 @@ class BitVoidForegroundService : Service() {
 
     private fun shutdownNode() {
         uptimeJob?.cancel()
-        openHotspotWatchJob?.cancel()
-        openHotspotWatchJob = null
         releaseHotspotOnly()
         BitVoidSignalingServer.closeAllRooms("Host node shut down")
         try {
@@ -1077,11 +854,8 @@ class BitVoidForegroundService : Service() {
             state.copy(
                 status = HotspotStatus.IDLE,
                 isServerRunning = false,
-                isOpenBroadcastMode = false,
                 isHiddenSsid = BitVoidNetworkConfig.ENFORCED_VISIBLE_SSID,
-                needsOpenHotspotSetupBanner = false,
-                isOpenSecurity = state.selectedSecurityMode == HotspotSecurityMode.OPEN_VISIBLE,
-                securityLabel = state.selectedSecurityMode.badgeLabel,
+                securityLabel = BitVoidNetworkConfig.WPA2_SECURITY_LABEL,
                 ssid = "",
                 passphrase = "",
                 gatewayIp = "",

@@ -49,6 +49,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.bitvoid.network.model.BitVoidNetworkConfig
 import com.bitvoid.network.model.HostState
 import com.bitvoid.network.ui.theme.VoidAmber
 import com.bitvoid.network.ui.theme.VoidBorder
@@ -63,23 +64,19 @@ import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
 
 private enum class QrPayloadMode {
-    WIFI_OPEN_SSID,
+    WIFI_NETWORK,
     PORTAL_URL
 }
 
 fun buildWifiQrPayload(
     ssid: String,
-    passphrase: String,
-    isOpen: Boolean
+    passphrase: String
 ): String {
-    val cleanSsid = ssid.ifBlank { HostState.DEFAULT_OPEN_SSID }
+    val cleanSsid = ssid.ifBlank { HostState.DEFAULT_SSID }
+    val cleanPassphrase = passphrase.ifBlank { BitVoidNetworkConfig.DEFAULT_WPA2_PASSPHRASE }
     val escapedSsid = escapeWifiQrToken(cleanSsid)
-    return if (isOpen || passphrase.isBlank()) {
-        "WIFI:T:nopass;S:$escapedSsid;H:false;;"
-    } else {
-        val escapedPass = escapeWifiQrToken(passphrase)
-        "WIFI:T:WPA;S:$escapedSsid;P:$escapedPass;H:false;;"
-    }
+    val escapedPass = escapeWifiQrToken(cleanPassphrase)
+    return "WIFI:T:WPA;S:$escapedSsid;P:$escapedPass;H:false;;"
 }
 
 private fun escapeWifiQrToken(raw: String): String {
@@ -130,53 +127,51 @@ fun generateQrImageBitmap(payload: String, sizePx: Int = 512): ImageBitmap? {
     }
 }
 
-fun shareOpenNetworkDetails(context: Context, hostState: HostState) {
+fun shareWifiNetworkDetails(context: Context, hostState: HostState) {
     val ssid = hostState.effectiveSsid
     val portalUrl = hostState.effectivePortalUrl
-    val effectivelyOpen = hostState.isOpenSecurity && hostState.passphrase.isBlank()
-    val securityLine = if (effectivelyOpen) {
-        HostState.SECURITY_OPEN_LABEL
-    } else {
-        "SECURITY: WPA2 (PASS: ${hostState.passphrase})"
-    }
+    val passphrase = hostState.passphrase
+        .takeIf { it.isNotBlank() && !it.startsWith("Managed by") }
+        ?: hostState.configuredPassphrase
+            .ifBlank { BitVoidNetworkConfig.DEFAULT_WPA2_PASSPHRASE }
     val shareBody = buildString {
         appendLine("Join BitVoid Local Network")
         appendLine("SSID: $ssid")
-        appendLine(securityLine)
+        appendLine("SECURITY: WPA2/WPA3")
+        appendLine("PASSWORD: $passphrase")
         appendLine("Portal: $portalUrl")
-        append("Connect to Wi-Fi — BitVoid Channels portal opens automatically.")
+        append("Connect to the protected Wi-Fi network, then open the BitVoid Channels portal.")
     }
     val sendIntent = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
-        putExtra(Intent.EXTRA_SUBJECT, "Join BitVoid Open Wi-Fi: $ssid")
+        putExtra(Intent.EXTRA_SUBJECT, "Join BitVoid Wi-Fi: $ssid")
         putExtra(Intent.EXTRA_TEXT, shareBody)
     }
-    val chooser = Intent.createChooser(sendIntent, "Share BitVoid Open SSID ($ssid)").apply {
+    val chooser = Intent.createChooser(sendIntent, "Share BitVoid Wi-Fi ($ssid)").apply {
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
     context.startActivity(chooser)
 }
 
 @Composable
-fun HostOpenNetworkQrSection(
+fun HostWifiQrSection(
     hostState: HostState,
     onCopy: (String, String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var qrMode by rememberSaveable { mutableStateOf(QrPayloadMode.WIFI_OPEN_SSID) }
+    var qrMode by rememberSaveable { mutableStateOf(QrPayloadMode.WIFI_NETWORK) }
 
     val ssid = hostState.effectiveSsid
     val portalUrl = hostState.effectivePortalUrl
-    val effectivelyOpen = hostState.isOpenSecurity && hostState.passphrase.isBlank()
-    val wifiPayload = remember(ssid, hostState.passphrase, effectivelyOpen) {
-        buildWifiQrPayload(
-            ssid = ssid,
-            passphrase = hostState.passphrase,
-            isOpen = effectivelyOpen
-        )
+    val wifiPassphrase = hostState.passphrase
+        .takeIf { it.isNotBlank() && !it.startsWith("Managed by") }
+        ?: hostState.configuredPassphrase
+            .ifBlank { BitVoidNetworkConfig.DEFAULT_WPA2_PASSPHRASE }
+    val wifiPayload = remember(ssid, wifiPassphrase) {
+        buildWifiQrPayload(ssid = ssid, passphrase = wifiPassphrase)
     }
-    val activePayload = if (qrMode == QrPayloadMode.WIFI_OPEN_SSID) wifiPayload else portalUrl
+    val activePayload = if (qrMode == QrPayloadMode.WIFI_NETWORK) wifiPayload else portalUrl
     val qrBitmap = remember(activePayload) { generateQrImageBitmap(activePayload, 512) }
 
     Column(
@@ -186,7 +181,7 @@ fun HostOpenNetworkQrSection(
             .background(VoidObsidian)
             .border(
                 1.dp,
-                if (effectivelyOpen) VoidMint.copy(alpha = 0.45f) else VoidAmber.copy(alpha = 0.5f),
+                VoidAmber.copy(alpha = 0.5f),
                 RoundedCornerShape(12.dp)
             )
             .padding(14.dp),
@@ -226,12 +221,12 @@ fun HostOpenNetworkQrSection(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             QrModePill(
-                label = if (effectivelyOpen) "WIFI OPEN QR" else "WIFI PASS QR",
-                selected = qrMode == QrPayloadMode.WIFI_OPEN_SSID,
+                label = "WIFI PASSWORD QR",
+                selected = qrMode == QrPayloadMode.WIFI_NETWORK,
                 modifier = Modifier
                     .weight(1f)
                     .testTag("qr_mode_wifi_button"),
-                onClick = { qrMode = QrPayloadMode.WIFI_OPEN_SSID }
+                onClick = { qrMode = QrPayloadMode.WIFI_NETWORK }
             )
             QrModePill(
                 label = "PORTAL URL QR",
@@ -248,16 +243,12 @@ fun HostOpenNetworkQrSection(
                 shape = RoundedCornerShape(14.dp),
                 color = Color.White,
                 border = BorderStroke(2.dp, VoidMint.copy(alpha = 0.75f)),
-                modifier = Modifier.testTag("open_ssid_qr_image")
+                modifier = Modifier.testTag("wifi_qr_image")
             ) {
                 Image(
                     bitmap = qrBitmap,
-                    contentDescription = if (qrMode == QrPayloadMode.WIFI_OPEN_SSID) {
-                        if (effectivelyOpen) {
-                            "QR code to join open Wi-Fi network $ssid without a password"
-                        } else {
-                            "QR code to join Wi-Fi network $ssid with passphrase"
-                        }
+                    contentDescription = if (qrMode == QrPayloadMode.WIFI_NETWORK) {
+                        "QR code to join password-protected Wi-Fi network $ssid"
                     } else {
                         "QR code to open BitVoid portal at $portalUrl"
                     },
@@ -270,12 +261,8 @@ fun HostOpenNetworkQrSection(
         }
 
         Text(
-            text = if (qrMode == QrPayloadMode.WIFI_OPEN_SSID) {
-                if (effectivelyOpen) {
-                    "Friends scan with Camera to join '$ssid' (no password) and auto-open the BitVoid portal."
-                } else {
-                    "Friends scan with Camera to join '$ssid' with its OS-assigned Wi-Fi passphrase and open the BitVoid portal."
-                }
+            text = if (qrMode == QrPayloadMode.WIFI_NETWORK) {
+                "Scan with Camera to join password-protected '$ssid', then open the BitVoid portal."
             } else {
                 "Scan to launch $portalUrl directly in browser or BitVoid Client."
             },
@@ -289,7 +276,7 @@ fun HostOpenNetworkQrSection(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Button(
-                onClick = { shareOpenNetworkDetails(context, hostState) },
+                onClick = { shareWifiNetworkDetails(context, hostState) },
                 colors = ButtonDefaults.buttonColors(
                     containerColor = VoidMint,
                     contentColor = VoidObsidian
@@ -297,31 +284,31 @@ fun HostOpenNetworkQrSection(
                 modifier = Modifier
                     .weight(1f)
                     .height(48.dp)
-                    .testTag("share_open_ssid_button")
+                    .testTag("share_wifi_button")
             ) {
                 Icon(
                     imageVector = Icons.Filled.Share,
-                    contentDescription = "Share Open SSID",
+                    contentDescription = "Share Wi-Fi details",
                     modifier = Modifier.size(17.dp)
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = if (effectivelyOpen) "SHARE OPEN SSID" else "SHARE WIFI INFO",
+                    text = "SHARE WIFI INFO",
                     style = MaterialTheme.typography.labelLarge
                 )
             }
 
             OutlinedButton(
-                onClick = { onCopy("Open SSID", ssid) },
+                onClick = { onCopy("Wi-Fi SSID", ssid) },
                 border = BorderStroke(1.dp, VoidCyan),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidCyan),
                 modifier = Modifier
                     .height(48.dp)
-                    .testTag("copy_open_ssid_button")
+                    .testTag("copy_wifi_ssid_button")
             ) {
                 Icon(
                     imageVector = Icons.Filled.ContentCopy,
-                    contentDescription = "Copy Open SSID",
+                    contentDescription = "Copy Wi-Fi SSID",
                     modifier = Modifier.size(16.dp)
                 )
                 Spacer(modifier = Modifier.width(6.dp))

@@ -43,12 +43,8 @@ data class AuditLogEntry(
 data class HostState(
     val status: HotspotStatus = HotspotStatus.IDLE,
     val isServerRunning: Boolean = false,
-    val isOpenBroadcastMode: Boolean = false,
-    val selectedSecurityMode: HotspotSecurityMode = HotspotSecurityMode.OPEN_VISIBLE,
     val isHiddenSsid: Boolean = BitVoidNetworkConfig.ENFORCED_VISIBLE_SSID,
-    val needsOpenHotspotSetupBanner: Boolean = false,
-    val isOpenSecurity: Boolean = true,
-    val securityLabel: String = HotspotSecurityMode.OPEN_VISIBLE.badgeLabel,
+    val securityLabel: String = BitVoidNetworkConfig.WPA2_SECURITY_LABEL,
     val configuredSsid: String = BitVoidNetworkConfig.DEFAULT_VISIBLE_SSID,
     val configuredPassphrase: String = BitVoidNetworkConfig.DEFAULT_WPA2_PASSPHRASE,
     val ssid: String = "",
@@ -77,7 +73,7 @@ data class HostState(
         get() = sharedFiles.count { it.isPublic }
 
     val effectiveSsid: String
-        get() = ssid.ifBlank { configuredSsid.ifBlank { DEFAULT_OPEN_SSID } }
+        get() = ssid.ifBlank { configuredSsid.ifBlank { DEFAULT_SSID } }
 
     val effectivePortalUrl: String
         get() = if (isServerRunning && gatewayIp.isNotBlank()) {
@@ -101,8 +97,7 @@ data class HostState(
         }
 
     companion object {
-        const val DEFAULT_OPEN_SSID = BitVoidNetworkConfig.DEFAULT_VISIBLE_SSID
-        val SECURITY_OPEN_LABEL = HotspotSecurityMode.OPEN_VISIBLE.badgeLabel
+        const val DEFAULT_SSID = BitVoidNetworkConfig.DEFAULT_VISIBLE_SSID
     }
 }
 
