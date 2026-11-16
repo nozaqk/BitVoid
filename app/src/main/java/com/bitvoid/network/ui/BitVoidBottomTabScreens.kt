@@ -3,7 +3,6 @@ package com.bitvoid.network.ui
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -54,8 +53,6 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -68,7 +65,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
@@ -79,7 +75,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bitvoid.network.model.AppBottomTab
 import com.bitvoid.network.model.HostState
-import com.bitvoid.network.model.HotspotSecurityMode
 import com.bitvoid.network.model.HotspotStatus
 import com.bitvoid.network.ui.theme.VoidAmber
 import com.bitvoid.network.ui.theme.VoidBorder
@@ -155,10 +150,8 @@ fun BitVoidBottomNavigationBar(
 @Composable
 fun HostNetworkProtocolDialog(
     hostState: HostState,
-    onSelectMode: (HotspotSecurityMode) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val locked = hostState.isEngineLocked
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = VoidSurface,
@@ -209,11 +202,12 @@ fun HostNetworkProtocolDialog(
                     )
                     ProtocolDetailRow("Streaming", "HTTP 206 Partial Content · 4KB Padded")
                     ProtocolDetailRow("Captive Portal", "HTTP discovery + certificate setup")
+                    ProtocolDetailRow("Wireless Security", "WPA2/WPA3 password required")
                     ProtocolDetailRow(
                         "Wireless Broadcast",
                         when (hostState.status) {
-                            HotspotStatus.ACTIVE -> "Active · actual SSID: ${hostState.ssid}"
-                            HotspotStatus.STARTING -> "Waiting for Android hotspot"
+                            HotspotStatus.ACTIVE -> "Active · protected SSID: ${hostState.ssid}"
+                            HotspotStatus.STARTING -> "Starting protected Android hotspot"
                             else -> "Not active · existing Wi-Fi gateway only"
                         }
                     )
@@ -226,72 +220,10 @@ fun HostNetworkProtocolDialog(
                 }
 
                 Text(
-                    text = if (locked) {
-                        "SECURITY MODE (LOCKED WHILE ENGINE IS LIVE)"
-                    } else {
-                        "SELECT WIRELESS SECURITY MODE"
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (locked) VoidAmber else VoidCyan
+                    text = "BitVoid does not create or advertise password-free networks. If Android returns an unsecured hotspot, BitVoid refuses it and keeps the vault in server-only mode.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = VoidTextSecondary
                 )
-
-                HotspotSecurityMode.entries.forEach { option ->
-                    val isSelected = hostState.selectedSecurityMode == option
-                    val optionAccent =
-                        if (option == HotspotSecurityMode.OPEN_VISIBLE) VoidMint else VoidCyan
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(
-                                if (isSelected) {
-                                    optionAccent.copy(alpha = if (locked) 0.06f else 0.12f)
-                                } else {
-                                    VoidObsidian
-                                }
-                            )
-                            .border(
-                                width = 1.dp,
-                                color = if (isSelected) {
-                                    optionAccent.copy(alpha = if (locked) 0.45f else 0.8f)
-                                } else {
-                                    VoidBorder
-                                },
-                                shape = RoundedCornerShape(10.dp)
-                            )
-                            .clickable(enabled = !locked) { onSelectMode(option) }
-                            .padding(horizontal = 8.dp, vertical = 10.dp)
-                            .alpha(if (locked && !isSelected) 0.55f else 1f)
-                            .testTag("dialog_security_mode_${option.name.lowercase()}"),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(
-                            selected = isSelected,
-                            onClick = if (locked) null else ({ onSelectMode(option) }),
-                            enabled = !locked,
-                            colors = RadioButtonDefaults.colors(
-                                selectedColor = optionAccent,
-                                unselectedColor = VoidTextSecondary,
-                                disabledSelectedColor = optionAccent.copy(alpha = 0.65f),
-                                disabledUnselectedColor = VoidTextSecondary.copy(alpha = 0.4f)
-                            )
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = option.title,
-                                style = MaterialTheme.typography.labelLarge,
-                                color = if (isSelected) optionAccent else VoidTextPrimary
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = option.description,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = VoidTextSecondary
-                            )
-                        }
-                    }
-                }
             }
         },
         confirmButton = {
@@ -343,7 +275,7 @@ fun HostQrCodeDialog(
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
             ) {
-                HostOpenNetworkQrSection(
+                HostWifiQrSection(
                     hostState = hostState,
                     onCopy = onCopy
                 )
@@ -688,7 +620,7 @@ fun SettingsAutonomousCard(
                         if (hostState.isServerRunning) "RUNNING (${hostState.effectivePortalUrl})" else "STANDBY"
                     )
                     ProtocolDetailRow("Configured SSID", hostState.configuredSsid)
-                    ProtocolDetailRow("Requested Security", hostState.selectedSecurityMode.title)
+                    ProtocolDetailRow("Required Security", "WPA2/WPA3 password protected")
                     ProtocolDetailRow(
                         "Actual Broadcast",
                         if (hostState.status == HotspotStatus.ACTIVE) {

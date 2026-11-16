@@ -2052,7 +2052,7 @@ class BitVoidLocalServer(
               <title>BitVoid Captive Portal</title>
             </head>
             <body style="background:#0D1117;color:#00FF9C;font-family:monospace;padding:24px;">
-              <p>BitVoid Open Network Captive Portal — Redirecting to BitVoid Channels...</p>
+              <p>BitVoid Protected Network Portal — Redirecting to BitVoid Channels...</p>
               <p><a href="$portalTarget" style="color:#00FF9C;">Open BitVoid Portal ($portalTarget)</a></p>
             </body>
             </html>
@@ -3173,7 +3173,7 @@ class BitVoidLocalServer(
               </div>
 
               <div class="drawer-meta-card">
-                <div>MODE: <strong>${if (hostState.isOpenSecurity) "OPEN NET · NO PASSWORD" else "WPA2 / 4KB PADDED"}</strong></div>
+                <div>MODE: <strong>WPA2 PROTECTED / 4KB PADDED</strong></div>
                 <div>SSID: <strong>${htmlEscape(hostState.effectiveSsid)}</strong> · GATEWAY: <strong>${htmlEscape(gatewayLabel)}</strong></div>
                 <div>SESSION: <strong>${htmlEscape(token)}</strong> · SYNC: <strong id="sync-status">LIVE</strong></div>
               </div>
