@@ -3090,9 +3090,9 @@ class BitVoidLocalServer(
               gap: 10px;
             }
             .live-stage-panel.meeting-active {
-              flex: 1;
+              flex: 0 1 auto;
               min-height: 0;
-              max-height: none;
+              max-height: min(72vh, calc(100dvh - 120px));
               padding: 14px;
               overflow-y: auto;
               align-content: start;
@@ -3146,7 +3146,7 @@ class BitVoidLocalServer(
             }
             .live-video-grid {
               display: grid;
-              grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+              grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
               gap: 8px;
             }
             .live-video-tile {
@@ -3155,7 +3155,7 @@ class BitVoidLocalServer(
               border: 1px solid var(--border);
               border-radius: 10px;
               overflow: hidden;
-              min-height: 132px;
+              min-height: 112px;
               display: flex;
               align-items: center;
               justify-content: center;
@@ -3163,34 +3163,37 @@ class BitVoidLocalServer(
             .live-video-tile.teacher-tile,
             .live-video-tile.presenter-tile {
               border-color: var(--mint);
+            }
+            .live-video-tile.presenter-tile {
               grid-column: 1 / -1;
-              min-height: 190px;
+              min-height: 220px;
             }
             .meeting-active .live-video-grid {
-              grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+              grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
               align-items: stretch;
             }
             .meeting-active .live-video-tile {
-              min-height: clamp(220px, 42vh, 620px);
-              box-shadow: 0 16px 48px rgba(0, 0, 0, 0.28);
+              min-height: 150px;
+              max-height: 300px;
+              box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
             }
-            .meeting-active .live-video-tile.presenter-tile,
-            .meeting-active .live-video-tile.teacher-tile {
-              min-height: clamp(300px, 58vh, 720px);
+            .meeting-active .live-video-tile.presenter-tile {
+              min-height: clamp(240px, 42vh, 520px);
+              max-height: 520px;
             }
             .live-waiting-state {
               display: flex;
               flex-direction: column;
               align-items: center;
               justify-content: center;
-              gap: 10px;
-              padding: 28px;
+              gap: 6px;
+              padding: 14px;
               text-align: center;
               color: var(--muted);
             }
             .live-waiting-avatar {
-              width: 82px;
-              height: 82px;
+              width: 54px;
+              height: 54px;
               display: flex;
               align-items: center;
               justify-content: center;
@@ -3198,14 +3201,20 @@ class BitVoidLocalServer(
               border: 2px solid var(--cyan);
               color: var(--cyan);
               background: rgba(56, 189, 248, 0.12);
-              font-size: 28px;
+              font-size: 18px;
               font-weight: 800;
             }
-            .live-waiting-title { color: var(--text); font-size: 16px; font-weight: 700; }
+            .live-waiting-title { color: var(--text); font-size: 13px; font-weight: 700; }
+            .teacher-tile .live-waiting-avatar {
+              border-color: var(--mint);
+              color: var(--mint);
+              background: rgba(0, 255, 156, 0.12);
+            }
             .live-video-tile video {
+              position: absolute;
+              inset: 0;
               width: 100%;
               height: 100%;
-              max-height: 260px;
               object-fit: contain;
               margin: 0;
               border: none;
@@ -3224,9 +3233,7 @@ class BitVoidLocalServer(
               border-radius: 6px;
             }
             .live-participants-grid {
-              display: flex;
-              flex-wrap: wrap;
-              gap: 6px;
+              display: none;
             }
             .live-participant-chip {
               display: inline-flex;
@@ -3335,10 +3342,16 @@ class BitVoidLocalServer(
                 margin: -10px -10px 0;
                 padding: 9px 10px;
               }
-              .meeting-active .live-video-tile,
-              .meeting-active .live-video-tile.presenter-tile,
-              .meeting-active .live-video-tile.teacher-tile {
-                min-height: clamp(230px, 48vh, 520px);
+              .meeting-active .live-video-grid {
+                grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
+              }
+              .meeting-active .live-video-tile {
+                min-height: 122px;
+                max-height: 220px;
+              }
+              .meeting-active .live-video-tile.presenter-tile {
+                min-height: clamp(220px, 38vh, 420px);
+                max-height: 420px;
               }
               .meeting-active #live-active-controls,
               .meeting-active #direct-incoming-controls {
@@ -4671,19 +4684,7 @@ class BitVoidLocalServer(
               function renderRtcParticipants(peers) {
                 rtcParticipantList = peers || [];
                 liveParticipantsGrid.innerHTML = '';
-                rtcParticipantList.forEach(function (p) {
-                  var chip = document.createElement('span');
-                  var isTeacher = p.role === 'HOST_TEACHER';
-                  chip.className = 'live-participant-chip' + (isTeacher ? ' teacher' : '');
-                  var statusBits = [];
-                  if (isTeacher) statusBits.push('TEACHER');
-                  else if (p.role === 'STUDENT_VIEWER') statusBits.push('STUDENT');
-                  if (rtcMode === 'LIVE_CLASSROOM' && p.isScreenSharing) statusBits.push('SCREEN');
-                  else if (rtcMode === 'LIVE_CLASSROOM' && p.isVideoOn) statusBits.push('CAM');
-                  if (p.isMuted) statusBits.push('MUTED');
-                  chip.textContent = (p.displayName || p.peerId) + (statusBits.length ? (' · ' + statusBits.join('/')) : '');
-                  liveParticipantsGrid.appendChild(chip);
-                });
+                renderRtcVideoTiles();
               }
 
               function appendRtcWaitingState(tile, title, subtitle, initials) {
@@ -4705,71 +4706,94 @@ class BitVoidLocalServer(
 
               function renderRtcVideoTiles() {
                 liveVideoGrid.innerHTML = '';
-                var localStream = rtcScreenSharing && rtcScreenStream ? rtcScreenStream : rtcLocalStream;
-                if (rtcMode === 'LIVE_CLASSROOM' && localStream && (rtcVideoOn || rtcScreenSharing)) {
-                  var localTile = document.createElement('div');
-                  localTile.className = 'live-video-tile' +
-                    (rtcScreenSharing ? ' presenter-tile' : (rtcRole === 'HOST_TEACHER' ? ' teacher-tile' : ''));
-                  var v = document.createElement('video');
-                  v.autoplay = true;
-                  v.muted = true;
-                  v.playsInline = true;
-                  v.srcObject = localStream;
-                  var lbl = document.createElement('span');
-                  lbl.className = 'live-tile-label';
-                  lbl.textContent = 'YOU (' + (rtcScreenSharing ? 'SCREEN SHARE' : rtcRole) + ')';
-                  localTile.appendChild(v);
-                  localTile.appendChild(lbl);
-                  liveVideoGrid.appendChild(localTile);
+                var peers = rtcParticipantList.slice();
+
+                // While signaling is opening, show the local participant as a compact card rather
+                // than reserving the entire page for an empty presentation placeholder.
+                if (!peers.length && rtcSocket && rtcPeerId) {
+                  peers.push({
+                    peerId: rtcPeerId,
+                    displayName: portalUsername || (activeDm ? activeDm.myUsername : 'You'),
+                    role: rtcRole,
+                    isMuted: rtcMuted,
+                    isVideoOn: rtcVideoOn,
+                    isScreenSharing: rtcScreenSharing
+                  });
+                } else if (!peers.length && activeDm && directCallLastPhase === 'RINGING') {
+                  peers.push({
+                    peerId: 'pending_remote',
+                    displayName: '@' + activeDm.peerUsername,
+                    role: 'SPEAKER',
+                    isMuted: true,
+                    isVideoOn: false,
+                    isScreenSharing: false
+                  });
                 }
 
-                Object.keys(rtcRemoteStreams).sort(function (a, b) {
-                  var aMeta = rtcParticipantList.find(function (p) { return p.peerId === a; });
-                  var bMeta = rtcParticipantList.find(function (p) { return p.peerId === b; });
-                  return Number(!!(bMeta && bMeta.isScreenSharing)) - Number(!!(aMeta && aMeta.isScreenSharing));
-                }).forEach(function (pid) {
-                  var stream = rtcRemoteStreams[pid];
-                  if (!stream) return;
-                  var peerMeta = rtcParticipantList.find(function (p) { return p.peerId === pid; });
-                  var tile = document.createElement('div');
-                  var isTeacher = rtcMode === 'LIVE_CLASSROOM' && peerMeta && peerMeta.role === 'HOST_TEACHER';
-                  var isPresenting = rtcMode === 'LIVE_CLASSROOM' && peerMeta && peerMeta.isScreenSharing;
-                  tile.className = 'live-video-tile' +
-                    (isPresenting ? ' presenter-tile' : (isTeacher ? ' teacher-tile' : ''));
-                  var v = document.createElement('video');
-                  v.autoplay = true;
-                  v.playsInline = true;
-                  v.srcObject = stream;
-                  if (rtcMode !== 'LIVE_CLASSROOM' || stream.getVideoTracks().length === 0) {
-                    v.style.display = 'none';
-                    appendRtcWaitingState(
-                      tile,
-                      peerMeta ? peerMeta.displayName : pid,
-                      rtcMode === 'LIVE_CLASSROOM' ? 'Audio connected · camera is off' : 'Voice connected · video is disabled',
-                      peerMeta ? peerMeta.displayName : pid
-                    );
+                Object.keys(rtcRemoteStreams).forEach(function (pid) {
+                  if (!peers.some(function (p) { return p.peerId === pid; })) {
+                    peers.push({
+                      peerId: pid,
+                      displayName: pid,
+                      role: 'SPEAKER',
+                      isMuted: false,
+                      isVideoOn: false,
+                      isScreenSharing: false
+                    });
                   }
-                  var lbl = document.createElement('span');
-                  lbl.className = 'live-tile-label';
-                  lbl.textContent = (peerMeta ? peerMeta.displayName : pid) +
-                    (isPresenting ? ' [PRESENTING]' : (isTeacher ? ' [TEACHER]' : ''));
-                  tile.appendChild(v);
-                  tile.appendChild(lbl);
-                  liveVideoGrid.appendChild(tile);
                 });
 
-                if (!liveVideoGrid.children.length) {
-                  var waitingTile = document.createElement('div');
-                  waitingTile.className = 'live-video-tile presenter-tile';
-                  var waitingName = activeDm ? ('@' + activeDm.peerUsername) : 'Meeting participants';
-                  var waitingText = activeDm && directCallLastPhase === 'RINGING'
-                    ? 'Calling on this local Wi-Fi node…'
-                    : (rtcMode === 'LIVE_CLASSROOM'
-                      ? 'Camera is off · audio meeting stage is ready'
-                      : 'Voice-only call · camera and video are disabled');
-                  appendRtcWaitingState(waitingTile, waitingName, waitingText, activeDm ? activeDm.peerUsername : 'BV');
-                  liveVideoGrid.appendChild(waitingTile);
-                }
+                peers.sort(function (a, b) {
+                  var presentingOrder = Number(!!b.isScreenSharing) - Number(!!a.isScreenSharing);
+                  if (presentingOrder) return presentingOrder;
+                  var teacherOrder = Number(b.role === 'HOST_TEACHER') - Number(a.role === 'HOST_TEACHER');
+                  if (teacherOrder) return teacherOrder;
+                  return String(a.displayName || a.peerId).localeCompare(String(b.displayName || b.peerId));
+                });
+
+                peers.forEach(function (peer) {
+                  var isSelf = peer.peerId === rtcPeerId;
+                  var isLiveClass = rtcMode === 'LIVE_CLASSROOM';
+                  var isPresenting = isLiveClass && (isSelf ? rtcScreenSharing : !!peer.isScreenSharing);
+                  var isTeacher = isLiveClass && peer.role === 'HOST_TEACHER';
+                  var stream = isSelf
+                    ? (rtcScreenSharing && rtcScreenStream ? rtcScreenStream : rtcLocalStream)
+                    : rtcRemoteStreams[peer.peerId];
+                  var hasLiveVideo = isLiveClass && !!stream &&
+                    stream.getVideoTracks().some(function (track) { return track.readyState !== 'ended'; }) &&
+                    (isPresenting || (isSelf ? rtcVideoOn : !!peer.isVideoOn));
+                  var tile = document.createElement('div');
+                  tile.className = 'live-video-tile' +
+                    (isPresenting ? ' presenter-tile' : (isTeacher ? ' teacher-tile' : ''));
+
+                  if (hasLiveVideo) {
+                    var video = document.createElement('video');
+                    video.autoplay = true;
+                    video.muted = isSelf;
+                    video.playsInline = true;
+                    video.srcObject = stream;
+                    tile.appendChild(video);
+
+                    var label = document.createElement('span');
+                    label.className = 'live-tile-label';
+                    label.textContent = (isSelf ? 'YOU' : (peer.displayName || peer.peerId)) +
+                      (isPresenting ? ' · PRESENTING' : (isTeacher ? ' · TEACHER' : ''));
+                    tile.appendChild(label);
+                  } else {
+                    var roleLabel = peer.role === 'HOST_TEACHER'
+                      ? 'TEACHER'
+                      : (peer.role === 'STUDENT_VIEWER' ? 'STUDENT' : 'SPEAKER');
+                    var audioLabel = peer.isMuted ? 'MUTED' : 'MIC LIVE';
+                    var mediaLabel = isLiveClass ? 'CAMERA OFF' : 'VOICE ONLY';
+                    appendRtcWaitingState(
+                      tile,
+                      (isSelf ? 'YOU · ' : '') + (peer.displayName || peer.peerId),
+                      roleLabel + ' · ' + audioLabel + ' · ' + mediaLabel,
+                      peer.displayName || peer.peerId
+                    );
+                  }
+                  liveVideoGrid.appendChild(tile);
+                });
               }
 
               function sendRtcMediaState() {
