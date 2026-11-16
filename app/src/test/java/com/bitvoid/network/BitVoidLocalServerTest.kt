@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.bitvoid.network.call.BitVoidSignalingServer
 import com.bitvoid.network.call.DirectCallPhase
+import com.bitvoid.network.call.SignalingSessionMode
 import com.bitvoid.network.channel.BitVoidChannelManager
 import com.bitvoid.network.client.BitVoidClientManager
 import com.bitvoid.network.client.BitVoidClientRepository
@@ -104,9 +105,10 @@ class BitVoidLocalServerTest {
         assertTrue(html.contains("wa-composer"))
         assertFalse(html.contains("id=\"toggle-media-btn\""))
         assertTrue(html.contains("id=\"voice-call-btn\""))
-        assertTrue(html.contains("id=\"video-call-btn\""))
+        assertFalse(html.contains("id=\"video-call-btn\""))
+        assertFalse(html.contains("Start video call"))
         assertTrue(html.contains("/call/invite"))
-        assertTrue(html.contains("Camera and microphone require trusted HTTPS"))
+        assertTrue(html.contains("access requires trusted HTTPS"))
         assertTrue(html.contains("id=\"pchat-users-list\""))
         assertTrue(html.contains("id=\"pchat-add-user-btn\""))
         assertTrue(html.contains("id=\"pchat-discoverable-toggle\""))
@@ -1064,7 +1066,7 @@ class BitVoidLocalServerTest {
     }
 
     @Test
-    fun `portal html includes live classroom webrtc signaling ui and permissive camera mic display headers`() {
+    fun `portal html keeps live class video features but exposes voice-only calls`() {
         BitVoidChannelManager.ensureDefaultChannel()
         val conn = URL("http://127.0.0.1:$testPort/").openConnection() as HttpURLConnection
         assertEquals(200, conn.responseCode)
@@ -1079,12 +1081,15 @@ class BitVoidLocalServerTest {
         assertTrue(html.contains("LIVE CLASS / CALL"))
         assertTrue(html.contains("rtc-start-class-host-btn"))
         assertTrue(html.contains("rtc-start-call-btn"))
+        assertTrue(html.contains("START VOICE CALL"))
+        assertFalse(html.contains("START VOICE / VIDEO CALL"))
         assertTrue(html.contains("rtc-share-screen-btn"))
         assertTrue(html.contains("direct-incoming-controls"))
         assertTrue(html.contains("meeting-active"))
         assertTrue(html.contains("Calls are unavailable in General Chat"))
         assertTrue(html.contains("activeChannel.channelId === 'general-chat'"))
-        assertTrue(html.contains("joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true, null, null, !!withVideo)"))
+        assertTrue(html.contains("joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true, null, null, false)"))
+        assertTrue(html.contains("body: JSON.stringify({ withVideo: false })"))
         assertFalse(html.contains("window.confirm"))
     }
 
@@ -1463,7 +1468,7 @@ class BitVoidLocalServerTest {
             assertEquals(DirectCallPhase.RINGING, ringing!!.directCallPhase)
             assertTrue(ringing.isIncoming)
             assertEquals("alice-call", ringing.callerUsername)
-            assertTrue(ringing.withVideo)
+            assertFalse(ringing.withVideo)
 
             assertTrue(bobRepo.acceptDirectCall(dmId, bobSession.token, baseUrl).isSuccess)
             aliceRepo.fetchDirectCallStatus(dmId, aliceSession.token, baseUrl)
@@ -1479,6 +1484,17 @@ class BitVoidLocalServerTest {
                 )
             )
 
+            val dmMaterialUpload = (URL(
+                "$baseUrl/api/live-class/$dmId/materials"
+            ).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                setRequestProperty("X-DM-Token", bobSession.token)
+                outputStream.use { it.write(ByteArray(0)) }
+            }
+            assertEquals(409, dmMaterialUpload.responseCode)
+            dmMaterialUpload.disconnect()
+
             aliceWs = okClient.newWebSocket(
                 Request.Builder()
                     .url("ws://127.0.0.1:$testPort/ws/signaling?roomId=$dmId&channelId=$dmId&peerId=alice_p&displayName=alice-call&mode=VOICE_VIDEO_CALL&role=SPEAKER&token=${aliceSession.token}")
@@ -1491,7 +1507,9 @@ class BitVoidLocalServerTest {
             )
             bobWs = okClient.newWebSocket(
                 Request.Builder()
-                    .url("ws://127.0.0.1:$testPort/ws/signaling?roomId=$dmId&channelId=$dmId&peerId=bob_p&displayName=bob-call&mode=VOICE_VIDEO_CALL&role=SPEAKER&token=${bobSession.token}")
+                    // A modified Direct Chat client cannot relabel the call as Live Class or
+                    // advertise camera/screen media during its initial signaling join.
+                    .url("ws://127.0.0.1:$testPort/ws/signaling?roomId=$dmId&channelId=$dmId&peerId=bob_p&displayName=bob-call&mode=LIVE_CLASSROOM&role=HOST_TEACHER&isVideoOn=true&isScreenSharing=true&token=${bobSession.token}")
                     .build(),
                 object : WebSocketListener() {
                     override fun onMessage(webSocket: WebSocket, text: String) {
@@ -1509,6 +1527,16 @@ class BitVoidLocalServerTest {
             }
             assertTrue(aliceSignals.any { it.optString("type") == "welcome" })
             assertTrue(bobSignals.any { it.optString("type") == "welcome" })
+            val bobWelcome = bobSignals.first { it.optString("type") == "welcome" }
+            assertEquals(SignalingSessionMode.VOICE_VIDEO_CALL.name, bobWelcome.getString("mode"))
+            val welcomedBob = bobWelcome.getJSONArray("peers")
+                .let { peers ->
+                    (0 until peers.length())
+                        .map { peers.getJSONObject(it) }
+                        .first { it.getString("peerId") == "bob_p" }
+                }
+            assertFalse(welcomedBob.getBoolean("isVideoOn"))
+            assertFalse(welcomedBob.getBoolean("isScreenSharing"))
 
             // Valid participant receives active DM call status
             bobRepo.fetchDirectCallStatus(dmId, bobSession.token, baseUrl)
@@ -1525,6 +1553,25 @@ class BitVoidLocalServerTest {
                 waitCount++
             }
             assertEquals("v=0-dm-offer", bobSignals.first { it.optString("type") == "offer" }.getString("sdp"))
+
+            // Legacy or modified clients cannot re-enable camera/screen state in a voice call.
+            aliceWs.send(
+                """{"type":"media_state","isMuted":false,"isVideoOn":true,"isScreenSharing":true,"role":"SPEAKER"}"""
+            )
+            waitCount = 0
+            while (bobSignals.none { it.optString("type") == "peers_update" } && waitCount < 30) {
+                delay(40)
+                waitCount++
+            }
+            val voiceUpdate = bobSignals.last { it.optString("type") == "peers_update" }
+            val updatedAlice = voiceUpdate.getJSONArray("peers")
+                .let { peers ->
+                    (0 until peers.length())
+                        .map { peers.getJSONObject(it) }
+                        .first { it.getString("peerId") == "alice_p" }
+                }
+            assertFalse(updatedAlice.getBoolean("isVideoOn"))
+            assertFalse(updatedAlice.getBoolean("isScreenSharing"))
         } finally {
             aliceWs?.cancel()
             bobWs?.cancel()

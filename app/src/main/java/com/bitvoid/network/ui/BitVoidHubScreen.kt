@@ -52,7 +52,6 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.VideoLibrary
-import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -203,7 +202,7 @@ fun BitVoidPrivateChatScreen(
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "PRIVATE USER CHAT · VOICE · VIDEO",
+                    text = "PRIVATE USER CHAT · VOICE CALLS",
                     style = MaterialTheme.typography.labelSmall,
                     color = VoidMint
                 )
@@ -427,13 +426,13 @@ fun BitVoidHubScreen(
     onOpenListedLiveClass: (RemoteLiveClassSummary) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var pendingAutoCallWithVideo by rememberSaveable { mutableStateOf<Boolean?>(null) }
+    var pendingAutoVoiceCall by rememberSaveable { mutableStateOf(false) }
 
     if (activeDirectSession != null) {
         val directCallStageActive = callUiState.isInRoom(activeDirectSession.dmId)
         if (directCallStageActive) {
             val leaveDirectMeeting: () -> Unit = {
-                pendingAutoCallWithVideo = null
+                pendingAutoVoiceCall = false
                 callActions.onLeaveSession()
             }
             BackHandler(onBack = leaveDirectMeeting)
@@ -453,7 +452,7 @@ fun BitVoidHubScreen(
         }
 
         BackHandler {
-            pendingAutoCallWithVideo = null
+            pendingAutoVoiceCall = false
             onLeaveDirectChat()
         }
         WhatsAppDirectChatSpace(
@@ -461,12 +460,12 @@ fun BitVoidHubScreen(
             messages = directMessages,
             wsStatus = directWsStatus,
             isUploadingFile = isUploadingFile,
-            pendingAutoCallWithVideo = pendingAutoCallWithVideo,
-            onConsumePendingAutoCall = { pendingAutoCallWithVideo = null },
+            pendingAutoVoiceCall = pendingAutoVoiceCall,
+            onConsumePendingAutoCall = { pendingAutoVoiceCall = false },
             callUiState = callUiState,
             callActions = callActions,
             onBack = {
-                pendingAutoCallWithVideo = null
+                pendingAutoVoiceCall = false
                 onLeaveDirectChat()
             },
             onSendMessage = onSendDirectMessage,
@@ -529,7 +528,6 @@ fun BitVoidHubScreen(
     var showPlusChooserDialog by rememberSaveable { mutableStateOf(false) }
     var showDirectChatDialog by rememberSaveable { mutableStateOf(false) }
     var directDialogForCall by rememberSaveable { mutableStateOf(false) }
-    var directDialogCallWithVideo by rememberSaveable { mutableStateOf(true) }
     var showStartLiveClassDialog by rememberSaveable { mutableStateOf(false) }
     var isStartingLiveClass by remember { mutableStateOf(false) }
     var showJoinClassByIdDialog by rememberSaveable { mutableStateOf(false) }
@@ -1152,7 +1150,7 @@ fun BitVoidHubScreen(
             modifier = Modifier.testTag("direct_chat_dialog"),
             title = {
                 Text(
-                    text = if (directDialogForCall) "VOICE / VIDEO CALL USER" else "CHAT WITH USER",
+                    text = if (directDialogForCall) "VOICE CALL USER" else "CHAT WITH USER",
                     style = MaterialTheme.typography.titleMedium
                 )
             },
@@ -1180,70 +1178,6 @@ fun BitVoidHubScreen(
                                 color = VoidTextPrimary,
                                 fontWeight = FontWeight.Bold
                             )
-                        }
-                    }
-
-                    if (directDialogForCall) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Surface(
-                                onClick = { directDialogCallWithVideo = true },
-                                shape = RoundedCornerShape(10.dp),
-                                color = if (directDialogCallWithVideo) VoidMintContainer else VoidObsidian,
-                                border = BorderStroke(1.dp, if (directDialogCallWithVideo) VoidMint else VoidBorder),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(48.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxSize(),
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Filled.Videocam,
-                                        contentDescription = null,
-                                        tint = if (directDialogCallWithVideo) VoidMint else VoidTextSecondary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(
-                                        text = "VIDEO CALL",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = if (directDialogCallWithVideo) VoidMint else VoidTextSecondary
-                                    )
-                                }
-                            }
-                            Surface(
-                                onClick = { directDialogCallWithVideo = false },
-                                shape = RoundedCornerShape(10.dp),
-                                color = if (!directDialogCallWithVideo) VoidCyan.copy(alpha = 0.16f) else VoidObsidian,
-                                border = BorderStroke(1.dp, if (!directDialogCallWithVideo) VoidCyan else VoidBorder),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(48.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxSize(),
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Filled.Call,
-                                        contentDescription = null,
-                                        tint = if (!directDialogCallWithVideo) VoidCyan else VoidTextSecondary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(
-                                        text = "VOICE CALL",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = if (!directDialogCallWithVideo) VoidCyan else VoidTextSecondary
-                                    )
-                                }
-                            }
                         }
                     }
 
@@ -1314,7 +1248,7 @@ fun BitVoidHubScreen(
                             localDmError = "Enter a different user's Username ID."
                         } else {
                             localDmError = null
-                            pendingAutoCallWithVideo = if (directDialogForCall) directDialogCallWithVideo else null
+                            pendingAutoVoiceCall = directDialogForCall
                             onOpenDirectChat(trimmed)
                         }
                     },
@@ -1330,7 +1264,6 @@ fun BitVoidHubScreen(
                     Text(
                         text = when {
                             isOpeningDirectChat -> "OPENING..."
-                            directDialogForCall && directDialogCallWithVideo -> "START VIDEO CALL"
                             directDialogForCall -> "START VOICE CALL"
                             else -> "START CHAT"
                         },
@@ -1809,7 +1742,7 @@ private fun WhatsAppDirectChatSpace(
     messages: List<ClientChatMessage>,
     wsStatus: ClientWsStatus,
     isUploadingFile: Boolean,
-    pendingAutoCallWithVideo: Boolean? = null,
+    pendingAutoVoiceCall: Boolean = false,
     onConsumePendingAutoCall: () -> Unit = {},
     callUiState: BitVoidCallUiState = BitVoidCallUiState(),
     callActions: BitVoidCallActions = BitVoidCallActions(),
@@ -1839,51 +1772,38 @@ private fun WhatsAppDirectChatSpace(
         pendingCallAction = null
     }
 
-    fun launchDirectCallWithPermissions(withVideo: Boolean, accepting: Boolean = false) {
+    fun launchDirectVoiceCallWithPermission(accepting: Boolean = false) {
         val hasAudio = ContextCompat.checkSelfPermission(
             context,
             Manifest.permission.RECORD_AUDIO
-        ) == PackageManager.PERMISSION_GRANTED
-        val hasCam = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.CAMERA
         ) == PackageManager.PERMISSION_GRANTED
         val startCallAction = {
             if (accepting) {
                 callActions.onAcceptDirectCall(
                     session.dmId,
                     session.peerUsername,
-                    session.token,
-                    withVideo
+                    session.token
                 )
             } else {
                 callActions.onStartDirectCall(
                     session.dmId,
                     session.peerUsername,
-                    session.token,
-                    withVideo
+                    session.token
                 )
             }
         }
-        val needsCam = withVideo && !hasCam
-        if (hasAudio && !needsCam) {
+        if (hasAudio) {
             startCallAction()
         } else {
             pendingCallAction = startCallAction
-            val req = if (withVideo) {
-                arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
-            } else {
-                arrayOf(Manifest.permission.RECORD_AUDIO)
-            }
-            callPermLauncher.launch(req)
+            callPermLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
         }
     }
 
-    LaunchedEffect(session.dmId, pendingAutoCallWithVideo) {
-        val withVideo = pendingAutoCallWithVideo
-        if (withVideo != null) {
+    LaunchedEffect(session.dmId, pendingAutoVoiceCall) {
+        if (pendingAutoVoiceCall) {
             onConsumePendingAutoCall()
-            launchDirectCallWithPermissions(withVideo)
+            launchDirectVoiceCallWithPermission()
         }
     }
 
@@ -1961,7 +1881,7 @@ private fun WhatsAppDirectChatSpace(
             }
 
             IconButton(
-                onClick = { launchDirectCallWithPermissions(withVideo = false) },
+                onClick = { launchDirectVoiceCallWithPermission() },
                 modifier = Modifier
                     .size(48.dp)
                     .testTag("dm_voice_call_button")
@@ -1970,19 +1890,6 @@ private fun WhatsAppDirectChatSpace(
                     imageVector = Icons.Filled.Call,
                     contentDescription = "Start voice call with @${session.peerUsername}",
                     tint = if (isInDirectCall) VoidMint else VoidCyan
-                )
-            }
-
-            IconButton(
-                onClick = { launchDirectCallWithPermissions(withVideo = true) },
-                modifier = Modifier
-                    .size(48.dp)
-                    .testTag("dm_video_call_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Videocam,
-                    contentDescription = "Start video call with @${session.peerUsername}",
-                    tint = if (isInDirectCall) VoidMint else VoidMint.copy(alpha = 0.9f)
                 )
             }
         }
@@ -2012,7 +1919,7 @@ private fun WhatsAppDirectChatSpace(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text(
-                        text = "INCOMING ${if (remoteCallStatus.withVideo) "VIDEO" else "VOICE"} CALL",
+                        text = "INCOMING VOICE CALL",
                         style = MaterialTheme.typography.titleMedium,
                         color = VoidMint,
                         fontWeight = FontWeight.Bold
@@ -2036,10 +1943,7 @@ private fun WhatsAppDirectChatSpace(
                         ) { Text("DECLINE") }
                         Button(
                             onClick = {
-                                launchDirectCallWithPermissions(
-                                    withVideo = remoteCallStatus.withVideo,
-                                    accepting = true
-                                )
+                                launchDirectVoiceCallWithPermission(accepting = true)
                             },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = VoidMint,
@@ -2075,7 +1979,7 @@ private fun WhatsAppDirectChatSpace(
                     Column(modifier = Modifier.weight(1f)) {
                         Text("RINGING @${session.peerUsername}…", color = VoidCyan, fontWeight = FontWeight.Bold)
                         Text(
-                            if (remoteCallStatus.withVideo) "Video call invitation" else "Voice call invitation",
+                            "Voice call invitation",
                             color = VoidTextSecondary,
                             style = MaterialTheme.typography.labelSmall
                         )

@@ -65,7 +65,7 @@ enum class BitVoidCallState {
 }
 
 /**
- * Local-only WebRTC Audio/Video Call & Live Class Presentation engine.
+ * Local-only WebRTC Voice Call & Live Class Presentation engine.
  * - Uses zero external STUN/TURN servers (host ICE candidates over RFC1918 local Wi-Fi only).
  * - Connects to the Host's `/ws/signaling` WebSocket for SDP & ICE negotiation.
  * - Supports microphone mute, speakerphone routing, front/back camera switching,
@@ -247,7 +247,8 @@ class BitVoidCallManager(context: Context) {
             _isMicMuted.value = true
         }
 
-        val shouldEnableCamera = startWithVideo && camPermissionGranted && role != ParticipantRole.STUDENT_VIEWER
+        val shouldEnableCamera = mode == SignalingSessionMode.LIVE_CLASSROOM &&
+            startWithVideo && camPermissionGranted && role != ParticipantRole.STUDENT_VIEWER
         if (shouldEnableCamera) {
             createCameraVideoTrack(frontCamera = true)
         } else {
@@ -290,6 +291,10 @@ class BitVoidCallManager(context: Context) {
 
     @Synchronized
     fun toggleCamera() {
+        if (_sessionMode.value != SignalingSessionMode.LIVE_CLASSROOM) {
+            _callError.value = "Camera video is available only in Live Class. Calls are voice-only."
+            return
+        }
         if (_isScreenSharing.value) {
             stopScreenShare()
         }
@@ -323,6 +328,7 @@ class BitVoidCallManager(context: Context) {
 
     @Synchronized
     fun switchCamera() {
+        if (_sessionMode.value != SignalingSessionMode.LIVE_CLASSROOM) return
         val camCap = cameraCapturer as? CameraVideoCapturer ?: return
         camCap.switchCamera(object : CameraVideoCapturer.CameraSwitchHandler {
             override fun onCameraSwitchDone(isFrontCamera: Boolean) {
@@ -342,6 +348,11 @@ class BitVoidCallManager(context: Context) {
     @Synchronized
     fun startScreenShare(resultCode: Int, data: Intent) {
         if (_activeRoomId.value == null) return
+        if (_sessionMode.value != SignalingSessionMode.LIVE_CLASSROOM) {
+            _callError.value = "Screen sharing is available only in Live Class. Calls are voice-only."
+            BitVoidScreenProjectionService.stopProjectionService(appContext)
+            return
+        }
         val factory = peerConnectionFactory ?: return
         val eglCtx = eglBase?.eglBaseContext ?: return
 
@@ -821,6 +832,10 @@ class BitVoidCallManager(context: Context) {
             }
 
             override fun onAddStream(stream: MediaStream?) {
+                if (_sessionMode.value != SignalingSessionMode.LIVE_CLASSROOM) {
+                    stream?.videoTracks?.forEach { it.setEnabled(false) }
+                    return
+                }
                 val track = stream?.videoTracks?.firstOrNull()
                 if (track != null) {
                     _remoteVideoTracks.value = _remoteVideoTracks.value + (remotePeerId to track)
@@ -829,6 +844,10 @@ class BitVoidCallManager(context: Context) {
 
             override fun onTrack(transceiver: RtpTransceiver?) {
                 val track = transceiver?.receiver?.track()
+                if (_sessionMode.value != SignalingSessionMode.LIVE_CLASSROOM) {
+                    if (track is VideoTrack) track.setEnabled(false)
+                    return
+                }
                 if (track is VideoTrack) {
                     track.setEnabled(true)
                     _remoteVideoTracks.value = _remoteVideoTracks.value + (remotePeerId to track)
@@ -847,18 +866,20 @@ class BitVoidCallManager(context: Context) {
         )
         localAudioTrack?.let { audioTransceiver.sender.setTrack(it, false) }
 
-        val videoTransceiver = pc.addTransceiver(
-            MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
-            RtpTransceiver.RtpTransceiverInit(
-                RtpTransceiver.RtpTransceiverDirection.SEND_RECV,
-                listOf("bitvoid_stream")
+        if (_sessionMode.value == SignalingSessionMode.LIVE_CLASSROOM) {
+            val videoTransceiver = pc.addTransceiver(
+                MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
+                RtpTransceiver.RtpTransceiverInit(
+                    RtpTransceiver.RtpTransceiverDirection.SEND_RECV,
+                    listOf("bitvoid_stream")
+                )
             )
-        )
-        val activeOutVideo = activeOutgoingVideoTrack()
-        if (activeOutVideo != null) {
-            videoTransceiver.sender.setTrack(activeOutVideo, false)
+            val activeOutVideo = activeOutgoingVideoTrack()
+            if (activeOutVideo != null) {
+                videoTransceiver.sender.setTrack(activeOutVideo, false)
+            }
+            videoSendersByPeer[remotePeerId] = videoTransceiver.sender
         }
-        videoSendersByPeer[remotePeerId] = videoTransceiver.sender
 
         peerConnections[remotePeerId] = pc
         return pc
@@ -876,7 +897,12 @@ class BitVoidCallManager(context: Context) {
         val pc = ensurePeerConnection(remotePeerId) ?: return
         val constraints = MediaConstraints().apply {
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
+            mandatory.add(
+                MediaConstraints.KeyValuePair(
+                    "OfferToReceiveVideo",
+                    (_sessionMode.value == SignalingSessionMode.LIVE_CLASSROOM).toString()
+                )
+            )
         }
         pc.createOffer(object : SdpObserverAdapter() {
             override fun onCreateSuccess(desc: SessionDescription?) {
@@ -904,9 +930,18 @@ class BitVoidCallManager(context: Context) {
         pc.setRemoteDescription(object : SdpObserverAdapter() {
             override fun onSetSuccess() {
                 drainPendingIce(remotePeerId, pc)
+                val allowsVideo = _sessionMode.value == SignalingSessionMode.LIVE_CLASSROOM
+                if (!allowsVideo) {
+                    pc.transceivers
+                        .filter { it.receiver.track()?.kind() == "video" }
+                        .forEach { transceiver ->
+                            transceiver.receiver.track()?.setEnabled(false)
+                            transceiver.setDirection(RtpTransceiver.RtpTransceiverDirection.INACTIVE)
+                        }
+                }
                 val constraints = MediaConstraints().apply {
                     mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-                    mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
+                    mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", allowsVideo.toString()))
                 }
                 pc.createAnswer(object : SdpObserverAdapter() {
                     override fun onCreateSuccess(answerDesc: SessionDescription?) {

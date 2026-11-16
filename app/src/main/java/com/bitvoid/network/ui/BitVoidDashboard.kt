@@ -196,8 +196,8 @@ fun BitVoidDashboard(
 
     val callActions = remember(viewModel) {
         BitVoidCallActions(
-            onStartVoiceVideoCall = { channelId, channelName, token ->
-                viewModel.startVoiceVideoCall(channelId, channelName, token)
+            onStartVoiceCall = { channelId, channelName, token ->
+                viewModel.startVoiceCall(channelId, channelName, token)
             },
             onStartLiveClassHost = { channelId, channelName, token ->
                 viewModel.startLiveClassAsHost(channelId, channelName, token)
@@ -208,11 +208,11 @@ fun BitVoidDashboard(
             onJoinLiveClassWithCode = { classCode, onDone ->
                 viewModel.joinLiveClassByCode(classCode, onDone)
             },
-            onStartDirectCall = { dmId, peerUsername, token, withVideo ->
-                viewModel.startDirectCall(dmId, peerUsername, token, withVideo)
+            onStartDirectCall = { dmId, peerUsername, token ->
+                viewModel.startDirectCall(dmId, peerUsername, token)
             },
-            onAcceptDirectCall = { dmId, peerUsername, token, withVideo ->
-                viewModel.acceptDirectCall(dmId, peerUsername, token, withVideo)
+            onAcceptDirectCall = { dmId, peerUsername, token ->
+                viewModel.acceptDirectCall(dmId, peerUsername, token)
             },
             onDeclineDirectCall = { dmId, token ->
                 viewModel.declineDirectCall(dmId, token)
@@ -1276,7 +1276,7 @@ private fun HostCredentialsCard(
 
             if (hostState.isSecureServerRunning) {
                 CredentialRow(
-                    label = "SECURE VIDEO CALL PORTAL (CAMERA + MIC)",
+                    label = "SECURE VOICE CALL / LIVE CLASS PORTAL (MIC + CLASS CAMERA)",
                     value = hostState.securePortalUrl,
                     canCopy = true,
                     valueColor = VoidCyan,
