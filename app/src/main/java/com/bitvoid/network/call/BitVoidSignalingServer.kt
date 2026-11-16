@@ -148,8 +148,9 @@ object BitVoidSignalingServer {
         if (cleanRoom.isEmpty()) return false
 
         if (cleanRoom.startsWith("dm__", ignoreCase = false)) {
-            return BitVoidDirectChatManager.validateToken(token, requiredDmId = cleanRoom) != null &&
-                isDirectCallAccepted(cleanRoom)
+            val directSession = BitVoidDirectChatManager.validateToken(token, requiredDmId = cleanRoom)
+                ?: return false
+            return canJoinDirectCallSignaling(directSession)
         }
 
         if (cleanRoom.startsWith("LC-", ignoreCase = false)) {
@@ -399,6 +400,18 @@ object BitVoidSignalingServer {
 
     fun isDirectCallAccepted(dmId: String): Boolean {
         return currentDirectCallInvitation(dmId)?.phase == DirectCallPhase.ACCEPTED
+    }
+
+    /**
+     * The person placing a call may enter signaling while it is ringing so their selected
+     * camera/microphone opens directly in the meeting stage. The recipient remains blocked
+     * until explicitly accepting, so no incoming media is exposed before consent.
+     */
+    fun canJoinDirectCallSignaling(session: com.bitvoid.network.direct.DirectSession): Boolean {
+        val invitation = currentDirectCallInvitation(session.dmId) ?: return false
+        return invitation.phase == DirectCallPhase.ACCEPTED ||
+            (invitation.phase == DirectCallPhase.RINGING &&
+                invitation.callerUsername.equals(session.myUsername, ignoreCase = true))
     }
 
     fun incomingDirectCallFor(rawUsername: String?): DirectCallInvitation? {

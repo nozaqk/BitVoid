@@ -430,6 +430,28 @@ fun BitVoidHubScreen(
     var pendingAutoCallWithVideo by rememberSaveable { mutableStateOf<Boolean?>(null) }
 
     if (activeDirectSession != null) {
+        val directCallStageActive = callUiState.isInRoom(activeDirectSession.dmId)
+        if (directCallStageActive) {
+            val leaveDirectMeeting: () -> Unit = {
+                pendingAutoCallWithVideo = null
+                callActions.onLeaveSession()
+            }
+            BackHandler(onBack = leaveDirectMeeting)
+            BitVoidClassroomScreen(
+                channelId = activeDirectSession.dmId,
+                channelName = "@${activeDirectSession.peerUsername}",
+                channelToken = activeDirectSession.token,
+                localCallsign = activeDirectSession.myUsername,
+                channelMessages = directMessages,
+                onSendChatMessage = onSendDirectMessage,
+                callUiState = callUiState,
+                callActions = callActions,
+                onBack = leaveDirectMeeting,
+                modifier = modifier.fillMaxSize()
+            )
+            return
+        }
+
         BackHandler {
             pendingAutoCallWithVideo = null
             onLeaveDirectChat()
