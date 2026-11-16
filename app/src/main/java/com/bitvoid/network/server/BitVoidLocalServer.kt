@@ -383,8 +383,12 @@ class BitVoidLocalServer(
                     serveNodeIdentity(ephemeralToken, isHead = (method == Method.HEAD))
                 }
 
-                rawUri == "/bitvoid-local-ca.crt" -> {
-                    serveLocalCaCertificate(ephemeralToken, isHead = (method == Method.HEAD))
+                rawUri == "/bitvoid-local-ca.crt" || rawUri == "/bitvoid-local-ca.pem" -> {
+                    serveLocalCaCertificate(ephemeralToken, pem = true, isHead = (method == Method.HEAD))
+                }
+
+                rawUri == "/bitvoid-local-ca.cer" -> {
+                    serveLocalCaCertificate(ephemeralToken, pem = false, isHead = (method == Method.HEAD))
                 }
 
                 rawUri == "/secure-setup" -> {
@@ -444,7 +448,14 @@ class BitVoidLocalServer(
                     )
                 }
 
-                // Direct User Chat GET endpoints
+                // P.Chat user discovery GET endpoints
+                rawUri == "/api/users/status" -> {
+                    requireSameWifiNode(session)
+                    @Suppress("DEPRECATION")
+                    val username = session.parms["username"]
+                    serveUserStatusJson(username, ephemeralToken, isHead = (method == Method.HEAD))
+                }
+
                 rawUri == "/api/users" -> {
                     requireSameWifiNode(session)
                     serveUsersListJson(ephemeralToken, isHead = (method == Method.HEAD))
@@ -703,18 +714,30 @@ class BitVoidLocalServer(
         return response
     }
 
-    private fun serveLocalCaCertificate(ephemeralToken: String, isHead: Boolean): Response {
-        val bytes = BitVoidTlsManager.caCertificateDer(context)
+    private fun serveLocalCaCertificate(
+        ephemeralToken: String,
+        pem: Boolean,
+        isHead: Boolean
+    ): Response {
+        val bytes = if (pem) {
+            BitVoidTlsManager.caCertificatePem(context)
+        } else {
+            BitVoidTlsManager.caCertificateDer(context)
+        }
+        val fileName = if (pem) "bitvoid-local-ca.crt" else "bitvoid-local-ca.cer"
+        val mimeType = if (pem) "application/x-x509-ca-cert" else "application/pkix-cert"
         val response = newFixedLengthResponse(
             Response.Status.OK,
-            "application/x-x509-ca-cert",
+            mimeType,
             ByteArrayInputStream(if (isHead) ByteArray(0) else bytes),
             bytes.size.toLong()
         )
         response.setGzipEncoding(false)
         response.addHeader("Content-Length", bytes.size.toString())
-        response.addHeader("Content-Disposition", "attachment; filename=bitvoid-local-ca.crt")
-        response.addHeader("Cache-Control", "no-store")
+        response.addHeader("Content-Disposition", "attachment; filename=\"$fileName\"")
+        response.addHeader("Content-Description", "BitVoid Local Root CA")
+        response.addHeader("Cache-Control", "no-store, no-cache, must-revalidate")
+        response.addHeader("X-BitVoid-CA-SHA256", BitVoidTlsManager.caCertificateSha256Fingerprint(context))
         response.addHeader("X-BitVoid-Session", ephemeralToken)
         if (!isHead) totalBytesServed.addAndGet(bytes.size.toLong())
         return response
@@ -723,20 +746,22 @@ class BitVoidLocalServer(
     private fun serveSecureBrowserSetup(ephemeralToken: String, isHead: Boolean): Response {
         val state = BitVoidNodeStateHolder.hostState.value
         val secureUrl = state.securePortalUrl
+        val fingerprint = BitVoidTlsManager.caCertificateSha256Fingerprint(context)
         val body = """
             <!doctype html>
             <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-            <title>BitVoid secure browser setup</title>
+            <meta name="referrer" content="no-referrer"><title>BitVoid secure browser setup</title>
             <style>
-            body{margin:0;background:#07100d;color:#eef8f4;font:16px system-ui,sans-serif}.wrap{max-width:720px;margin:auto;padding:28px 18px 52px}
-            .card{background:#101c18;border:1px solid #2a4840;border-radius:18px;padding:22px;margin:16px 0}h1,h2{color:#74f6c3}code{color:#7dddf2;overflow-wrap:anywhere}
-            a,.button{color:#07100d;background:#74f6c3;text-decoration:none;font-weight:800;border-radius:10px;padding:13px 16px;display:inline-block;margin:6px 8px 6px 0}.muted{color:#aec2ba}
+            body{margin:0;background:#07100d;color:#eef8f4;font:16px system-ui,sans-serif}.wrap{max-width:760px;margin:auto;padding:28px 18px 52px}
+            .card{background:#101c18;border:1px solid #2a4840;border-radius:18px;padding:22px;margin:16px 0}h1,h2{color:#74f6c3}code{color:#7dddf2;overflow-wrap:anywhere}.steps{line-height:1.55}.fingerprint{font-size:12px;word-break:break-all;background:#07100d;border:1px solid #2a4840;border-radius:9px;padding:10px}
+            a,.button{color:#07100d;background:#74f6c3;text-decoration:none;font-weight:800;border-radius:10px;padding:13px 16px;display:inline-block;margin:6px 8px 6px 0}.secondary{color:#eef8f4;background:transparent;border:1px solid #74f6c3}.muted{color:#aec2ba}.warning{color:#ffd58a}
             </style></head><body><main class="wrap"><h1>Secure camera and microphone setup</h1>
-            <div class="card"><h2>1. Download the BitVoid local CA</h2><p>This one-time trust step lets a browser treat the private LAN gateway as HTTPS.</p><a class="button" href="/bitvoid-local-ca.crt" download>Download certificate</a></div>
-            <div class="card"><h2>2. Install and trust it</h2><p><b>Android:</b> Settings → Security / Encryption & credentials → Install a certificate → CA certificate.</p><p><b>Windows:</b> open the file → Install Certificate → Local Machine → Trusted Root Certification Authorities.</p><p><b>macOS/iOS:</b> install the profile, then enable full trust for the BitVoid Local Root CA.</p><p class="muted">Only install a certificate from the phone currently hosting your trusted BitVoid node. Remove it when you no longer use that node.</p></div>
-            <div class="card"><h2>3. Open the secure portal</h2><p><code>${htmlEscape(secureUrl)}</code></p><a class="button" id="secure-portal-link" href="${htmlEscape(secureUrl)}">Open secure BitVoid</a><p class="muted">If the browser still warns, fully close it after installing the certificate and reopen this address. Camera and microphone permission prompts appear only on the HTTPS page.</p></div>
+            <p class="muted">Complete this once on each browser device. Stay connected to the same BitVoid Wi-Fi node throughout setup.</p>
+            <div class="card"><h2>1. Save the BitVoid Local Root CA</h2><p>Tap the first button for the widely compatible PEM certificate. If your device does not offer to save or install it, use the DER fallback.</p><a class="button" href="/bitvoid-local-ca.crt" target="_top">Save / install CA (.crt)</a><a class="button secondary" href="/bitvoid-local-ca.cer" target="_top">DER fallback (.cer)</a><p class="muted">If this page is inside a Wi-Fi sign-in mini-window and the button does nothing, open this page in Chrome, Edge, Firefox, or Safari and tap it again.</p><p>Verify the certificate name is <b>BitVoid Local Root CA</b>.</p><div class="fingerprint"><b>SHA-256</b><br>${htmlEscape(fingerprint)}</div></div>
+            <div class="card steps"><h2>2. Install it as a trusted CA</h2><p><b>Android:</b> open Settings → Security &amp; privacy → More security settings → Encryption &amp; credentials → Install a certificate → CA certificate, then choose the downloaded <code>bitvoid-local-ca.crt</code>. A screen-lock confirmation may be required.</p><p><b>Windows:</b> open the file → Install Certificate → Current User → Place all certificates in <b>Trusted Root Certification Authorities</b>.</p><p><b>macOS:</b> open the file in Keychain Access, place it in the login keychain, open <b>BitVoid Local Root CA</b>, and set Trust → Always Trust.</p><p><b>iPhone / iPad:</b> download in Safari, approve the profile in Settings → General → VPN &amp; Device Management, then enable it in Settings → General → About → Certificate Trust Settings.</p><p><b>Firefox:</b> if it still warns, import the file in Settings → Privacy &amp; Security → Certificates → View Certificates → Authorities.</p><p class="warning">Only trust the certificate from the phone hosting your BitVoid node. Remove it when you no longer use that node.</p></div>
+            <div class="card"><h2>3. Reopen BitVoid over HTTPS</h2><p><code id="secure-url-code">${htmlEscape(secureUrl)}</code></p><a class="button" id="secure-portal-link" href="${htmlEscape(secureUrl)}" target="_top">Open secure BitVoid</a><p class="muted">Fully close the browser first if it cached an earlier warning. The address must exactly match the one above. Once trusted, the HTTPS page will show the normal camera and microphone permission prompts.</p></div>
             </main><script>
-            (function(){var u=new URLSearchParams(location.search).get('username');if(!u)return;var a=document.getElementById('secure-portal-link');a.href=${JSONObject.quote(secureUrl)}+'?username='+encodeURIComponent(u);})();
+            (function(){var h=location.hostname;var host=h.indexOf(':')>=0?'['+h+']':h;var secure='https://'+host+':${BitVoidTlsManager.SECURE_PORT}';var u=new URLSearchParams(location.search).get('username');document.getElementById('secure-url-code').textContent=secure;document.getElementById('secure-portal-link').href=secure+(u?'?username='+encodeURIComponent(u):'');})();
             </script></body></html>
         """.trimIndent()
         return buildPaddedTextResponse(
@@ -1582,6 +1607,27 @@ class BitVoidLocalServer(
             status = Response.Status.OK,
             mimeType = "application/json; charset=utf-8",
             body = """{"count":${users.size},"users":[$usersJson]}""",
+            token = ephemeralToken,
+            isHead = isHead
+        )
+    }
+
+    /** Exact lookup lets P.Chat reach a hidden user without exposing that user in discovery lists. */
+    private fun serveUserStatusJson(
+        username: String?,
+        ephemeralToken: String,
+        isHead: Boolean
+    ): Response {
+        val clean = username?.trim()?.removePrefix("@").orEmpty()
+        val available = clean.isNotEmpty() && BitVoidDirectChatManager.isUserAvailable(clean)
+        val payload = JSONObject().apply {
+            put("username", clean)
+            put("available", available)
+        }.toString()
+        return buildPaddedTextResponse(
+            status = Response.Status.OK,
+            mimeType = "application/json; charset=utf-8",
+            body = payload,
             token = ephemeralToken,
             isHead = isHead
         )
@@ -2619,43 +2665,119 @@ class BitVoidLocalServer(
             }
             input:focus { outline: none; border-color: var(--mint); }
             .err { color: var(--crimson); font-size: 11px; }
-            .presence-status {
+            .pchat-box {
+              display: grid;
+              gap: 9px;
+              background: var(--bg);
+              border: 1px solid rgba(0, 255, 156, 0.45);
+              border-radius: 12px;
+              padding: 10px;
+            }
+            .pchat-head, .pchat-identity {
               display: flex;
               align-items: center;
-              gap: 7px;
-              min-height: 18px;
-              color: var(--muted);
-              font-size: 10px;
-              line-height: 1.35;
+              justify-content: space-between;
+              gap: 10px;
             }
-            .presence-status::before {
-              content: '';
-              width: 7px;
-              height: 7px;
+            .pchat-head-copy { min-width: 0; }
+            .pchat-head-copy .section-title { color: var(--mint); margin: 0; font-size: 13px; }
+            .pchat-head-copy p { color: var(--muted); font-size: 9px; margin-top: 2px; }
+            .pchat-add-btn {
+              width: 38px;
+              height: 38px;
               flex-shrink: 0;
+              padding: 0;
+              border-radius: 50%;
+              background: rgba(0, 255, 156, 0.12);
+              border: 1px solid var(--mint);
+              color: var(--mint);
+              font-size: 22px;
+              line-height: 1;
+            }
+            .pchat-identity {
+              padding: 8px 9px;
+              border-radius: 9px;
+              border: 1px solid var(--border);
+              background: var(--surface);
+            }
+            .pchat-you { min-width: 0; font-size: 11px; font-weight: 700; color: var(--text); }
+            .pchat-you strong { color: var(--cyan); overflow-wrap: anywhere; }
+            .pchat-discovery-note { color: var(--muted); font-size: 9px; margin-top: 2px; }
+            .pchat-switch {
+              position: relative;
+              width: 42px;
+              height: 24px;
+              flex-shrink: 0;
+              border-radius: 999px;
+              padding: 0;
+              border: 1px solid var(--border);
+              background: var(--elevated);
+            }
+            .pchat-switch::after {
+              content: '';
+              position: absolute;
+              width: 16px;
+              height: 16px;
+              top: 3px;
+              left: 4px;
               border-radius: 50%;
               background: var(--muted);
-              box-shadow: 0 0 0 3px rgba(139, 148, 158, 0.1);
+              transition: transform 0.16s ease, background 0.16s ease;
             }
-            .presence-status.checking { color: var(--cyan); }
-            .presence-status.checking::before {
-              background: var(--cyan);
-              animation: presence-pulse 1s ease-in-out infinite;
+            .pchat-switch[aria-checked="true"] { border-color: var(--mint); background: rgba(0, 255, 156, 0.16); }
+            .pchat-switch[aria-checked="true"]::after { transform: translateX(17px); background: var(--mint); }
+            .pchat-users-label { color: var(--muted); font-size: 9px; letter-spacing: 0.55px; font-weight: 700; }
+            .pchat-users { display: grid; gap: 6px; }
+            .pchat-user-row {
+              width: 100%;
+              justify-content: flex-start;
+              gap: 9px;
+              padding: 8px 9px;
+              color: var(--text);
+              background: var(--surface);
+              border: 1px solid var(--border);
+              text-align: left;
             }
-            .presence-status.online { color: var(--mint); }
-            .presence-status.online::before {
-              background: var(--mint);
-              box-shadow: 0 0 0 3px rgba(0, 255, 156, 0.12);
+            .pchat-user-row:hover, .pchat-user-row.active { border-color: var(--mint); background: rgba(0, 255, 156, 0.08); }
+            .pchat-user-avatar {
+              width: 30px;
+              height: 30px;
+              flex-shrink: 0;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              border-radius: 50%;
+              color: var(--mint);
+              background: rgba(0, 255, 156, 0.12);
+              border: 1px solid rgba(0, 255, 156, 0.5);
             }
-            .presence-status.offline { color: var(--crimson); }
-            .presence-status.offline::before {
-              background: var(--crimson);
-              box-shadow: 0 0 0 3px rgba(255, 77, 109, 0.1);
+            .pchat-user-copy { min-width: 0; flex: 1; }
+            .pchat-user-name { display: block; font-size: 11px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; }
+            .pchat-user-sub { display: block; color: var(--mint); font-size: 9px; margin-top: 1px; }
+            .pchat-empty { color: var(--muted); font-size: 10px; line-height: 1.4; padding: 3px 1px; }
+            .pchat-dialog-backdrop {
+              position: fixed;
+              inset: 0;
+              z-index: 80;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              padding: 18px;
+              background: rgba(5, 8, 12, 0.84);
             }
-            @keyframes presence-pulse {
-              0%, 100% { opacity: 0.4; }
-              50% { opacity: 1; }
+            .pchat-dialog {
+              width: min(430px, 100%);
+              display: grid;
+              gap: 12px;
+              padding: 20px;
+              border-radius: 16px;
+              border: 1px solid var(--mint);
+              background: var(--surface);
+              box-shadow: 0 22px 60px rgba(0, 0, 0, 0.5);
             }
+            .pchat-dialog-title { color: var(--mint); font-size: 15px; font-weight: 700; }
+            .pchat-dialog-hint { color: var(--muted); font-size: 11px; line-height: 1.45; }
+            .pchat-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
             /* Collapsible Channel Media Drawer */
             .media-drawer {
@@ -3201,14 +3323,27 @@ class BitVoidLocalServer(
                 <div id="channel-error" class="err hidden"></div>
               </div>
 
-              <div class="unlock-box">
-                <div class="section-title" style="margin:0;color:var(--mint);">DIRECT CHAT (USERNAME ID)</div>
-                <input id="dm-my-username" type="text" placeholder="Your Username ID" readonly autocomplete="off">
-                <input id="dm-target-username" type="text" placeholder="Peer Username ID (e.g. user-4210)" autocomplete="off">
-                <div id="dm-presence-status" class="presence-status">Enter a Username ID to check this Wi-Fi node.</div>
-                <button id="dm-open-btn" class="btn-cyan" type="button" disabled>CHAT WITH USER</button>
-                <div id="dm-error" class="err hidden"></div>
-              </div>
+              <section class="pchat-box" aria-labelledby="pchat-title">
+                <div class="pchat-head">
+                  <div class="pchat-head-copy">
+                    <div id="pchat-title" class="section-title">P.CHAT</div>
+                    <p>PRIVATE USER CHAT · VOICE · VIDEO</p>
+                  </div>
+                  <button id="pchat-add-user-btn" class="pchat-add-btn" type="button" title="Add user by exact User ID" aria-label="Add user by exact User ID">+</button>
+                </div>
+                <div class="pchat-identity">
+                  <div class="pchat-you">
+                    YOU · <strong id="pchat-my-username">@web</strong>
+                    <div id="pchat-discovery-note" class="pchat-discovery-note">Visible automatically on this node</div>
+                  </div>
+                  <button id="pchat-discoverable-toggle" class="pchat-switch" type="button" role="switch" aria-checked="true" aria-label="Show my User ID automatically"></button>
+                </div>
+                <div class="pchat-users-label">USERS ON THIS NODE</div>
+                <div id="pchat-users-list" class="pchat-users">
+                  <div class="pchat-empty">Looking for visible users on this BitVoid node…</div>
+                </div>
+                <div id="pchat-error" class="err hidden"></div>
+              </section>
 
               <div class="unlock-box">
                 <div class="section-title" style="margin:0;color:var(--cyan);">JOIN LIVE CLASS (STUDENT ID)</div>
@@ -3217,6 +3352,19 @@ class BitVoidLocalServer(
                 <div id="sidebar-class-error" class="err hidden"></div>
               </div>
             </aside>
+
+            <div id="pchat-add-dialog" class="pchat-dialog-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="pchat-dialog-title">
+              <div class="pchat-dialog">
+                <div id="pchat-dialog-title" class="pchat-dialog-title">ADD PRIVATE CHAT</div>
+                <div class="pchat-dialog-hint">Enter the exact User ID. This also works when that user disabled automatic display.</div>
+                <input id="pchat-exact-user-id" type="text" placeholder="User ID (e.g. user-4210)" autocomplete="off">
+                <div id="pchat-dialog-error" class="err hidden"></div>
+                <div class="pchat-dialog-actions">
+                  <button id="pchat-dialog-cancel" class="btn-ghost" type="button">CANCEL</button>
+                  <button id="pchat-dialog-open" class="btn-primary" type="button">OPEN CHAT</button>
+                </div>
+              </div>
+            </div>
 
             <!-- Main Chat & Media Workspace -->
             <div class="wa-main-pane">
@@ -3354,13 +3502,19 @@ class BitVoidLocalServer(
               var privateKeyInput = document.getElementById('private-channel-key');
               var unlockBtn = document.getElementById('unlock-channel-btn');
               var channelErr = document.getElementById('channel-error');
-              var dmMyInput = document.getElementById('dm-my-username');
-              var dmTargetInput = document.getElementById('dm-target-username');
-              var dmOpenBtn = document.getElementById('dm-open-btn');
-              var dmErr = document.getElementById('dm-error');
-              var dmPresenceStatus = document.getElementById('dm-presence-status');
-              var presenceCheckTimer = null;
-              var peerIsAvailable = false;
+              var pchatMyUsername = document.getElementById('pchat-my-username');
+              var pchatDiscoveryNote = document.getElementById('pchat-discovery-note');
+              var pchatDiscoverableToggle = document.getElementById('pchat-discoverable-toggle');
+              var pchatUsersList = document.getElementById('pchat-users-list');
+              var pchatAddUserBtn = document.getElementById('pchat-add-user-btn');
+              var pchatError = document.getElementById('pchat-error');
+              var pchatAddDialog = document.getElementById('pchat-add-dialog');
+              var pchatExactUserInput = document.getElementById('pchat-exact-user-id');
+              var pchatDialogError = document.getElementById('pchat-dialog-error');
+              var pchatDialogCancel = document.getElementById('pchat-dialog-cancel');
+              var pchatDialogOpen = document.getElementById('pchat-dialog-open');
+              var portalUsername = '';
+              var portalDiscoverable = true;
 
               var activeAvatar = document.getElementById('active-channel-avatar');
               var activeTitle = document.getElementById('active-channel-title');
@@ -3455,15 +3609,19 @@ class BitVoidLocalServer(
               var directCallLastPhase = 'IDLE';
               try {
                 var queryUser = new URLSearchParams(location.search).get('username');
-                var storedUser = queryUser || localStorage.getItem('bv_username');
-                if (!storedUser) {
+                var storedUser = String(queryUser || localStorage.getItem('bv_username') || '')
+                  .trim().replace(/^@/, '');
+                if (!/^[A-Za-z0-9._-]{2,24}$/.test(storedUser)) {
                   storedUser = 'web-' + Math.floor(1000 + Math.random() * 9000);
                 }
-                localStorage.setItem('bv_username', storedUser);
-                dmMyInput.value = storedUser;
+                portalUsername = storedUser;
+                portalDiscoverable = localStorage.getItem('bv_pchat_discoverable') !== 'false';
+                localStorage.setItem('bv_username', portalUsername);
               } catch (e) {
-                dmMyInput.value = 'web-' + Math.floor(1000 + Math.random() * 9000);
+                portalUsername = 'web-' + Math.floor(1000 + Math.random() * 9000);
+                portalDiscoverable = true;
               }
+              pchatMyUsername.textContent = '@' + portalUsername;
 
               function openSidebar() {
                 sidebar.classList.add('open');
@@ -3489,57 +3647,111 @@ class BitVoidLocalServer(
                 return (mb / 1024).toFixed(2) + ' GB';
               }
 
-              function setPresenceStatus(state, text) {
-                peerIsAvailable = state === 'online';
-                dmPresenceStatus.className = 'presence-status' + (state ? (' ' + state) : '');
-                dmPresenceStatus.textContent = text;
-                dmOpenBtn.disabled = !peerIsAvailable;
-                voiceCallBtn.disabled = activeDm ? !peerIsAvailable : false;
-                videoCallBtn.disabled = activeDm ? !peerIsAvailable : false;
+              function showPchatError(message, inDialog) {
+                var target = inDialog ? pchatDialogError : pchatError;
+                target.textContent = message || '';
+                target.classList.toggle('hidden', !message);
               }
 
-              function refreshPeerPresence() {
-                var target = (dmTargetInput.value || '').trim().replace(/^@/, '');
-                if (!target) {
-                  setPresenceStatus('', 'Enter a Username ID to check this Wi-Fi node.');
-                  return Promise.resolve(false);
+              function updatePchatDiscoverabilityUi() {
+                pchatDiscoverableToggle.setAttribute('aria-checked', portalDiscoverable ? 'true' : 'false');
+                pchatDiscoveryNote.textContent = portalDiscoverable
+                  ? 'Visible automatically on this node'
+                  : 'Hidden from lists · exact User ID still works';
+              }
+
+              function renderPchatUsers(users) {
+                var visibleUsers = (Array.isArray(users) ? users : []).filter(function (user) {
+                  return String(user).toLowerCase() !== portalUsername.toLowerCase();
+                }).filter(function (user, index, all) {
+                  return all.findIndex(function (candidate) {
+                    return String(candidate).toLowerCase() === String(user).toLowerCase();
+                  }) === index;
+                }).sort(function (a, b) {
+                  return String(a).toLowerCase().localeCompare(String(b).toLowerCase());
+                });
+                if (visibleUsers.length === 0) {
+                  pchatUsersList.innerHTML = '<div class="pchat-empty">No visible users are online. Tap + to add someone by their exact User ID.</div>';
+                  return;
                 }
-                setPresenceStatus('checking', 'Checking this BitVoid node...');
+                pchatUsersList.innerHTML = visibleUsers.map(function (user) {
+                  var activeCls = activeDm && String(activeDm.peerUsername).toLowerCase() === String(user).toLowerCase()
+                    ? ' active' : '';
+                  return '<button type="button" class="pchat-user-row' + activeCls + '" data-pchat-user="' + esc(user) + '">' +
+                    '<span class="pchat-user-avatar">@</span>' +
+                    '<span class="pchat-user-copy"><span class="pchat-user-name">@' + esc(user) + '</span>' +
+                    '<span class="pchat-user-sub">Online · Tap to chat or call</span></span></button>';
+                }).join('');
+                Array.prototype.forEach.call(pchatUsersList.querySelectorAll('[data-pchat-user]'), function (button) {
+                  button.onclick = function () {
+                    showPchatError('', false);
+                    openDirectChat(portalUsername, button.getAttribute('data-pchat-user') || '');
+                  };
+                });
+              }
+
+              function refreshPchatUsers() {
                 return fetch('/api/users', { cache: 'no-store' })
+                  .then(function (r) {
+                    if (!r.ok) throw new Error('P.Chat discovery failed');
+                    return r.json();
+                  })
+                  .then(function (data) {
+                    renderPchatUsers(data.users || []);
+                    return data.users || [];
+                  })
+                  .catch(function () {
+                    pchatUsersList.innerHTML = '<div class="pchat-empty">Unable to refresh P.Chat users. Retrying on this node…</div>';
+                    return [];
+                  });
+              }
+
+              function refreshPeerPresence(rawTarget) {
+                var target = String(rawTarget || (activeDm ? activeDm.peerUsername : ''))
+                  .trim().replace(/^@/, '');
+                if (!target) return Promise.resolve(false);
+                return fetch('/api/users/status?username=' + encodeURIComponent(target), { cache: 'no-store' })
                   .then(function (r) {
                     if (!r.ok) throw new Error('Presence check failed');
                     return r.json();
                   })
                   .then(function (data) {
-                    var users = Array.isArray(data.users) ? data.users : [];
-                    var found = users.some(function (u) {
-                      return String(u).toLowerCase() === target.toLowerCase();
-                    });
-                    if (found) {
-                      setPresenceStatus('online', '@' + target + ' is available on this Wi-Fi node.');
-                    } else {
-                      setPresenceStatus('offline', '@' + target + ' is not available on this Wi-Fi node.');
+                    var available = !!data.available;
+                    if (activeDm && String(activeDm.peerUsername).toLowerCase() === target.toLowerCase()) {
+                      voiceCallBtn.disabled = !available;
+                      videoCallBtn.disabled = !available;
                     }
-                    return found;
+                    return available;
                   })
                   .catch(function () {
-                    setPresenceStatus('offline', 'Unable to verify this user on the local node.');
+                    if (activeDm && String(activeDm.peerUsername).toLowerCase() === target.toLowerCase()) {
+                      voiceCallBtn.disabled = true;
+                      videoCallBtn.disabled = true;
+                    }
                     return false;
                   });
               }
 
               function registerBrowserPresence() {
-                var username = (dmMyInput.value || '').trim().replace(/^@/, '');
-                if (!username) return Promise.resolve();
+                if (!portalUsername) return Promise.resolve();
                 return fetch('/api/users/register', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ username: username }),
+                  body: JSON.stringify({
+                    username: portalUsername,
+                    discoverable: portalDiscoverable
+                  }),
                   cache: 'no-store'
-                }).then(function () {
-                  if ((dmTargetInput.value || '').trim()) return refreshPeerPresence();
+                }).then(function (response) {
+                  if (!response.ok) throw new Error('Unable to register P.Chat identity');
+                  return response.json();
+                }).then(function (data) {
+                  renderPchatUsers(data.users || []);
+                  if (activeDm) return refreshPeerPresence(activeDm.peerUsername);
                 }).catch(function () {});
               }
+
+              updatePchatDiscoverabilityUi();
 
               function friendlyFileType(name, mime) {
                 var m = String(mime || '').toLowerCase();
@@ -3769,7 +3981,7 @@ class BitVoidLocalServer(
 
               function joinChannel(channelId, privateKey) {
                 channelErr.classList.add('hidden');
-                var myU = (dmMyInput && dmMyInput.value ? dmMyInput.value.trim() : '');
+                var myU = portalUsername;
                 fetch('/api/channels/join', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
@@ -3799,7 +4011,7 @@ class BitVoidLocalServer(
                 }
                 if (errEl) errEl.classList.add('hidden');
                 showRtcError('');
-                var myU = (dmMyInput && dmMyInput.value ? dmMyInput.value.trim() : '');
+                var myU = portalUsername;
                 fetch('/api/live-class/join', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
@@ -3846,7 +4058,8 @@ class BitVoidLocalServer(
               }
 
               function openDirectChat(myUser, targetUser) {
-                dmErr.classList.add('hidden');
+                showPchatError('', false);
+                showPchatError('', true);
                 try { localStorage.setItem('bv_username', myUser); } catch (e) {}
                 fetch('/api/dm/open', {
                   method: 'POST',
@@ -3879,9 +4092,10 @@ class BitVoidLocalServer(
                     rtcStartCallBtn.classList.add('hidden');
                     voiceCallBtn.classList.remove('active');
                     videoCallBtn.classList.remove('active');
-                    dmTargetInput.value = data.peerUsername;
-                    refreshPeerPresence();
+                    refreshPeerPresence(data.peerUsername);
                     exitChannelBtn.classList.remove('hidden');
+                    pchatAddDialog.classList.add('hidden');
+                    refreshPchatUsers();
                     var banner = document.createElement('div');
                     banner.className = 'wa-welcome-pill';
                     banner.innerHTML = '<strong>Direct Chat with @' + esc(data.peerUsername) + '</strong> · You: <strong>@' + esc(data.myUsername) + '</strong> · Use the phone or camera icons above to call.';
@@ -3892,8 +4106,9 @@ class BitVoidLocalServer(
                     closeSidebar();
                   })
                   .catch(function (err) {
-                    dmErr.textContent = err.message || 'Unable to start direct chat';
-                    dmErr.classList.remove('hidden');
+                    var message = err.message || 'Unable to start private chat';
+                    showPchatError(message, pchatAddDialog.classList.contains('hidden') === false);
+                    if (pchatAddDialog.classList.contains('hidden')) showPchatError(message, false);
                   })
                   .then(function () { directCallIncomingOpenPending = false; });
               }
@@ -4183,7 +4398,9 @@ class BitVoidLocalServer(
               }
 
               function pollChannelsAndFeed() {
-                var incomingUsername = (dmMyInput.value || '').trim().replace(/^@/, '');
+                refreshPchatUsers();
+                if (activeDm) refreshPeerPresence(activeDm.peerUsername);
+                var incomingUsername = portalUsername;
                 if (incomingUsername && !directCallIncomingOpenPending) {
                   fetch('/api/calls/incoming?username=' + encodeURIComponent(incomingUsername), { cache: 'no-store' })
                     .then(function (r) { return r.ok ? r.json() : null; })
@@ -4196,7 +4413,7 @@ class BitVoidLocalServer(
                     }).catch(function () {});
                 }
 
-                var channelUsername = (dmMyInput.value || '').trim().replace(/^@/, '');
+                var channelUsername = portalUsername;
                 var channelListUrl = '/api/channels' + (channelUsername ? ('?username=' + encodeURIComponent(channelUsername)) : '');
                 fetch(channelListUrl, { cache: 'no-store' })
                   .then(function (r) { return r.json(); })
@@ -4541,7 +4758,7 @@ class BitVoidLocalServer(
                 if (startWithMedia && !window.isSecureContext) {
                   showRtcError('Camera and microphone require trusted HTTPS. Open /secure-setup, install the BitVoid local CA, then use the secure portal URL.');
                   liveStagePanel.classList.remove('hidden');
-                  liveRoomStatusEl.innerHTML = 'Secure browser setup required · <a href="/secure-setup?username=' + encodeURIComponent(activeDm ? activeDm.myUsername : (dmMyInput.value || '')) + '">OPEN SETUP</a>';
+                  liveRoomStatusEl.innerHTML = 'Secure browser setup required · <a href="/secure-setup?username=' + encodeURIComponent(activeDm ? activeDm.myUsername : portalUsername) + '">OPEN SETUP</a>';
                   directCallConnecting = false;
                   return;
                 }
@@ -4584,7 +4801,7 @@ class BitVoidLocalServer(
                   }
 
                   var scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
-                  var displayName = (dmMyInput && dmMyInput.value ? dmMyInput.value.trim() : '') ||
+                  var displayName = portalUsername ||
                     (activeDm ? activeDm.myUsername : (activeChannel ? activeChannel.callsign : 'WebPeer'));
                   var wsUrl = scheme + location.host + '/ws/signaling' +
                     '?roomId=' + encodeURIComponent(rtcRoomId) +
@@ -4705,10 +4922,9 @@ class BitVoidLocalServer(
                   liveRoomStatusEl.innerHTML = 'Secure browser setup required · <a href="/secure-setup?username=' + encodeURIComponent(activeDm.myUsername || '') + '">OPEN SETUP</a>';
                   return;
                 }
-                refreshPeerPresence().then(function (available) {
+                refreshPeerPresence(activeDm.peerUsername).then(function (available) {
                   if (!available) {
-                    dmErr.textContent = 'Call unavailable: @' + activeDm.peerUsername + ' is not active on this Wi-Fi node.';
-                    dmErr.classList.remove('hidden');
+                    showPchatError('Call unavailable: @' + activeDm.peerUsername + ' is not active on this Wi-Fi node.', false);
                     openSidebar();
                     return;
                   }
@@ -4953,32 +5169,54 @@ class BitVoidLocalServer(
                 }
                 joinChannel(cid, privateKeyInput.value || '');
               });
-              dmTargetInput.addEventListener('input', function () {
-                peerIsAvailable = false;
-                dmOpenBtn.disabled = true;
-                dmErr.classList.add('hidden');
-                if (presenceCheckTimer) clearTimeout(presenceCheckTimer);
-                presenceCheckTimer = setTimeout(refreshPeerPresence, 350);
+              pchatAddUserBtn.addEventListener('click', function () {
+                pchatExactUserInput.value = '';
+                showPchatError('', true);
+                pchatAddDialog.classList.remove('hidden');
+                setTimeout(function () { pchatExactUserInput.focus(); }, 0);
               });
-              dmTargetInput.addEventListener('keydown', function (ev) {
-                if (ev.key === 'Enter' && !dmOpenBtn.disabled) dmOpenBtn.click();
+              pchatDialogCancel.addEventListener('click', function () {
+                pchatAddDialog.classList.add('hidden');
+                showPchatError('', true);
               });
-              dmOpenBtn.addEventListener('click', function () {
-                var mu = (dmMyInput.value || '').trim();
-                var tu = (dmTargetInput.value || '').trim();
-                if (!mu || !tu) {
-                  dmErr.textContent = 'Enter both your Username ID and peer Username ID.';
-                  dmErr.classList.remove('hidden');
+              pchatAddDialog.addEventListener('click', function (ev) {
+                if (ev.target === pchatAddDialog) pchatDialogCancel.click();
+              });
+              pchatExactUserInput.addEventListener('input', function () {
+                showPchatError('', true);
+              });
+              pchatExactUserInput.addEventListener('keydown', function (ev) {
+                if (ev.key === 'Enter') pchatDialogOpen.click();
+                if (ev.key === 'Escape') pchatDialogCancel.click();
+              });
+              pchatDialogOpen.addEventListener('click', function () {
+                var target = (pchatExactUserInput.value || '').trim().replace(/^@/, '');
+                if (!target) {
+                  showPchatError('Enter a User ID.', true);
                   return;
                 }
-                refreshPeerPresence().then(function (available) {
+                if (target.toLowerCase() === portalUsername.toLowerCase()) {
+                  showPchatError("Enter another user's ID.", true);
+                  return;
+                }
+                pchatDialogOpen.disabled = true;
+                pchatDialogOpen.textContent = 'CHECKING…';
+                refreshPeerPresence(target).then(function (available) {
                   if (!available) {
-                    dmErr.textContent = 'This user is not active on the current BitVoid node or local Wi-Fi.';
-                    dmErr.classList.remove('hidden');
+                    showPchatError('This user is not active on the current BitVoid node or local Wi-Fi.', true);
                     return;
                   }
-                  openDirectChat(mu, tu);
+                  openDirectChat(portalUsername, target);
+                }).finally(function () {
+                  pchatDialogOpen.disabled = false;
+                  pchatDialogOpen.textContent = 'OPEN CHAT';
                 });
+              });
+              pchatDiscoverableToggle.addEventListener('click', function () {
+                portalDiscoverable = !portalDiscoverable;
+                try { localStorage.setItem('bv_pchat_discoverable', portalDiscoverable ? 'true' : 'false'); } catch (e) {}
+                updatePchatDiscoverabilityUi();
+                registerBrowserPresence();
               });
               exitChannelBtn.addEventListener('click', function () {
                 leaveRtcSession();
