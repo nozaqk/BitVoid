@@ -50,6 +50,8 @@ data class HostState(
     val ssid: String = "",
     val passphrase: String = "",
     val gatewayIp: String = "",
+    val gatewayHostname: String = "",
+    val gatewayHostnamePort: Int = 8080,
     val boundEndpoints: List<String> = emptyList(),
     val port: Int = 8080,
     val securePort: Int = 8443,
@@ -75,26 +77,38 @@ data class HostState(
     val effectiveSsid: String
         get() = ssid.ifBlank { configuredSsid.ifBlank { DEFAULT_SSID } }
 
-    val effectivePortalUrl: String
+    val networkPortalUrl: String
         get() = if (isServerRunning && gatewayIp.isNotBlank()) {
-            "http://$gatewayIp:$port"
+            buildHttpUrl(gatewayIp, port)
         } else {
-            "http://192.168.43.1:$port"
+            buildHttpUrl("192.168.43.1", port)
+        }
+
+    val effectivePortalUrl: String
+        get() = if (isServerRunning && gatewayHostname.isNotBlank()) {
+            buildHttpUrl(gatewayHostname, gatewayHostnamePort)
+        } else {
+            networkPortalUrl
         }
 
     val portalUrl: String
         get() = if (isServerRunning && gatewayIp.isNotBlank()) {
-            "http://$gatewayIp:$port"
+            effectivePortalUrl
         } else {
             "— offline —"
         }
 
     val securePortalUrl: String
         get() = if (isSecureServerRunning && gatewayIp.isNotBlank()) {
-            "https://$gatewayIp:$securePort"
+            val host = gatewayHostname.ifBlank { gatewayIp }
+            "https://$host:$securePort"
         } else {
             "— secure portal starting —"
         }
+
+    private fun buildHttpUrl(host: String, targetPort: Int): String {
+        return if (targetPort == 80) "http://$host" else "http://$host:$targetPort"
+    }
 
     companion object {
         const val DEFAULT_SSID = BitVoidNetworkConfig.DEFAULT_VISIBLE_SSID
@@ -133,7 +147,7 @@ data class ClientState(
     val currentWifiSsid: String? = null,
     val connectedSsid: String? = null,
     val linkedNodeUrls: List<String> = emptyList(),
-    val targetPortalUrl: String = "http://192.168.43.1:8080",
+    val targetPortalUrl: String = "http://${BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME}",
     val statusMessage: String = "Standby — ready to scan or connect to a BitVoid node",
     val errorMessage: String? = null,
     val isBrowserOpen: Boolean = false,

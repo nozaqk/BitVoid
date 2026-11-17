@@ -23,6 +23,7 @@ import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.core.content.ContextCompat
+import com.bitvoid.network.model.BitVoidNetworkConfig
 import com.bitvoid.network.model.ClientConnectionStatus
 import com.bitvoid.network.model.DiscoveredNetwork
 import com.bitvoid.network.service.BitVoidNodeStateHolder
@@ -364,6 +365,7 @@ class BitVoidClientManager(private val context: Context) {
     ): List<String> = discoveryMutex.withLock {
         withContext(Dispatchers.IO) {
             val candidates = buildList {
+                add(BitVoidClientRepository.DEFAULT_GATEWAY_URL)
                 normalizeLocalPortalUrl(preferredPortalUrl.orEmpty())?.let { preferred ->
                     val host = android.net.Uri.parse(preferred).host
                     if (host != null && host != "127.0.0.1" && host != "localhost") add(preferred.trimEnd('/'))
@@ -529,17 +531,21 @@ class BitVoidClientManager(private val context: Context) {
 
         /** All peers independently choose the same lowest local IPv4 as their shared gateway. */
         fun orderNodeUrlsForSharedGateway(urls: List<String>): List<String> {
-            fun ipv4Key(url: String): Long {
+            fun urlKey(url: String): Pair<Int, Long> {
                 val host = runCatching { android.net.Uri.parse(url).host }.getOrNull().orEmpty()
+                if (host.equals(BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME, ignoreCase = true)) {
+                    return 0 to 0L
+                }
                 val octets = host.split('.').mapNotNull { it.toIntOrNull() }
-                if (octets.size != 4 || octets.any { it !in 0..255 }) return Long.MAX_VALUE
-                return octets.fold(0L) { acc, octet -> (acc shl 8) or octet.toLong() }
+                if (octets.size != 4 || octets.any { it !in 0..255 }) return 2 to Long.MAX_VALUE
+                val ipv4 = octets.fold(0L) { acc, octet -> (acc shl 8) or octet.toLong() }
+                return 1 to ipv4
             }
             return urls
                 .map { it.trim().trimEnd('/') }
                 .filter { it.isNotEmpty() }
                 .distinct()
-                .sortedWith(compareBy<String> { ipv4Key(it) }.thenBy { it })
+                .sortedWith(compareBy<String> { urlKey(it).first }.thenBy { urlKey(it).second }.thenBy { it })
         }
 
         fun resolvePortalUrlAfterConnect(
@@ -548,7 +554,11 @@ class BitVoidClientManager(private val context: Context) {
             linkGatewayIp: String?
         ): String {
             val cleanGw = linkGatewayIp?.trim()?.takeIf { it.isNotEmpty() && isPrivateLocalHost(it) }
-            return if (cleanGw != null && wasDefaultPlaceholder) {
+            return if (
+                cleanGw != null &&
+                wasDefaultPlaceholder &&
+                !normalizedRequestedUrl.equals(BitVoidClientRepository.DEFAULT_GATEWAY_URL, ignoreCase = true)
+            ) {
                 "http://$cleanGw:8080"
             } else {
                 normalizedRequestedUrl
@@ -557,7 +567,7 @@ class BitVoidClientManager(private val context: Context) {
 
         fun normalizeLocalPortalUrl(rawInput: String): String? {
             val trimmed = rawInput.trim()
-            if (trimmed.isEmpty()) return "http://192.168.43.1:8080"
+            if (trimmed.isEmpty()) return "http://${BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME}"
             val withScheme = if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
                 trimmed
             } else {
@@ -570,6 +580,7 @@ class BitVoidClientManager(private val context: Context) {
 
         fun isPrivateLocalHost(host: String): Boolean {
             val lower = host.lowercase()
+            if (lower == BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME) return true
             if (lower == "localhost" || lower == "127.0.0.1") return true
             if (lower.startsWith("192.168.") || lower.startsWith("10.")) return true
             if (lower.startsWith("172.")) {

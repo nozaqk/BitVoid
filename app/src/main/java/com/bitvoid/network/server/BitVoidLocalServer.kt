@@ -666,10 +666,13 @@ class BitVoidLocalServer(
 
     /** Lightweight identity response used by silent same-Wi-Fi client discovery. */
     private fun serveNodeIdentity(ephemeralToken: String, isHead: Boolean): Response {
+        val hostState = BitVoidNodeStateHolder.hostState.value
         val payload = JSONObject().apply {
             put("service", "bitvoid")
             put("nodeType", "gateway")
             put("protocolVersion", 1)
+            put("hostname", BitVoidMdnsResponder.HOSTNAME)
+            put("portalUrl", hostState.effectivePortalUrl)
             put("port", DEFAULT_PORT)
             put("features", JSONArray(listOf("channels", "calls", "liveClass", "files")))
         }.toString()
@@ -1885,18 +1888,26 @@ class BitVoidLocalServer(
             ?.removePrefix("http://")
             ?.substringBefore('/')
         val activeGatewayHost = when {
+            hostState.gatewayHostname.isNotBlank() -> {
+                if (hostState.gatewayHostnamePort == 80) {
+                    hostState.gatewayHostname
+                } else {
+                    "${hostState.gatewayHostname}:${hostState.gatewayHostnamePort}"
+                }
+            }
             hostState.gatewayIp.isNotBlank() &&
                 hostState.gatewayIp != "127.0.0.1" &&
                 hostState.gatewayIp != "localhost" -> {
                 "${hostState.gatewayIp}:${hostState.port}"
             }
             !nonLoopbackEndpoint.isNullOrBlank() -> nonLoopbackEndpoint
-            else -> "192.168.43.1:$DEFAULT_PORT"
+            else -> BitVoidMdnsResponder.HOSTNAME
         }
 
         val rawHostHeader = sanitizedHeaders["host"]?.trim().orEmpty()
         val hostOnly = rawHostHeader.substringBefore(':').lowercase(Locale.US)
-        val useDirectLocalHost = rawHostHeader.isNotBlank() &&
+        val useDirectLocalHost = hostState.gatewayHostname.isBlank() &&
+            rawHostHeader.isNotBlank() &&
             hostOnly !in CAPTIVE_PORTAL_DOMAINS &&
             isLocalIpHost(hostOnly)
 
@@ -2059,11 +2070,7 @@ class BitVoidLocalServer(
         }
         val privateChannels = BitVoidChannelManager.getListedChannelSnapshots().filter { !it.isPublic }
         val hostState = BitVoidNodeStateHolder.hostState.value
-        val gatewayLabel = if (hostState.gatewayIp.isNotBlank()) {
-            "${hostState.gatewayIp}:${hostState.port}"
-        } else {
-            "192.168.43.1:${hostState.port}"
-        }
+        val gatewayLabel = hostState.effectivePortalUrl.removePrefix("http://")
 
         val publicFeedHtml = if (publicItems.isEmpty()) {
             """

@@ -25,6 +25,7 @@ data class BitVoidNetworkConfig(
         const val DEFAULT_WPA2_PASSPHRASE = "BitVoid2026"
         const val ENFORCED_VISIBLE_SSID = false
         const val WPA2_SECURITY_LABEL = "SECURITY: WPA2-PSK (VISIBLE SSID)"
+        const val LOCAL_GATEWAY_HOSTNAME = "bitvoid.local"
 
         private val DIRECT_PREFIX_REGEX = Regex("^DIRECT-[0-9A-Za-z]{2}.*")
 

@@ -7,6 +7,7 @@ import com.bitvoid.network.call.DirectCallPhase
 import com.bitvoid.network.call.ParticipantRole
 import com.bitvoid.network.call.SignalingPeer
 import com.bitvoid.network.call.SignalingSessionMode
+import com.bitvoid.network.model.BitVoidNetworkConfig
 import com.bitvoid.network.model.MediaCategory
 import java.io.File
 import java.io.FileOutputStream
@@ -150,7 +151,7 @@ enum class ClientWsStatus {
 class BitVoidClientRepository {
 
     companion object {
-        const val DEFAULT_GATEWAY_URL = "http://192.168.43.1:8080"
+        const val DEFAULT_GATEWAY_URL = "http://" + BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
     }
 

@@ -257,7 +257,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                     hState.isServerRunning &&
                     hState.gatewayIp.isNotBlank()
                 ) {
-                    val localUrl = hState.effectivePortalUrl
+                    val localUrl = hState.networkPortalUrl
                     if (clientGatewayUrl.value != localUrl) {
                         clientRepository.setGatewayBaseUrl(localUrl)
                         if (_selectedBottomTab.value == AppBottomTab.HUB || _selectedMode.value == NodeMode.CLIENT) {
@@ -428,7 +428,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             hState.isServerRunning &&
             hState.gatewayIp.isNotBlank()
         ) {
-            clientRepository.setGatewayBaseUrl(hState.effectivePortalUrl)
+            clientRepository.setGatewayBaseUrl(hState.networkPortalUrl)
         }
     }
 
@@ -649,6 +649,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     fun setClientGatewayUrl(rawUrl: String): Boolean {
         val normalized = clientRepository.setGatewayBaseUrl(rawUrl) ?: return false
         customClientUrlPinned = normalized != hostState.value.effectivePortalUrl &&
+            normalized != hostState.value.networkPortalUrl &&
             normalized != BitVoidClientRepository.DEFAULT_GATEWAY_URL
         BitVoidNodeStateHolder.updateClientState {
             it.copy(
