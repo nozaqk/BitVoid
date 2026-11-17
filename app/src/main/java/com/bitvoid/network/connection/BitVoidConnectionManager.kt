@@ -130,7 +130,7 @@ class BitVoidConnectionManager(
         private val MDNS_GROUP: InetAddress = InetAddress.getByName("224.0.0.251")
 
         internal fun isAllowedLocalUrl(rawUrl: String): Boolean {
-            val parsed = runCatching { android.net.Uri.parse(rawUrl) }.getOrNull() ?: return false
+            val parsed = runCatching { java.net.URI(rawUrl) }.getOrNull() ?: return false
             if (!parsed.scheme.equals("http", ignoreCase = true) &&
                 !parsed.scheme.equals("https", ignoreCase = true)
             ) return false
