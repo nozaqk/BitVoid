@@ -129,7 +129,11 @@ fun generateQrImageBitmap(payload: String, sizePx: Int = 512): ImageBitmap? {
 
 fun shareWifiNetworkDetails(context: Context, hostState: HostState) {
     val ssid = hostState.effectiveSsid
-    val portalUrl = hostState.effectivePortalUrl
+    val portalUrl = if (hostState.hasClientGatewayAddress) {
+        hostState.networkPortalUrl
+    } else {
+        hostState.effectivePortalUrl
+    }
     val passphrase = hostState.passphrase
         .takeIf { it.isNotBlank() && !it.startsWith("Managed by") }
         ?: hostState.configuredPassphrase
@@ -139,7 +143,10 @@ fun shareWifiNetworkDetails(context: Context, hostState: HostState) {
         appendLine("SSID: $ssid")
         appendLine("SECURITY: WPA2/WPA3")
         appendLine("PASSWORD: $passphrase")
-        appendLine("Portal: $portalUrl")
+        appendLine("Direct portal: $portalUrl")
+        if (hostState.gatewayHostname.isNotBlank() && hostState.effectivePortalUrl != portalUrl) {
+            appendLine("Friendly portal: ${hostState.effectivePortalUrl}")
+        }
         append("Connect to the protected Wi-Fi network, then open the BitVoid Channels portal.")
     }
     val sendIntent = Intent(Intent.ACTION_SEND).apply {
@@ -163,7 +170,11 @@ fun HostWifiQrSection(
     var qrMode by rememberSaveable { mutableStateOf(QrPayloadMode.WIFI_NETWORK) }
 
     val ssid = hostState.effectiveSsid
-    val portalUrl = hostState.effectivePortalUrl
+    val portalUrl = if (hostState.hasClientGatewayAddress) {
+        hostState.networkPortalUrl
+    } else {
+        hostState.effectivePortalUrl
+    }
     val wifiPassphrase = hostState.passphrase
         .takeIf { it.isNotBlank() && !it.startsWith("Managed by") }
         ?: hostState.configuredPassphrase

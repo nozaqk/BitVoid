@@ -134,6 +134,7 @@ class BitVoidMdnsResponder(context: Context) {
     private var socket: MulticastSocket? = null
     private var worker: Thread? = null
     private var activeAddress: Inet4Address? = null
+    private var activeInterfaceName: String? = null
 
     @Volatile
     private var running = false
@@ -143,7 +144,17 @@ class BitVoidMdnsResponder(context: Context) {
         val address = runCatching { InetAddress.getByName(rawIpv4) as? Inet4Address }.getOrNull()
             ?.takeUnless { it.isAnyLocalAddress || it.isLoopbackAddress }
             ?: return false
-        if (running && activeAddress == address && socket?.isClosed == false) return true
+        // Never claim that the friendly hostname is available for a guessed/fallback address.
+        // Wait until Android has assigned that address to a real hotspot/P2P/LAN interface.
+        val networkInterface = findNetworkInterface(address) ?: run {
+            stop()
+            return false
+        }
+        if (running &&
+            activeAddress == address &&
+            activeInterfaceName == networkInterface.name &&
+            socket?.isClosed == false
+        ) return true
 
         stop()
         return try {
@@ -153,22 +164,17 @@ class BitVoidMdnsResponder(context: Context) {
             }
             multicastLock = createdLock
 
-            val networkInterface = findNetworkInterface(address)
             val createdSocket = MulticastSocket(null)
             socket = createdSocket
             createdSocket.apply {
                 reuseAddress = true
                 bind(InetSocketAddress(MDNS_PORT))
                 timeToLive = 255
-                if (networkInterface != null) {
-                    this.networkInterface = networkInterface
-                    joinGroup(InetSocketAddress(MDNS_GROUP, MDNS_PORT), networkInterface)
-                } else {
-                    @Suppress("DEPRECATION")
-                    joinGroup(MDNS_GROUP)
-                }
+                this.networkInterface = networkInterface
+                joinGroup(InetSocketAddress(MDNS_GROUP, MDNS_PORT), networkInterface)
             }
             activeAddress = address
+            activeInterfaceName = networkInterface.name
             running = true
             worker = Thread(
                 { listen(createdSocket, address) },
@@ -196,6 +202,7 @@ class BitVoidMdnsResponder(context: Context) {
         worker?.interrupt()
         worker = null
         activeAddress = null
+        activeInterfaceName = null
         try {
             multicastLock?.takeIf { it.isHeld }?.release()
         } catch (_: Exception) {

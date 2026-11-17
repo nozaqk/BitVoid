@@ -137,6 +137,16 @@ class BitVoidLocalServerTest {
 
     @Test
     fun `node identity endpoint supports lightweight same wifi discovery`() {
+        BitVoidNodeStateHolder.updateHostState {
+            HostState(
+                status = com.bitvoid.network.model.HotspotStatus.ACTIVE,
+                isServerRunning = true,
+                gatewayIp = "192.168.43.1",
+                isGatewayAddressVerified = true,
+                gatewayHostname = BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME,
+                gatewayHostnamePort = 80
+            )
+        }
         val conn = (URL("http://127.0.0.1:$testPort/api/node").openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             setRequestProperty("X-BitVoid-Discovery", "1")
@@ -150,6 +160,8 @@ class BitVoidLocalServerTest {
         assertEquals("gateway", body.getString("nodeType"))
         assertEquals(1, body.getInt("protocolVersion"))
         assertEquals(BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME, body.getString("hostname"))
+        assertEquals("http://bitvoid.local", body.getString("portalUrl"))
+        assertEquals("http://192.168.43.1:8080", body.getString("directPortalUrl"))
     }
 
     @Test
@@ -157,11 +169,21 @@ class BitVoidLocalServerTest {
         val hostState = HostState(
             isServerRunning = true,
             gatewayIp = "192.168.43.1",
+            isGatewayAddressVerified = true,
             gatewayHostname = BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME,
             gatewayHostnamePort = 80
         )
+        assertTrue(hostState.hasClientGatewayAddress)
         assertEquals("http://bitvoid.local", hostState.effectivePortalUrl)
         assertEquals("http://192.168.43.1:8080", hostState.networkPortalUrl)
+        assertFalse(hostState.copy(gatewayIp = "127.0.0.1").hasClientGatewayAddress)
+
+        val secureHostState = hostState.copy(
+            isSecureServerRunning = true,
+            securePort = 8443
+        )
+        assertEquals("https://bitvoid.local:8443", secureHostState.securePortalUrl)
+        assertEquals("https://192.168.43.1:8443", secureHostState.secureNetworkPortalUrl)
 
         val query = byteArrayOf(
             0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,

@@ -212,7 +212,10 @@ class BitVoidForegroundService : Service() {
                 securityLabel = BitVoidNetworkConfig.WPA2_SECURITY_LABEL,
                 configuredSsid = networkConfig.ssid,
                 configuredPassphrase = networkConfig.passphrase,
+                gatewayIp = "",
+                isGatewayAddressVerified = false,
                 gatewayHostname = "",
+                boundEndpoints = emptyList(),
                 gatewayHostnamePort = BitVoidLocalServer.DEFAULT_PORT,
                 errorMessage = null
             )
@@ -241,6 +244,7 @@ class BitVoidForegroundService : Service() {
                 ssid = activeSsid,
                 passphrase = if (resolvedIp == "127.0.0.1") "" else "Managed by Wi-Fi / LAN",
                 gatewayIp = resolvedIp,
+                isGatewayAddressVerified = resolvedIp != "127.0.0.1",
                 gatewayHostname = if (friendlyPort != null) BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME else "",
                 gatewayHostnamePort = friendlyPort ?: BitVoidLocalServer.DEFAULT_PORT,
                 boundEndpoints = urlList,
@@ -274,6 +278,7 @@ class BitVoidForegroundService : Service() {
                     status = HotspotStatus.ERROR,
                     isServerRunning = false,
                     gatewayIp = "",
+                    isGatewayAddressVerified = false,
                     gatewayHostname = "",
                     boundEndpoints = emptyList(),
                     errorMessage = "Failed to bind HTTP server on port ${BitVoidLocalServer.DEFAULT_PORT}: ${e.localizedMessage}"
@@ -471,8 +476,8 @@ class BitVoidForegroundService : Service() {
                             return@requestGroupInfo
                         }
                         val detection = detectActiveApAndWlanEndpoints()
-                        val primaryIp = detection.primaryIp ?: "192.168.49.1"
-                        val combinedIps = (detection.allEndpoints + "192.168.49.1" + "127.0.0.1").distinct()
+                        val primaryIp = detection.primaryBroadcastIp ?: "192.168.49.1"
+                        val combinedIps = (detection.allEndpoints + primaryIp + "127.0.0.1").distinct()
                         publishBroadcastActiveState(
                             prefsCfg = prefsCfg,
                             activeSsid = activeSsid,
@@ -545,8 +550,8 @@ class BitVoidForegroundService : Service() {
 
                         val resolvedSsid = activeSsid.ifBlank { prefsCfg.ssid.ifBlank { DEFAULT_SSID } }
                         val detection = detectActiveApAndWlanEndpoints()
-                        val primaryIp = detection.primaryIp ?: "192.168.43.1"
-                        val combinedIps = (detection.allEndpoints + "192.168.43.1" + "127.0.0.1").distinct()
+                        val primaryIp = detection.primaryBroadcastIp ?: "192.168.43.1"
+                        val combinedIps = (detection.allEndpoints + primaryIp + "127.0.0.1").distinct()
 
                         publishBroadcastActiveState(
                             prefsCfg = prefsCfg,
@@ -594,7 +599,7 @@ class BitVoidForegroundService : Service() {
         val secureSystemHotspot = systemHotspot?.isOpen == false &&
             !systemHotspot.passphrase.isNullOrBlank()
         if (secureSystemHotspot) {
-            val primaryIp = detection.primaryIp ?: "192.168.43.1"
+            val primaryIp = detection.primaryBroadcastIp ?: "192.168.43.1"
             val combinedIps = (detection.allEndpoints + primaryIp + "127.0.0.1").distinct()
             publishBroadcastActiveState(
                 prefsCfg = prefsCfg,
@@ -620,6 +625,7 @@ class BitVoidForegroundService : Service() {
                 ssid = resolveConnectedWifiSsid().orEmpty(),
                 passphrase = "Managed by connected Wi-Fi",
                 gatewayIp = primaryIp,
+                isGatewayAddressVerified = detection.allEndpoints.contains(primaryIp),
                 gatewayHostname = if (friendlyPort != null) BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME else "",
                 gatewayHostnamePort = friendlyPort ?: BitVoidLocalServer.DEFAULT_PORT,
                 boundEndpoints = buildPortalEndpoints(combinedIps, friendlyPort),
@@ -653,6 +659,7 @@ class BitVoidForegroundService : Service() {
             )
             return
         }
+        val gatewayVerified = resolveAllNetworkIpv4s().contains(primaryIp)
         val friendlyPort = ensureFriendlyGateway(primaryIp)
         val secureReady = ensureSecureServerRunning(combinedIps)
         BitVoidNodeStateHolder.updateHostState {
@@ -666,6 +673,7 @@ class BitVoidForegroundService : Service() {
                 ssid = activeSsid,
                 passphrase = activePassphrase,
                 gatewayIp = primaryIp,
+                isGatewayAddressVerified = gatewayVerified,
                 gatewayHostname = if (friendlyPort != null) BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME else "",
                 gatewayHostnamePort = friendlyPort ?: BitVoidLocalServer.DEFAULT_PORT,
                 boundEndpoints = buildPortalEndpoints(combinedIps, friendlyPort),
@@ -691,8 +699,8 @@ class BitVoidForegroundService : Service() {
     }
 
     private data class DetectedApNetwork(
-        val hasDedicatedApInterface: Boolean,
         val primaryIp: String?,
+        val primaryBroadcastIp: String?,
         val allEndpoints: List<String>,
         val detectedApSsid: String?
     )
@@ -706,6 +714,15 @@ class BitVoidForegroundService : Service() {
                 val iface = interfaces.nextElement()
                 if (!iface.isUp || iface.isLoopback) continue
                 val name = iface.name.lowercase()
+                val isCellularOrTunnel = name.startsWith("rmnet") ||
+                    name.startsWith("ccmni") ||
+                    name.startsWith("pdp") ||
+                    name.startsWith("rev_rmnet") ||
+                    name.startsWith("tun") ||
+                    name.startsWith("tap") ||
+                    name.startsWith("ppp") ||
+                    name.startsWith("wg")
+                if (isCellularOrTunnel) continue
                 val isP2pIface = name.startsWith("p2p")
                 val isApIface = name.startsWith("ap") ||
                     name.startsWith("swlan") ||
@@ -732,26 +749,28 @@ class BitVoidForegroundService : Service() {
                             addr.isSiteLocalAddress -> 6
                             else -> 7
                         }
-                        val dedicatedAp = apEnabledByWifi ||
-                            isApIface ||
+                        // A concurrently connected wlan0 address is usually not reachable by
+                        // clients on the phone's hotspot. Prefer an address assigned to the
+                        // broadcast/P2P interface; use the platform gateway fallback only until
+                        // Android exposes that interface.
+                        val isBroadcastEndpoint = isApIface ||
                             isP2pIface ||
                             ip == "192.168.43.1" ||
                             ip == "192.168.49.1" ||
                             (isWlanIface && isGateway192)
-                        candidates.add(Triple(priority, ip, dedicatedAp))
+                        candidates.add(Triple(priority, ip, isBroadcastEndpoint))
                     }
                 }
             }
         } catch (_: Exception) {
-            return DetectedApNetwork(false, null, emptyList(), null)
+            return DetectedApNetwork(null, null, emptyList(), null)
         }
         val sorted = candidates.sortedBy { it.first }
         val endpoints = sorted.map { it.second }.distinct()
-        val hasDedicatedAp = apEnabledByWifi || isP2pGroupActive || sorted.any { it.third }
         val apSsid = if (apEnabledByWifi) resolveSystemHotspotSsid() else null
         return DetectedApNetwork(
-            hasDedicatedApInterface = hasDedicatedAp,
             primaryIp = endpoints.firstOrNull(),
+            primaryBroadcastIp = sorted.firstOrNull { it.third }?.second,
             allEndpoints = endpoints,
             detectedApSsid = apSsid
         )
@@ -805,16 +824,24 @@ class BitVoidForegroundService : Service() {
             repeat(20) {
                 delay(750L)
                 val detection = detectActiveApAndWlanEndpoints()
-                val resolved = detection.primaryIp ?: "127.0.0.1"
-                val combinedIps = (detection.allEndpoints + "127.0.0.1").distinct()
                 val current = BitVoidNodeStateHolder.hostState.value
+                val systemHotspot = if (isSystemWifiApEnabled()) resolveSystemHotspotInfo() else null
+                val secureSystemHotspot = systemHotspot?.isOpen == false &&
+                    !systemHotspot.passphrase.isNullOrBlank()
+                val secureBroadcastActive = isP2pGroupActive ||
+                    hotspotReservation != null ||
+                    secureSystemHotspot
+                val resolved = when {
+                    isP2pGroupActive -> detection.primaryBroadcastIp ?: "192.168.49.1"
+                    hotspotReservation != null || secureSystemHotspot ->
+                        detection.primaryBroadcastIp ?: "192.168.43.1"
+                    else -> detection.primaryIp ?: "127.0.0.1"
+                }
+                val gatewayVerified = detection.allEndpoints.contains(resolved)
+                val combinedIps = (detection.allEndpoints + resolved + "127.0.0.1").distinct()
                 val friendlyPort = ensureFriendlyGateway(resolved)
                 val urlList = buildPortalEndpoints(combinedIps, friendlyPort)
                 val secureReady = ensureSecureServerRunning(combinedIps)
-                val systemHotspot = if (isSystemWifiApEnabled()) resolveSystemHotspotInfo() else null
-                val secureBroadcastActive = isP2pGroupActive ||
-                    hotspotReservation != null ||
-                    (systemHotspot?.isOpen == false && !systemHotspot.passphrase.isNullOrBlank())
                 val resolvedSsid = when {
                     isP2pGroupActive || hotspotReservation != null -> current.ssid
                     secureBroadcastActive -> systemHotspot?.ssid ?: current.ssid
@@ -827,6 +854,7 @@ class BitVoidForegroundService : Service() {
                 }
                 val resolvedHostname = if (friendlyPort != null) BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME else ""
                 if ((resolved != current.gatewayIp ||
+                        gatewayVerified != current.isGatewayAddressVerified ||
                         resolvedHostname != current.gatewayHostname ||
                         (friendlyPort ?: BitVoidLocalServer.DEFAULT_PORT) != current.gatewayHostnamePort ||
                         urlList != current.boundEndpoints ||
@@ -839,6 +867,7 @@ class BitVoidForegroundService : Service() {
                             status = nextStatus,
                             ssid = resolvedSsid.ifBlank { it.ssid },
                             gatewayIp = resolved,
+                            isGatewayAddressVerified = gatewayVerified,
                             gatewayHostname = resolvedHostname,
                             gatewayHostnamePort = friendlyPort ?: BitVoidLocalServer.DEFAULT_PORT,
                             boundEndpoints = urlList,
@@ -937,6 +966,7 @@ class BitVoidForegroundService : Service() {
                 ssid = "",
                 passphrase = "",
                 gatewayIp = "",
+                isGatewayAddressVerified = false,
                 gatewayHostname = "",
                 gatewayHostnamePort = BitVoidLocalServer.DEFAULT_PORT,
                 boundEndpoints = emptyList(),

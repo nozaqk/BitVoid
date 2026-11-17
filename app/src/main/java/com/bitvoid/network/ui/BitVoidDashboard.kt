@@ -1235,31 +1235,63 @@ private fun HostCredentialsCard(
                 onCopy = { onCopy("Hotspot Passphrase", displayPassphrase) }
             )
 
+            val clientGatewayReady = hostState.hasClientGatewayAddress
             CredentialRow(
-                label = "CAPTIVE PORTAL AUTO-REDIRECT TARGET",
-                value = hostState.effectivePortalUrl,
-                canCopy = true,
-                valueColor = VoidMint,
-                onCopy = { onCopy("Portal URL", hostState.effectivePortalUrl) }
+                label = "DIRECT IP PORTAL (RELIABLE FALLBACK)",
+                value = if (clientGatewayReady) {
+                    hostState.networkPortalUrl
+                } else {
+                    "Gateway IPv4 pending — enable/connect the hotspot"
+                },
+                canCopy = clientGatewayReady,
+                valueColor = if (clientGatewayReady) VoidMint else VoidAmber,
+                onCopy = { onCopy("Direct Portal URL", hostState.networkPortalUrl) }
             )
+
+            if (clientGatewayReady && hostState.effectivePortalUrl != hostState.networkPortalUrl) {
+                CredentialRow(
+                    label = "FRIENDLY mDNS PORTAL (IF .LOCAL IS SUPPORTED)",
+                    value = hostState.effectivePortalUrl,
+                    canCopy = true,
+                    valueColor = VoidCyan,
+                    onCopy = { onCopy("Friendly Portal URL", hostState.effectivePortalUrl) }
+                )
+            }
 
             if (hostState.isSecureServerRunning) {
                 CredentialRow(
-                    label = "SECURE VOICE CALL / LIVE CLASS PORTAL (MIC + HOST STAGE)",
-                    value = hostState.securePortalUrl,
-                    canCopy = true,
-                    valueColor = VoidCyan,
-                    onCopy = { onCopy("Secure Portal URL", hostState.securePortalUrl) }
+                    label = "DIRECT SECURE VOICE / LIVE CLASS PORTAL",
+                    value = if (clientGatewayReady) {
+                        hostState.secureNetworkPortalUrl
+                    } else {
+                        "Gateway IPv4 pending — secure portal not shareable yet"
+                    },
+                    canCopy = clientGatewayReady,
+                    valueColor = if (clientGatewayReady) VoidCyan else VoidAmber,
+                    onCopy = { onCopy("Direct Secure Portal URL", hostState.secureNetworkPortalUrl) }
                 )
+                if (clientGatewayReady && hostState.securePortalUrl != hostState.secureNetworkPortalUrl) {
+                    CredentialRow(
+                        label = "FRIENDLY SECURE PORTAL (IF .LOCAL IS SUPPORTED)",
+                        value = hostState.securePortalUrl,
+                        canCopy = true,
+                        valueColor = VoidCyan,
+                        onCopy = { onCopy("Friendly Secure Portal URL", hostState.securePortalUrl) }
+                    )
+                }
                 CredentialRow(
-                    label = "ONE-TIME BROWSER CERTIFICATE SETUP",
-                    value = "${hostState.effectivePortalUrl}/secure-setup",
-                    canCopy = true,
+                    label = "ONE-TIME CERTIFICATE SETUP (DIRECT IP)",
+                    value = if (clientGatewayReady) {
+                        "${hostState.networkPortalUrl}/secure-setup"
+                    } else {
+                        "Gateway IPv4 pending — setup link not shareable yet"
+                    },
+                    canCopy = clientGatewayReady,
                     valueColor = VoidAmber,
                     onCopy = {
                         onCopy(
                             "Secure Browser Setup",
-                            "${hostState.effectivePortalUrl}/secure-setup"
+                            "${hostState.networkPortalUrl}/secure-setup"
                         )
                     }
                 )
