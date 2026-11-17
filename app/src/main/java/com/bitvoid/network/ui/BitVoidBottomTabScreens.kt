@@ -212,9 +212,19 @@ fun HostNetworkProtocolDialog(
                         }
                     )
                     if (hostState.isServerRunning) {
-                        ProtocolDetailRow("Discovery Gateway", hostState.effectivePortalUrl)
-                        if (hostState.isSecureServerRunning) {
-                            ProtocolDetailRow("Secure Media Gateway", hostState.securePortalUrl)
+                        ProtocolDetailRow(
+                            "Direct Gateway",
+                            if (hostState.hasClientGatewayAddress) {
+                                hostState.networkPortalUrl
+                            } else {
+                                "Waiting for assigned gateway IPv4"
+                            }
+                        )
+                        if (hostState.gatewayHostname.isNotBlank()) {
+                            ProtocolDetailRow("Friendly Gateway", hostState.effectivePortalUrl)
+                        }
+                        if (hostState.isSecureServerRunning && hostState.hasClientGatewayAddress) {
+                            ProtocolDetailRow("Secure Media Gateway", hostState.secureNetworkPortalUrl)
                         }
                     }
                 }
@@ -617,7 +627,11 @@ fun SettingsAutonomousCard(
                 ) {
                     ProtocolDetailRow(
                         "Engine State",
-                        if (hostState.isServerRunning) "RUNNING (${hostState.effectivePortalUrl})" else "STANDBY"
+                        when {
+                            !hostState.isServerRunning -> "STANDBY"
+                            hostState.hasClientGatewayAddress -> "RUNNING (${hostState.networkPortalUrl})"
+                            else -> "RUNNING LOCALLY · GATEWAY IPv4 PENDING"
+                        }
                     )
                     ProtocolDetailRow("Configured SSID", hostState.configuredSsid)
                     ProtocolDetailRow("Required Security", "WPA2/WPA3 password protected")

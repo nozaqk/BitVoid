@@ -50,6 +50,7 @@ data class HostState(
     val ssid: String = "",
     val passphrase: String = "",
     val gatewayIp: String = "",
+    val isGatewayAddressVerified: Boolean = false,
     val gatewayHostname: String = "",
     val gatewayHostnamePort: Int = 8080,
     val boundEndpoints: List<String> = emptyList(),
@@ -77,6 +78,13 @@ data class HostState(
     val effectiveSsid: String
         get() = ssid.ifBlank { configuredSsid.ifBlank { DEFAULT_SSID } }
 
+    val hasClientGatewayAddress: Boolean
+        get() = isServerRunning &&
+            isGatewayAddressVerified &&
+            gatewayIp.isNotBlank() &&
+            gatewayIp != "127.0.0.1" &&
+            gatewayIp != "0.0.0.0"
+
     val networkPortalUrl: String
         get() = if (isServerRunning && gatewayIp.isNotBlank()) {
             buildHttpUrl(gatewayIp, port)
@@ -96,6 +104,13 @@ data class HostState(
             effectivePortalUrl
         } else {
             "— offline —"
+        }
+
+    val secureNetworkPortalUrl: String
+        get() = if (isSecureServerRunning && gatewayIp.isNotBlank()) {
+            "https://$gatewayIp:$securePort"
+        } else {
+            "— secure portal starting —"
         }
 
     val securePortalUrl: String

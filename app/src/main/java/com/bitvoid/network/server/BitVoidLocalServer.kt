@@ -673,6 +673,10 @@ class BitVoidLocalServer(
             put("protocolVersion", 1)
             put("hostname", BitVoidMdnsResponder.HOSTNAME)
             put("portalUrl", hostState.effectivePortalUrl)
+            put(
+                "directPortalUrl",
+                if (hostState.hasClientGatewayAddress) hostState.networkPortalUrl else JSONObject.NULL
+            )
             put("port", DEFAULT_PORT)
             put("features", JSONArray(listOf("channels", "calls", "liveClass", "files")))
         }.toString()
