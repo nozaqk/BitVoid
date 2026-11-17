@@ -3,12 +3,8 @@ package com.bitvoid.network.client
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
-import com.bitvoid.network.call.BitVoidDocumentPreviewer
-import com.bitvoid.network.call.BitVoidSignalingServer
 import com.bitvoid.network.call.DirectCallPhase
-import com.bitvoid.network.call.LiveClassMaterial
 import com.bitvoid.network.call.ParticipantRole
-import com.bitvoid.network.call.RenderedMaterialDeck
 import com.bitvoid.network.call.SignalingPeer
 import com.bitvoid.network.call.SignalingSessionMode
 import com.bitvoid.network.model.MediaCategory
@@ -105,14 +101,13 @@ data class IncomingDirectCall(
     val dmId: String,
     val callerUsername: String,
     val calleeUsername: String,
-    val withVideo: Boolean,
     val createdAtMs: Long
 )
 
 data class ChannelCallStatus(
     val roomId: String = "",
     val isActive: Boolean = false,
-    val mode: SignalingSessionMode = SignalingSessionMode.VOICE_VIDEO_CALL,
+    val mode: SignalingSessionMode = SignalingSessionMode.AUDIO_CALL,
     val hostPeerId: String = "",
     val classCode: String? = null,
     val participantCount: Int = 0,
@@ -120,7 +115,6 @@ data class ChannelCallStatus(
     val directCallPhase: DirectCallPhase = DirectCallPhase.IDLE,
     val callerUsername: String = "",
     val calleeUsername: String = "",
-    val withVideo: Boolean = false,
     val isIncoming: Boolean = false,
     val isOutgoing: Boolean = false
 )
@@ -537,14 +531,13 @@ class BitVoidClientRepository {
 
         _isJoiningChannel.value = false
         return result.fold(
-            onSuccess = { (session, initialMessages, joinInfo) ->
+            onSuccess = { (session, _, joinInfo) ->
                 leaveDirectChat()
                 closeSocketOnly()
                 _activeChannelSession.value = session
-                _channelMessages.value = initialMessages
+                _channelMessages.value = emptyList()
                 _channelJoinError.value = null
                 _channelPeersCount.value = 1
-                connectChatWebSocket(targetBase, session)
                 startCallStatusPolling(targetBase, session)
                 scope.launch { fetchLiveClasses(creatorUsername, targetBase) }
                 Result.success(joinInfo)
@@ -610,14 +603,13 @@ class BitVoidClientRepository {
 
         _isJoiningChannel.value = false
         return result.fold(
-            onSuccess = { (session, initialMessages, joinInfo) ->
+            onSuccess = { (session, _, joinInfo) ->
                 leaveDirectChat()
                 closeSocketOnly()
                 _activeChannelSession.value = session
-                _channelMessages.value = initialMessages
+                _channelMessages.value = emptyList()
                 _channelJoinError.value = null
                 _channelPeersCount.value = 1
-                connectChatWebSocket(targetBase, session)
                 startCallStatusPolling(targetBase, session)
                 Result.success(joinInfo)
             },
@@ -687,14 +679,13 @@ class BitVoidClientRepository {
 
         _isJoiningChannel.value = false
         return result.fold(
-            onSuccess = { (session, initialMessages, joinInfo) ->
+            onSuccess = { (session, _, joinInfo) ->
                 leaveDirectChat()
                 closeSocketOnly()
                 _activeChannelSession.value = session
-                _channelMessages.value = initialMessages
+                _channelMessages.value = emptyList()
                 _channelJoinError.value = null
                 _channelPeersCount.value = 1
-                connectChatWebSocket(targetBase, session)
                 startCallStatusPolling(targetBase, session)
                 Result.success(joinInfo)
             },
@@ -719,8 +710,6 @@ class BitVoidClientRepository {
         val callsign = json.optString("callsign", "Student")
         val creatorUsername = json.optString("creatorUsername", "")
         val isHidden = json.optBoolean("isHidden", false)
-        val mediaArr = json.optJSONArray("media") ?: json.optJSONArray("videos") ?: JSONArray()
-        val msgArr = json.optJSONArray("messages") ?: JSONArray()
 
         val session = ClientChannelSession(
             channelId = resolvedChannelId,
@@ -728,7 +717,7 @@ class BitVoidClientRepository {
             isPublic = isPublic,
             token = token,
             callsign = callsign,
-            mediaList = parseMediaArray(mediaArr),
+            mediaList = emptyList(),
             isLiveClassRoom = isLiveClass || resolvedRoomId.startsWith("LC-")
         )
         val joinInfo = LiveClassJoinInfo(
@@ -741,8 +730,7 @@ class BitVoidClientRepository {
             creatorUsername = creatorUsername,
             isHidden = isHidden
         )
-        val messages = parseMessagesArray(msgArr)
-        return Result.success(Triple(session, messages, joinInfo))
+        return Result.success(Triple(session, emptyList<ClientChatMessage>(), joinInfo))
     }
 
     suspend fun fetchChannelCallStatus(
@@ -771,9 +759,9 @@ class BitVoidClientRepository {
                 okHttpClient.newCall(reqBuilder.build()).execute().use { resp ->
                     if (resp.isSuccessful) {
                         val json = JSONObject(resp.body?.string().orEmpty())
-                        val modeStr = json.optString("mode", SignalingSessionMode.VOICE_VIDEO_CALL.name)
+                        val modeStr = json.optString("mode", SignalingSessionMode.AUDIO_CALL.name)
                         val mode = runCatching { SignalingSessionMode.valueOf(modeStr) }
-                            .getOrDefault(SignalingSessionMode.VOICE_VIDEO_CALL)
+                            .getOrDefault(SignalingSessionMode.AUDIO_CALL)
                         val peersArr = json.optJSONArray("peers") ?: JSONArray()
                         val peers = ArrayList<SignalingPeer>(peersArr.length())
                         for (i in 0 until peersArr.length()) {
@@ -788,8 +776,6 @@ class BitVoidClientRepository {
                                     role = role,
                                     roomId = p.optString("roomId", targetChannelId),
                                     isMuted = p.optBoolean("isMuted", false),
-                                    isVideoOn = p.optBoolean("isVideoOn", false),
-                                    isScreenSharing = p.optBoolean("isScreenSharing", false),
                                     joinedAtMs = p.optLong("joinedAtMs", 0L)
                                 )
                             )
@@ -813,13 +799,12 @@ class BitVoidClientRepository {
     suspend fun requestDirectCall(
         dmId: String,
         token: String,
-        withVideo: Boolean,
         urlOverride: String? = null
     ): Result<Unit> = postDirectCallAction(
         dmId = dmId,
         token = token,
         action = "invite",
-        body = JSONObject().put("withVideo", withVideo).toString(),
+        body = "{}",
         urlOverride = urlOverride
     )
 
@@ -899,8 +884,8 @@ class BitVoidClientRepository {
                     if (resp.isSuccessful) {
                         val json = JSONObject(resp.body?.string().orEmpty())
                         val mode = runCatching {
-                            SignalingSessionMode.valueOf(json.optString("mode", SignalingSessionMode.VOICE_VIDEO_CALL.name))
-                        }.getOrDefault(SignalingSessionMode.VOICE_VIDEO_CALL)
+                            SignalingSessionMode.valueOf(json.optString("mode", SignalingSessionMode.AUDIO_CALL.name))
+                        }.getOrDefault(SignalingSessionMode.AUDIO_CALL)
                         val peersArr = json.optJSONArray("peers") ?: JSONArray()
                         val peers = ArrayList<SignalingPeer>(peersArr.length())
                         for (i in 0 until peersArr.length()) {
@@ -915,8 +900,6 @@ class BitVoidClientRepository {
                                     role = role,
                                     roomId = p.optString("roomId", targetDmId),
                                     isMuted = p.optBoolean("isMuted", false),
-                                    isVideoOn = p.optBoolean("isVideoOn", false),
-                                    isScreenSharing = p.optBoolean("isScreenSharing", false),
                                     joinedAtMs = p.optLong("joinedAtMs", 0L)
                                 )
                             )
@@ -934,7 +917,6 @@ class BitVoidClientRepository {
                             }.getOrDefault(DirectCallPhase.IDLE),
                             callerUsername = json.optString("callerUsername", ""),
                             calleeUsername = json.optString("calleeUsername", ""),
-                            withVideo = json.optBoolean("withVideo", false),
                             isIncoming = json.optBoolean("isIncoming", false),
                             isOutgoing = json.optBoolean("isOutgoing", false)
                         )
@@ -1142,99 +1124,6 @@ class BitVoidClientRepository {
         _fileUploadError.value = null
     }
 
-    suspend fun uploadLiveClassMaterial(
-        context: Context,
-        roomId: String,
-        uri: Uri,
-        isDirectRoom: Boolean
-    ): Result<LiveClassMaterial> {
-        val targetBase = _gatewayBaseUrl.value.trimEnd('/')
-        val encodedRoom = URLEncoder.encode(roomId.trim(), StandardCharsets.UTF_8.name())
-            .replace("+", "%20")
-        val headerName = if (isDirectRoom) "X-DM-Token" else "X-Channel-Token"
-        val tokenValue = if (isDirectRoom) {
-            _activeDirectSession.value?.token.orEmpty()
-        } else {
-            _activeChannelSession.value?.token.orEmpty()
-        }
-
-        _isUploadingFile.value = true
-        _fileUploadError.value = null
-
-        val result: Result<LiveClassMaterial> = withContext(Dispatchers.IO) {
-            var tempFile: File? = null
-            try {
-                val resolver = context.contentResolver
-                val fileName = resolveDisplayName(context, uri)
-                val mimeType = resolver.getType(uri)?.takeIf { it.isNotBlank() } ?: "application/octet-stream"
-                tempFile = File.createTempFile("bv_mat_", ".tmp", context.cacheDir)
-                resolver.openInputStream(uri)?.use { input ->
-                    FileOutputStream(tempFile).use { output ->
-                        input.copyTo(output, bufferSize = 64 * 1024)
-                    }
-                } ?: return@withContext Result.failure(IOException("Unable to read selected document."))
-
-                val multipartBody = MultipartBody.Builder()
-                    .setType(MultipartBody.FORM)
-                    .addFormDataPart(
-                        "file",
-                        fileName,
-                        tempFile.asRequestBody(mimeType.toMediaTypeOrNull())
-                    )
-                    .build()
-
-                val reqBuilder = Request.Builder()
-                    .url("$targetBase/api/live-class/$encodedRoom/materials")
-                    .post(multipartBody)
-                if (tokenValue.isNotBlank()) {
-                    reqBuilder.header(headerName, tokenValue)
-                }
-
-                okHttpClient.newCall(reqBuilder.build()).execute().use { resp ->
-                    val bodyStr = resp.body?.string().orEmpty()
-                    if (!resp.isSuccessful) {
-                        val detail = try {
-                            JSONObject(bodyStr).optString("detail", "")
-                        } catch (_: Exception) {
-                            ""
-                        }
-                        Result.failure(IOException(detail.ifBlank { "Document upload failed (HTTP ${resp.code})" }))
-                    } else {
-                        val json = JSONObject(bodyStr)
-                        val matObj = json.getJSONObject("material")
-                        Result.success(BitVoidSignalingServer.parseMaterialJson(matObj))
-                    }
-                }
-            } catch (e: Exception) {
-                Result.failure(e)
-            } finally {
-                tempFile?.delete()
-            }
-        }
-
-        _isUploadingFile.value = false
-        result.onFailure { err ->
-            _fileUploadError.value = err.message ?: "Unable to share document"
-        }
-        return result
-    }
-
-    suspend fun prepareLiveClassMaterialDeck(
-        context: Context,
-        material: LiveClassMaterial,
-        token: String?
-    ): Result<RenderedMaterialDeck> {
-        val rawPath = material.streamUrl.ifBlank { material.downloadUrl }
-        val absUrl = buildAttachmentUrl(rawPath, token)
-        return BitVoidDocumentPreviewer.downloadAndPrepareDeck(
-            okHttpClient = okHttpClient,
-            material = material,
-            downloadUrl = absUrl,
-            token = token,
-            cacheDir = context.cacheDir
-        )
-    }
-
     private fun uploadUriMultipart(
         context: Context,
         uri: Uri,
@@ -1374,7 +1263,6 @@ class BitVoidClientRepository {
                         dmId = json.optString("dmId"),
                         callerUsername = json.optString("callerUsername"),
                         calleeUsername = json.optString("calleeUsername"),
-                        withVideo = json.optBoolean("withVideo", false),
                         createdAtMs = json.optLong("createdAtMs", 0L)
                     )
                 }
@@ -1510,6 +1398,13 @@ class BitVoidClientRepository {
             } catch (_: Exception) {
             }
         }
+    }
+
+    fun suspendChannelChatForLiveClass() {
+        closeSocketOnly()
+        _channelMessages.value = emptyList()
+        _channelPeersCount.value = 1
+        _wsStatus.value = ClientWsStatus.DISCONNECTED
     }
 
     fun leaveChannel() {

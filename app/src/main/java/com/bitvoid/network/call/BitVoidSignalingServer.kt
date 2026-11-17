@@ -5,7 +5,6 @@ import com.bitvoid.network.direct.BitVoidDirectChatManager
 import java.security.SecureRandom
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -13,9 +12,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 enum class SignalingSessionMode(val label: String) {
-    // Protocol name retained for compatibility with already-installed nodes; calls are audio-only.
-    VOICE_VIDEO_CALL("Voice Call"),
-    LIVE_CLASSROOM("Live Class & Presentation")
+    AUDIO_CALL("Audio Call"),
+    LIVE_CLASSROOM("Live Audio Class")
 }
 
 enum class ParticipantRole(val label: String) {
@@ -38,7 +36,6 @@ data class DirectCallInvitation(
     val dmId: String,
     val callerUsername: String,
     val calleeUsername: String,
-    val withVideo: Boolean,
     val phase: DirectCallPhase,
     val createdAtMs: Long,
     val updatedAtMs: Long
@@ -50,20 +47,7 @@ data class SignalingPeer(
     val role: ParticipantRole,
     val roomId: String,
     val isMuted: Boolean = false,
-    val isVideoOn: Boolean = false,
-    val isScreenSharing: Boolean = false,
     val joinedAtMs: Long = System.currentTimeMillis()
-)
-
-data class LiveClassMaterial(
-    val id: String,
-    val fileName: String,
-    val mimeType: String,
-    val sizeBytes: Long,
-    val uploadedBy: String,
-    val downloadUrl: String,
-    val streamUrl: String,
-    val uploadedAtMs: Long = System.currentTimeMillis()
 )
 
 data class LiveClassInvite(
@@ -85,17 +69,13 @@ data class SignalingRoomState(
     val className: String = "",
     val creatorUsername: String = "",
     val isHidden: Boolean = false,
-    val activeMaterialId: String? = null,
-    val activePageIndex: Int = 0,
-    val materials: List<LiveClassMaterial> = emptyList(),
     val peers: List<SignalingPeer> = emptyList()
 )
 
 /**
  * Thread-safe local WebRTC signaling registry and message router for `/ws/signaling`.
- * Coordinates peer handshakes (SDP offer, answer, ICE candidates), direct 1-on-1 Voice Calls,
- * Live Classrooms with generated shareable Class IDs (`CLS-XXXX-XX`), and synchronized
- * live presentation materials (PDF, PPT/PPTX, DOC/DOCX, Images, Text) over local Wi-Fi.
+ * Coordinates peer handshakes (SDP offer, answer, ICE candidates), direct 1-on-1 audio calls,
+ * and audio-only Live Classes with generated shareable Class IDs (`CLS-XXXX-XX`) over local Wi-Fi.
  */
 object BitVoidSignalingServer {
 
@@ -119,9 +99,6 @@ object BitVoidSignalingServer {
         var creatorUsername: String = "",
         var isHidden: Boolean = false,
         var keepAliveUntilEnded: Boolean = false,
-        var activeMaterialId: String? = null,
-        var activePageIndex: Int = 0,
-        val materials: CopyOnWriteArrayList<LiveClassMaterial> = CopyOnWriteArrayList(),
         val peers: ConcurrentHashMap<String, PeerEntry> = ConcurrentHashMap()
     )
 
@@ -262,9 +239,6 @@ object BitVoidSignalingServer {
                     className = room.className.ifBlank { room.roomId },
                     creatorUsername = room.creatorUsername,
                     isHidden = room.isHidden,
-                    activeMaterialId = room.activeMaterialId,
-                    activePageIndex = room.activePageIndex,
-                    materials = room.materials.toList(),
                     peers = snapshotPeers
                 )
             }
@@ -334,7 +308,6 @@ object BitVoidSignalingServer {
             dmId = session.dmId,
             callerUsername = session.myUsername,
             calleeUsername = session.peerUsername,
-            withVideo = false,
             phase = DirectCallPhase.RINGING,
             createdAtMs = now,
             updatedAtMs = now
@@ -404,9 +377,8 @@ object BitVoidSignalingServer {
     }
 
     /**
-     * The person placing a call may enter signaling while it is ringing so their selected
-     * camera/microphone opens directly in the meeting stage. The recipient remains blocked
-     * until explicitly accepting, so no incoming media is exposed before consent.
+     * The caller may enter audio signaling while the call is ringing. The recipient remains
+     * blocked until explicitly accepting, so no incoming audio is exposed before consent.
      */
     fun canJoinDirectCallSignaling(session: com.bitvoid.network.direct.DirectSession): Boolean {
         val invitation = currentDirectCallInvitation(session.dmId) ?: return false
@@ -430,14 +402,13 @@ object BitVoidSignalingServer {
         return JSONObject().apply {
             put("roomId", dmId)
             put("isActive", roomState?.isActive == true && invite?.phase == DirectCallPhase.ACCEPTED)
-            put("mode", SignalingSessionMode.VOICE_VIDEO_CALL.name)
+            put("mode", SignalingSessionMode.AUDIO_CALL.name)
             put("hostPeerId", roomState?.hostPeerId.orEmpty())
             put("participantCount", roomState?.peers?.size ?: 0)
             put("peers", peersToJsonArray(roomState?.peers.orEmpty()))
             put("callPhase", invite?.phase?.name ?: DirectCallPhase.IDLE.name)
             put("callerUsername", invite?.callerUsername.orEmpty())
             put("calleeUsername", invite?.calleeUsername.orEmpty())
-            put("withVideo", invite?.withVideo == true)
             put("isIncoming", invite?.let {
                 it.phase == DirectCallPhase.RINGING &&
                     it.calleeUsername.equals(session.myUsername, ignoreCase = true)
@@ -459,8 +430,6 @@ object BitVoidSignalingServer {
         mode: SignalingSessionMode,
         role: ParticipantRole,
         isMuted: Boolean,
-        isVideoOn: Boolean,
-        isScreenSharing: Boolean,
         listener: SignalingSocketListener
     ): SignalingPeer {
         val roomId = rawRoomId.trim()
@@ -468,7 +437,7 @@ object BitVoidSignalingServer {
         val peerId = rawPeerId?.trim()?.takeIf { it.isNotEmpty() } ?: generatePeerId("bv")
         val displayName = rawDisplayName?.trim()?.takeIf { it.isNotEmpty() } ?: peerId
         val effectiveMode = if (roomId.startsWith("dm__", ignoreCase = false)) {
-            SignalingSessionMode.VOICE_VIDEO_CALL
+            SignalingSessionMode.AUDIO_CALL
         } else {
             mode
         }
@@ -485,8 +454,7 @@ object BitVoidSignalingServer {
         }
 
         synchronized(room) {
-            // A room's purpose is fixed when it is created. In particular, a later peer cannot
-            // promote an active voice-call room to Live Class and thereby re-enable video.
+            // A room's purpose is fixed when it is created; later peers cannot change its mode.
             if (room.mode == SignalingSessionMode.LIVE_CLASSROOM && room.classCode == null) {
                 val code = generateClassCode()
                 room.classCode = code
@@ -505,15 +473,12 @@ object BitVoidSignalingServer {
                 }
             }
 
-            val allowsVideo = room.mode == SignalingSessionMode.LIVE_CLASSROOM
             val peer = SignalingPeer(
                 peerId = peerId,
                 displayName = displayName,
                 role = role,
                 roomId = roomId,
                 isMuted = isMuted,
-                isVideoOn = allowsVideo && isVideoOn,
-                isScreenSharing = allowsVideo && isScreenSharing,
                 joinedAtMs = System.currentTimeMillis()
             )
             room.peers[peerId] = PeerEntry(peer = peer, listener = listener)
@@ -533,9 +498,6 @@ object BitVoidSignalingServer {
                 put("className", room.className)
                 put("creatorUsername", room.creatorUsername)
                 put("isHidden", room.isHidden)
-                put("activeMaterialId", room.activeMaterialId.orEmpty())
-                put("activePageIndex", room.activePageIndex)
-                put("materials", materialsToJsonArray(room.materials))
                 put("peers", peersToJsonArray(snapshotPeers))
             }.toString()
             listener.onSendJson(welcomePayload)
@@ -593,25 +555,15 @@ object BitVoidSignalingServer {
     fun updatePeerMediaState(
         roomId: String,
         peerId: String,
-        isMuted: Boolean? = null,
-        isVideoOn: Boolean? = null,
-        isScreenSharing: Boolean? = null,
-        role: ParticipantRole? = null
+        isMuted: Boolean? = null
     ) {
         val room = rooms[roomId] ?: return
         synchronized(room) {
             val entry = room.peers[peerId] ?: return
-            val allowsVideo = room.mode == SignalingSessionMode.LIVE_CLASSROOM
             val updated = entry.peer.copy(
-                isMuted = isMuted ?: entry.peer.isMuted,
-                isVideoOn = allowsVideo && (isVideoOn ?: entry.peer.isVideoOn),
-                isScreenSharing = allowsVideo && (isScreenSharing ?: entry.peer.isScreenSharing),
-                role = role ?: entry.peer.role
+                isMuted = isMuted ?: entry.peer.isMuted
             )
             entry.peer = updated
-            if (updated.role == ParticipantRole.HOST_TEACHER) {
-                room.hostPeerId = peerId
-            }
             val snapshotPeers = room.peers.values.map { it.peer }.sortedBy { it.joinedAtMs }
             val payload = JSONObject().apply {
                 put("type", "peers_update")
@@ -629,73 +581,7 @@ object BitVoidSignalingServer {
         }
     }
 
-    /**
-     * Adds a shared document/presentation (PDF, PPT/PPTX, DOC/DOCX, image, text, etc.)
-     * to an active Live Class and notifies all connected participants in real time.
-     */
-    fun addMaterialToRoom(
-        roomId: String,
-        material: LiveClassMaterial,
-        setAsActive: Boolean = true
-    ): LiveClassMaterial {
-        val room = rooms[roomId]
-            ?: throw IllegalStateException("Live Class is not active")
-        if (room.mode != SignalingSessionMode.LIVE_CLASSROOM) {
-            throw IllegalStateException("Document presentation is available only in Live Class")
-        }
-        synchronized(room) {
-            room.materials.removeAll { it.id == material.id }
-            room.materials.add(material)
-            if (setAsActive || room.activeMaterialId == null) {
-                room.activeMaterialId = material.id
-                room.activePageIndex = 0
-            }
-            val broadcast = JSONObject().apply {
-                put("type", "material_shared")
-                put("roomId", room.roomId)
-                put("material", materialToJson(material))
-                put("activeMaterialId", room.activeMaterialId.orEmpty())
-                put("activePageIndex", room.activePageIndex)
-                put("materials", materialsToJsonArray(room.materials))
-            }.toString()
-            room.peers.values.forEach { target ->
-                safeSend(target.listener, broadcast)
-            }
-            publishRoomsSnapshot()
-            return material
-        }
-    }
-
-    fun updateActiveMaterialState(
-        roomId: String,
-        materialId: String?,
-        pageIndex: Int
-    ) {
-        val room = rooms[roomId] ?: return
-        if (room.mode != SignalingSessionMode.LIVE_CLASSROOM) return
-        synchronized(room) {
-            if (!materialId.isNullOrBlank()) {
-                room.activeMaterialId = materialId
-            }
-            room.activePageIndex = pageIndex.coerceAtLeast(0)
-            val broadcast = JSONObject().apply {
-                put("type", "material_state")
-                put("roomId", room.roomId)
-                put("activeMaterialId", room.activeMaterialId.orEmpty())
-                put("activePageIndex", room.activePageIndex)
-                put("materials", materialsToJsonArray(room.materials))
-            }.toString()
-            room.peers.values.forEach { target ->
-                safeSend(target.listener, broadcast)
-            }
-            publishRoomsSnapshot()
-        }
-    }
-
-    /**
-     * Routes SDP Offer, SDP Answer, ICE Candidate, Media State, and Live Slide Sync
-     * messages within [roomId].
-     */
+    /** Routes SDP, ICE, and audio-state messages within [roomId]. */
     fun handleSignalingEnvelope(roomId: String, fromPeerId: String, rawJson: String) {
         val obj = try {
             JSONObject(rawJson)
@@ -712,6 +598,9 @@ object BitVoidSignalingServer {
                     put("type", normalizedType)
                     put("roomId", roomId)
                     put("fromPeerId", fromPeerId)
+                    if (normalizedType == "offer" || normalizedType == "answer") {
+                        put("sdp", retainAudioMediaOnly(optString("sdp")))
+                    }
                 }.toString()
 
                 if (targetId.isNotEmpty()) {
@@ -726,25 +615,10 @@ object BitVoidSignalingServer {
             }
 
             "media_state" -> {
-                val roleStr = obj.optString("role").takeIf { it.isNotBlank() }
-                val role = roleStr?.let { runCatching { ParticipantRole.valueOf(it) }.getOrNull() }
                 updatePeerMediaState(
                     roomId = roomId,
                     peerId = fromPeerId,
-                    isMuted = if (obj.has("isMuted")) obj.optBoolean("isMuted") else null,
-                    isVideoOn = if (obj.has("isVideoOn")) obj.optBoolean("isVideoOn") else null,
-                    isScreenSharing = if (obj.has("isScreenSharing")) obj.optBoolean("isScreenSharing") else null,
-                    role = role
-                )
-            }
-
-            "active_material", "slide_nav" -> {
-                val matId = obj.optString("materialId").takeIf { it.isNotBlank() }
-                val page = obj.optInt("pageIndex", 0)
-                updateActiveMaterialState(
-                    roomId = roomId,
-                    materialId = matId,
-                    pageIndex = page
+                    isMuted = if (obj.has("isMuted")) obj.optBoolean("isMuted") else null
                 )
             }
 
@@ -807,9 +681,6 @@ object BitVoidSignalingServer {
             className = room.className.ifBlank { room.roomId },
             creatorUsername = room.creatorUsername,
             isHidden = room.isHidden,
-            activeMaterialId = room.activeMaterialId,
-            activePageIndex = room.activePageIndex,
-            materials = room.materials.toList(),
             peers = snapshotPeers
         )
     }
@@ -819,28 +690,14 @@ object BitVoidSignalingServer {
         return JSONObject().apply {
             put("roomId", roomId)
             put("isActive", state?.isActive == true)
-            put("mode", state?.mode?.name ?: SignalingSessionMode.VOICE_VIDEO_CALL.name)
+            put("mode", state?.mode?.name ?: SignalingSessionMode.AUDIO_CALL.name)
             put("hostPeerId", state?.hostPeerId.orEmpty())
             put("classCode", state?.classCode.orEmpty())
             put("className", state?.className.orEmpty())
             put("creatorUsername", state?.creatorUsername.orEmpty())
             put("isHidden", state?.isHidden == true)
-            put("activeMaterialId", state?.activeMaterialId.orEmpty())
-            put("activePageIndex", state?.activePageIndex ?: 0)
-            put("materials", materialsToJsonArray(state?.materials.orEmpty()))
             put("participantCount", state?.peers?.size ?: 0)
             put("peers", peersToJsonArray(state?.peers.orEmpty()))
-        }.toString()
-    }
-
-    fun roomMaterialsToJson(roomId: String): String {
-        val state = getRoomState(roomId)
-        return JSONObject().apply {
-            put("roomId", roomId)
-            put("classCode", state?.classCode.orEmpty())
-            put("activeMaterialId", state?.activeMaterialId.orEmpty())
-            put("activePageIndex", state?.activePageIndex ?: 0)
-            put("materials", materialsToJsonArray(state?.materials.orEmpty()))
         }.toString()
     }
 
@@ -864,49 +721,6 @@ object BitVoidSignalingServer {
         closeAllRooms("Test cleanup")
     }
 
-    fun materialsToJsonArray(materials: List<LiveClassMaterial>): JSONArray {
-        return JSONArray().apply {
-            materials.forEach { put(materialToJson(it)) }
-        }
-    }
-
-    fun materialToJson(material: LiveClassMaterial): JSONObject {
-        return JSONObject().apply {
-            put("id", material.id)
-            put("fileName", material.fileName)
-            put("mimeType", material.mimeType)
-            put("sizeBytes", material.sizeBytes)
-            put("uploadedBy", material.uploadedBy)
-            put("downloadUrl", material.downloadUrl)
-            put("streamUrl", material.streamUrl)
-            put("uploadedAtMs", material.uploadedAtMs)
-        }
-    }
-
-    fun parseMaterialJson(obj: JSONObject): LiveClassMaterial {
-        return LiveClassMaterial(
-            id = obj.optString("id"),
-            fileName = obj.optString("fileName", "document"),
-            mimeType = obj.optString("mimeType", "application/octet-stream"),
-            sizeBytes = obj.optLong("sizeBytes", 0L),
-            uploadedBy = obj.optString("uploadedBy", "Presenter"),
-            downloadUrl = obj.optString("downloadUrl", ""),
-            streamUrl = obj.optString("streamUrl", ""),
-            uploadedAtMs = obj.optLong("uploadedAtMs", 0L)
-        )
-    }
-
-    fun parseMaterialsJsonArray(arr: JSONArray?): List<LiveClassMaterial> {
-        if (arr == null) return emptyList()
-        val list = ArrayList<LiveClassMaterial>(arr.length())
-        for (i in 0 until arr.length()) {
-            val obj = arr.optJSONObject(i) ?: continue
-            val parsed = parseMaterialJson(obj)
-            if (parsed.id.isNotBlank()) list.add(parsed)
-        }
-        return list
-    }
-
     private fun normalizeClassCode(raw: String?): String? {
         val clean = raw?.trim()?.uppercase(Locale.US)?.replace(" ", "") ?: return null
         return clean.takeIf { it.isNotEmpty() }
@@ -927,9 +741,6 @@ object BitVoidSignalingServer {
                     className = room.className.ifBlank { room.roomId },
                     creatorUsername = room.creatorUsername,
                     isHidden = room.isHidden,
-                    activeMaterialId = room.activeMaterialId,
-                    activePageIndex = room.activePageIndex,
-                    materials = room.materials.toList(),
                     peers = peerList
                 )
             }
@@ -950,8 +761,6 @@ object BitVoidSignalingServer {
             put("role", peer.role.name)
             put("roomId", peer.roomId)
             put("isMuted", peer.isMuted)
-            put("isVideoOn", peer.isVideoOn)
-            put("isScreenSharing", peer.isScreenSharing)
             put("joinedAtMs", peer.joinedAtMs)
         }
     }
@@ -961,6 +770,21 @@ object BitVoidSignalingServer {
             listener.onSendJson(payload)
         } catch (_: Exception) {
         }
+    }
+
+    private fun retainAudioMediaOnly(rawSdp: String): String {
+        if (rawSdp.isBlank()) return rawSdp
+        val usesCrLf = rawSdp.contains("\r\n")
+        val separator = if (usesCrLf) "\r\n" else "\n"
+        val keptLines = ArrayList<String>()
+        var keepCurrentSection = true
+        rawSdp.replace("\r\n", "\n").split('\n').forEach { line ->
+            if (line.startsWith("m=")) {
+                keepCurrentSection = line.startsWith("m=audio ")
+            }
+            if (keepCurrentSection) keptLines.add(line)
+        }
+        return keptLines.joinToString(separator)
     }
 
     private fun jsonEscape(value: String): String {

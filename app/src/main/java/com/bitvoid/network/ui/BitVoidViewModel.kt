@@ -5,17 +5,12 @@ import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.bitvoid.network.call.BitVoidCallManager
 import com.bitvoid.network.call.BitVoidCallState
-import com.bitvoid.network.call.BitVoidDocumentPreviewer
 import com.bitvoid.network.call.DirectCallPhase
-import com.bitvoid.network.call.DocumentPreviewKind
-import com.bitvoid.network.call.LiveClassMaterial
 import com.bitvoid.network.call.ParticipantRole
-import com.bitvoid.network.call.RenderedMaterialDeck
 import com.bitvoid.network.call.SignalingPeer
 import com.bitvoid.network.call.SignalingSessionMode
 import com.bitvoid.network.channel.BitVoidChannel
@@ -58,8 +53,6 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.webrtc.EglBase
-import org.webrtc.VideoTrack
 
 class BitVoidViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -122,11 +115,6 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     val fileUploadError: StateFlow<String?> = clientRepository.fileUploadError
 
     private val _extraCallError = MutableStateFlow<String?>(null)
-    private val _isUploadingMaterial = MutableStateFlow(false)
-    private val _loadedMaterialDecks = MutableStateFlow<Map<String, RenderedMaterialDeck>>(emptyMap())
-    private val _currentMaterialBitmap = MutableStateFlow<ImageBitmap?>(null)
-    private val _isLoadingMaterialPreview = MutableStateFlow(false)
-    private val _materialPreviewError = MutableStateFlow<String?>(null)
     private var pendingOutgoingDirectCall: Pair<String, String>? = null
     private var openingIncomingCallDmId: String? = null
 
@@ -140,18 +128,12 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
 
     private data class CallMediaToggles(
         val isMicMuted: Boolean,
-        val isCameraEnabled: Boolean,
-        val isUsingFrontCamera: Boolean,
-        val isSpeakerphoneOn: Boolean,
-        val isScreenSharing: Boolean
+        val isSpeakerphoneOn: Boolean
     )
 
     private data class CallTracksAndPeers(
         val myPeerId: String,
-        val participants: List<SignalingPeer>,
-        val localVideoTrack: VideoTrack?,
-        val remoteVideoTracks: Map<String, VideoTrack>,
-        val eglBaseContext: EglBase.Context?
+        val participants: List<SignalingPeer>
     )
 
     private data class CallStatusAndClassMeta(
@@ -159,25 +141,6 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         val directCallStatus: ChannelCallStatus?,
         val callError: String?,
         val liveClassCode: String?
-    )
-
-    private data class CallMaterialsHeader(
-        val materials: List<LiveClassMaterial>,
-        val activeMaterialId: String?,
-        val activePageIndex: Int,
-        val isUploadingMaterial: Boolean,
-        val loadedDecks: Map<String, RenderedMaterialDeck>
-    )
-
-    private data class CallDocumentsMeta(
-        val materials: List<LiveClassMaterial>,
-        val activeMaterialId: String?,
-        val activePageIndex: Int,
-        val isUploadingMaterial: Boolean,
-        val loadedDecks: Map<String, RenderedMaterialDeck>,
-        val currentBitmap: ImageBitmap?,
-        val isLoadingPreview: Boolean,
-        val previewError: String?
     )
 
     private val callSessionMetaFlow = combine(
@@ -198,33 +161,21 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
 
     private val callMediaTogglesFlow = combine(
         callManager.isMicMuted,
-        callManager.isCameraEnabled,
-        callManager.isUsingFrontCamera,
-        callManager.isSpeakerphoneOn,
-        callManager.isScreenSharing
-    ) { isMicMuted, isCameraEnabled, isUsingFrontCamera, isSpeakerphoneOn, isScreenSharing ->
+        callManager.isSpeakerphoneOn
+    ) { isMicMuted, isSpeakerphoneOn ->
         CallMediaToggles(
             isMicMuted = isMicMuted,
-            isCameraEnabled = isCameraEnabled,
-            isUsingFrontCamera = isUsingFrontCamera,
-            isSpeakerphoneOn = isSpeakerphoneOn,
-            isScreenSharing = isScreenSharing
+            isSpeakerphoneOn = isSpeakerphoneOn
         )
     }
 
     private val callTracksAndPeersFlow = combine(
         callManager.myPeerId,
-        callManager.participants,
-        callManager.localVideoTrack,
-        callManager.remoteVideoTracks,
-        callManager.eglBaseContext
-    ) { myPeerId, participants, localVideoTrack, remoteVideoTracks, eglBaseContext ->
+        callManager.participants
+    ) { myPeerId, participants ->
         CallTracksAndPeers(
             myPeerId = myPeerId,
-            participants = participants,
-            localVideoTrack = localVideoTrack,
-            remoteVideoTracks = remoteVideoTracks,
-            eglBaseContext = eglBaseContext
+            participants = participants
         )
     }
 
@@ -243,53 +194,12 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         )
     }
 
-    private val callMaterialsHeaderFlow = combine(
-        callManager.roomMaterials,
-        callManager.activeMaterialId,
-        callManager.activePageIndex,
-        _isUploadingMaterial,
-        _loadedMaterialDecks
-    ) { materials, activeMatId, activePage, uploading, decks ->
-        CallMaterialsHeader(
-            materials = materials,
-            activeMaterialId = activeMatId,
-            activePageIndex = activePage,
-            isUploadingMaterial = uploading,
-            loadedDecks = decks
-        )
-    }
-
-    private val callPreviewRenderFlow = combine(
-        _currentMaterialBitmap,
-        _isLoadingMaterialPreview,
-        _materialPreviewError
-    ) { bitmap, loading, err ->
-        Triple(bitmap, loading, err)
-    }
-
-    private val callDocumentsFlow = combine(
-        callMaterialsHeaderFlow,
-        callPreviewRenderFlow
-    ) { header, preview ->
-        CallDocumentsMeta(
-            materials = header.materials,
-            activeMaterialId = header.activeMaterialId,
-            activePageIndex = header.activePageIndex,
-            isUploadingMaterial = header.isUploadingMaterial,
-            loadedDecks = header.loadedDecks,
-            currentBitmap = preview.first,
-            isLoadingPreview = preview.second,
-            previewError = preview.third
-        )
-    }
-
     val callUiState: StateFlow<BitVoidCallUiState> = combine(
         callSessionMetaFlow,
         callMediaTogglesFlow,
         callTracksAndPeersFlow,
-        callStatusAndClassFlow,
-        callDocumentsFlow
-    ) { meta, toggles, tracks, statusMeta, docs ->
+        callStatusAndClassFlow
+    ) { meta, toggles, tracks, statusMeta ->
         BitVoidCallUiState(
             callState = meta.callState,
             activeRoomId = meta.activeRoomId,
@@ -299,24 +209,10 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             myPeerId = tracks.myPeerId,
             participants = tracks.participants,
             isMicMuted = toggles.isMicMuted,
-            isCameraEnabled = toggles.isCameraEnabled,
-            isUsingFrontCamera = toggles.isUsingFrontCamera,
             isSpeakerphoneOn = toggles.isSpeakerphoneOn,
-            isScreenSharing = toggles.isScreenSharing,
-            localVideoTrack = tracks.localVideoTrack,
-            remoteVideoTracks = tracks.remoteVideoTracks,
-            eglBaseContext = tracks.eglBaseContext,
             activeChannelCallStatus = statusMeta.channelCallStatus,
             activeDirectCallStatus = statusMeta.directCallStatus,
             liveClassCode = statusMeta.liveClassCode,
-            roomMaterials = docs.materials,
-            activeMaterialId = docs.activeMaterialId,
-            activePageIndex = docs.activePageIndex,
-            isUploadingMaterial = docs.isUploadingMaterial,
-            loadedMaterialDecks = docs.loadedDecks,
-            currentMaterialBitmap = docs.currentBitmap,
-            isLoadingMaterialPreview = docs.isLoadingPreview,
-            materialPreviewError = docs.previewError,
             callError = statusMeta.callError
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, BitVoidCallUiState())
@@ -473,69 +369,6 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
                 delay(1_000L)
-            }
-        }
-        viewModelScope.launch {
-            callManager.activeRoomId.collect { roomId ->
-                if (roomId == null) {
-                    _loadedMaterialDecks.value = emptyMap()
-                    _currentMaterialBitmap.value = null
-                    _materialPreviewError.value = null
-                    _isLoadingMaterialPreview.value = false
-                }
-            }
-        }
-        viewModelScope.launch {
-            combine(
-                callManager.roomMaterials,
-                callManager.activeMaterialId,
-                activeChannelSession,
-                activeDirectSession
-            ) { materials, activeMatId, chSession, dmSession ->
-                Triple(materials, activeMatId, chSession?.token ?: dmSession?.token)
-            }.collect { (materials, activeMatId, token) ->
-                val activeMaterial = materials.firstOrNull { it.id == activeMatId }
-                    ?: materials.firstOrNull()
-                if (activeMaterial == null) {
-                    _currentMaterialBitmap.value = null
-                    _materialPreviewError.value = null
-                    _isLoadingMaterialPreview.value = false
-                    return@collect
-                }
-                if (!_loadedMaterialDecks.value.containsKey(activeMaterial.id)) {
-                    _isLoadingMaterialPreview.value = true
-                    _materialPreviewError.value = null
-                    val res = clientRepository.prepareLiveClassMaterialDeck(appContext, activeMaterial, token)
-                    res.onSuccess { deck ->
-                        _loadedMaterialDecks.value = _loadedMaterialDecks.value + (activeMaterial.id to deck)
-                    }.onFailure { err ->
-                        _materialPreviewError.value = err.message ?: "Unable to preview document"
-                    }
-                    _isLoadingMaterialPreview.value = false
-                }
-            }
-        }
-        viewModelScope.launch {
-            combine(
-                _loadedMaterialDecks,
-                callManager.roomMaterials,
-                callManager.activeMaterialId,
-                callManager.activePageIndex
-            ) { decks, materials, activeMatId, pageIndex ->
-                val activeMat = materials.firstOrNull { it.id == activeMatId }
-                    ?: materials.firstOrNull()
-                val deck = activeMat?.let { decks[it.id] }
-                deck to pageIndex
-            }.collect { (deck, pageIndex) ->
-                if (deck == null || (deck.kind != DocumentPreviewKind.PDF && deck.kind != DocumentPreviewKind.IMAGE)) {
-                    _currentMaterialBitmap.value = null
-                } else {
-                    val safePage = pageIndex.coerceIn(0, (deck.totalPages - 1).coerceAtLeast(0))
-                    val bmp = withContext(Dispatchers.IO) {
-                        BitVoidDocumentPreviewer.renderBitmapPage(deck, safePage)
-                    }
-                    _currentMaterialBitmap.value = bmp
-                }
             }
         }
         refreshVaultFiles()
@@ -996,9 +829,8 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                 channelName = channelName,
                 displayName = activeChannelSession.value?.callsign ?: _myUsername.value,
                 channelToken = token,
-                mode = SignalingSessionMode.VOICE_VIDEO_CALL,
-                role = ParticipantRole.SPEAKER,
-                startWithVideo = false
+                mode = SignalingSessionMode.AUDIO_CALL,
+                role = ParticipantRole.SPEAKER
             )
         }
     }
@@ -1007,6 +839,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             ensureLocalGatewayReadyIfNeeded()
             syncGatewayToLocalIfAvailable()
+            clientRepository.suspendChannelChatForLiveClass()
             callManager.startOrJoinSession(
                 gatewayBaseUrl = clientRepository.gatewayBaseUrl.value,
                 channelId = channelId,
@@ -1014,8 +847,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                 displayName = activeChannelSession.value?.callsign ?: _myUsername.value,
                 channelToken = token,
                 mode = SignalingSessionMode.LIVE_CLASSROOM,
-                role = ParticipantRole.HOST_TEACHER,
-                startWithVideo = false
+                role = ParticipantRole.HOST_TEACHER
             )
         }
     }
@@ -1024,6 +856,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             ensureLocalGatewayReadyIfNeeded()
             syncGatewayToLocalIfAvailable()
+            clientRepository.suspendChannelChatForLiveClass()
             callManager.startOrJoinSession(
                 gatewayBaseUrl = clientRepository.gatewayBaseUrl.value,
                 channelId = channelId,
@@ -1031,8 +864,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                 displayName = activeChannelSession.value?.callsign ?: _myUsername.value,
                 channelToken = token,
                 mode = SignalingSessionMode.LIVE_CLASSROOM,
-                role = ParticipantRole.STUDENT_VIEWER,
-                startWithVideo = false
+                role = ParticipantRole.STUDENT_VIEWER
             )
         }
     }
@@ -1067,7 +899,6 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                         channelToken = info.token,
                         mode = SignalingSessionMode.LIVE_CLASSROOM,
                         role = ParticipantRole.HOST_TEACHER,
-                        startWithVideo = false,
                         presetClassCode = info.classCode
                     )
                     clientRepository.fetchLiveClasses(_myUsername.value)
@@ -1110,7 +941,6 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                     channelToken = info.token,
                     mode = SignalingSessionMode.LIVE_CLASSROOM,
                     role = if (isCreator) ParticipantRole.HOST_TEACHER else ParticipantRole.STUDENT_VIEWER,
-                    startWithVideo = false,
                     presetClassCode = info.classCode
                 )
             }.onFailure { err ->
@@ -1143,7 +973,6 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                         channelToken = info.token,
                         mode = SignalingSessionMode.LIVE_CLASSROOM,
                         role = if (isCreator) ParticipantRole.HOST_TEACHER else ParticipantRole.STUDENT_VIEWER,
-                        startWithVideo = false,
                         presetClassCode = info.classCode
                     )
                 }.onFailure { err ->
@@ -1162,7 +991,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             syncGatewayToLocalIfAvailable()
             // The repository retains the legacy wire field for mixed-version compatibility,
             // but every new direct call explicitly requests audio only.
-            clientRepository.requestDirectCall(dmId, token, withVideo = false)
+            clientRepository.requestDirectCall(dmId, token)
                 .onSuccess {
                     pendingOutgoingDirectCall = dmId to peerUsername
                     val session = activeDirectSession.value
@@ -1220,60 +1049,8 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             channelName = "@${session.peerUsername}",
             displayName = _myUsername.value,
             channelToken = session.token,
-            mode = SignalingSessionMode.VOICE_VIDEO_CALL,
-            role = ParticipantRole.SPEAKER,
-            startWithVideo = false
-        )
-    }
-
-    fun uploadClassroomDocument(roomId: String, uri: Uri, isDirect: Boolean) {
-        viewModelScope.launch {
-            _isUploadingMaterial.value = true
-            _extraCallError.value = null
-            try {
-                ensureLocalGatewayReadyIfNeeded()
-                syncGatewayToLocalIfAvailable()
-                val res = clientRepository.uploadLiveClassMaterial(
-                    context = appContext,
-                    roomId = roomId,
-                    uri = uri,
-                    isDirectRoom = isDirect
-                )
-                res.onSuccess { material ->
-                    callManager.selectActiveMaterial(material.id, 0)
-                }.onFailure { err ->
-                    _extraCallError.value = err.message ?: "Unable to upload document to class"
-                }
-            } finally {
-                _isUploadingMaterial.value = false
-            }
-        }
-    }
-
-    fun selectClassroomMaterial(materialId: String) {
-        callManager.selectActiveMaterial(materialId, 0)
-    }
-
-    fun setClassroomSlidePage(pageIndex: Int) {
-        callManager.setActiveSlidePage(pageIndex)
-    }
-
-    fun openMaterialExternally(material: LiveClassMaterial) {
-        val activeToken = if (callManager.activeRoomId.value?.startsWith("dm__") == true) {
-            activeDirectSession.value?.token
-        } else {
-            activeChannelSession.value?.token ?: activeDirectSession.value?.token
-        }
-        val cachedFile = _loadedMaterialDecks.value[material.id]?.cachedFile
-        val fallbackUrl = buildAttachmentUrl(
-            material.downloadUrl.ifBlank { material.streamUrl },
-            activeToken
-        )
-        BitVoidDocumentPreviewer.openMaterialExternally(
-            context = appContext,
-            cachedFile = cachedFile,
-            fallbackUrl = fallbackUrl,
-            mimeType = material.mimeType
+            mode = SignalingSessionMode.AUDIO_CALL,
+            role = ParticipantRole.SPEAKER
         )
     }
 
@@ -1281,24 +1058,8 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         callManager.toggleMicMute()
     }
 
-    fun toggleCallCamera() {
-        callManager.toggleCamera()
-    }
-
-    fun switchCallCamera() {
-        callManager.switchCamera()
-    }
-
     fun toggleCallSpeakerphone() {
         callManager.toggleSpeakerphone()
-    }
-
-    fun startScreenShare(resultCode: Int, data: Intent) {
-        callManager.startScreenShare(resultCode, data)
-    }
-
-    fun stopScreenShare() {
-        callManager.stopScreenShare()
     }
 
     fun leaveCallSession() {
