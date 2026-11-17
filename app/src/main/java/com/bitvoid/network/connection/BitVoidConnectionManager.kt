@@ -28,6 +28,7 @@ import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -201,7 +202,7 @@ class BitVoidConnectionManager(
                 inspectionJob?.cancel()
                 selectedNetwork = null
                 selectedAddress = null
-                connectivityManager.bindProcessToNetwork(null)
+                runCatching { connectivityManager.bindProcessToNetwork(null) }
                 _state.value = BitVoidConnectionState(
                     phase = BitVoidConnectionPhase.WAITING_FOR_WIFI,
                     statusMessage = "BitVoid_Node disconnected. Waiting for the ESP node Wi-Fi."
@@ -224,23 +225,40 @@ class BitVoidConnectionManager(
         val request = NetworkRequest.Builder()
             .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
             .build()
-        connectivityManager.registerNetworkCallback(request, networkCallback)
-        refresh()
+        try {
+            connectivityManager.registerNetworkCallback(request, networkCallback)
+            refresh()
+        } catch (error: Throwable) {
+            started = false
+            _state.value = BitVoidConnectionState(
+                phase = BitVoidConnectionPhase.ERROR,
+                statusMessage = "Optional ESP discovery could not start. Phone-hosted sharing is unaffected.",
+                errorMessage = error.message ?: "Android network callback registration failed."
+            )
+        }
     }
 
     fun refresh() {
         if (!started) return
-        val wifiNetworks = connectivityManager.allNetworks.filter { network ->
-            connectivityManager.getNetworkCapabilities(network)
-                ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
-        }
-        if (wifiNetworks.isEmpty()) {
+        try {
+            val wifiNetworks = connectivityManager.allNetworks.filter { network ->
+                connectivityManager.getNetworkCapabilities(network)
+                    ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+            }
+            if (wifiNetworks.isEmpty()) {
+                _state.value = BitVoidConnectionState(
+                    phase = BitVoidConnectionPhase.WAITING_FOR_WIFI,
+                    statusMessage = "Connect Android to $NODE_WIFI_SSID in Wi-Fi settings."
+                )
+            } else {
+                wifiNetworks.forEach(::inspectAsync)
+            }
+        } catch (error: Throwable) {
             _state.value = BitVoidConnectionState(
-                phase = BitVoidConnectionPhase.WAITING_FOR_WIFI,
-                statusMessage = "Connect Android to $NODE_WIFI_SSID in Wi-Fi settings."
+                phase = BitVoidConnectionPhase.ERROR,
+                statusMessage = "ESP discovery is unavailable. Phone-hosted sharing is unaffected.",
+                errorMessage = error.message ?: "Unable to inspect Android Wi-Fi networks."
             )
-        } else {
-            wifiNetworks.forEach(::inspectAsync)
         }
     }
 
@@ -253,7 +271,22 @@ class BitVoidConnectionManager(
         if (!started) return
         inspectionJob?.cancel()
         inspectionJob = scope.launch {
-            inspectionMutex.withLock { inspectNetwork(network) }
+            try {
+                inspectionMutex.withLock { inspectNetwork(network) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                if (selectedNetwork == network) {
+                    selectedAddress = null
+                    runCatching { connectivityManager.bindProcessToNetwork(null) }
+                    selectedNetwork = null
+                }
+                _state.value = BitVoidConnectionState(
+                    phase = BitVoidConnectionPhase.ERROR,
+                    statusMessage = "ESP discovery failed safely. Phone-hosted sharing remains available.",
+                    errorMessage = error.message ?: "Unexpected optional hardware discovery error."
+                )
+            }
         }
     }
 
@@ -277,7 +310,7 @@ class BitVoidConnectionManager(
             if (selectedNetwork == network) {
                 selectedNetwork = null
                 selectedAddress = null
-                connectivityManager.bindProcessToNetwork(null)
+                runCatching { connectivityManager.bindProcessToNetwork(null) }
             }
             if (selectedNetwork == null) {
                 _state.value = BitVoidConnectionState(
@@ -514,30 +547,34 @@ class BitVoidConnectionManager(
                         val candidate = serviceInfo.serviceName.contains("bitvoid", ignoreCase = true) ||
                             serviceInfo.serviceType.contains("_http._tcp", ignoreCase = true)
                         if (!candidate || !resolving.compareAndSet(false, true)) return
-                        nsdManager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
-                            override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-                                resolving.set(false)
-                            }
-
-                            override fun onServiceResolved(resolved: NsdServiceInfo) {
-                                val address = resolved.host as? Inet4Address
-                                val hostMatches = resolved.host?.hostName
-                                    ?.trimEnd('.')
-                                    ?.equals(NODE_HOSTNAME, ignoreCase = true) == true
-                                val nameMatches = resolved.serviceName.contains("bitvoid", ignoreCase = true)
-                                if (address != null && (hostMatches || nameMatches)) {
-                                    finish(
-                                        BitVoidNodeEndpoint(
-                                            address = address,
-                                            port = resolved.port.takeIf { it > 0 } ?: NODE_PORT,
-                                            source = BitVoidDiscoverySource.NSD_HTTP_SERVICE
-                                        )
-                                    )
-                                } else {
+                        runCatching {
+                            nsdManager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
+                                override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
                                     resolving.set(false)
                                 }
-                            }
-                        })
+
+                                override fun onServiceResolved(resolved: NsdServiceInfo) {
+                                    val address = resolved.host as? Inet4Address
+                                    val hostMatches = resolved.host?.hostName
+                                        ?.trimEnd('.')
+                                        ?.equals(NODE_HOSTNAME, ignoreCase = true) == true
+                                    val nameMatches = resolved.serviceName.contains("bitvoid", ignoreCase = true)
+                                    if (address != null && (hostMatches || nameMatches)) {
+                                        finish(
+                                            BitVoidNodeEndpoint(
+                                                address = address,
+                                                port = resolved.port.takeIf { it > 0 } ?: NODE_PORT,
+                                                source = BitVoidDiscoverySource.NSD_HTTP_SERVICE
+                                            )
+                                        )
+                                    } else {
+                                        resolving.set(false)
+                                    }
+                                }
+                            })
+                        }.onFailure {
+                            resolving.set(false)
+                        }
                     }
 
                     override fun onServiceLost(serviceInfo: NsdServiceInfo) = Unit
@@ -572,7 +609,7 @@ class BitVoidConnectionManager(
         inspectionJob?.cancel()
         inspectionJob = null
         runCatching { connectivityManager.unregisterNetworkCallback(networkCallback) }
-        if (selectedNetwork != null) connectivityManager.bindProcessToNetwork(null)
+        if (selectedNetwork != null) runCatching { connectivityManager.bindProcessToNetwork(null) }
         selectedNetwork = null
         selectedAddress = null
         _state.value = BitVoidConnectionState()

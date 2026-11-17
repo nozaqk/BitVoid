@@ -26,6 +26,7 @@ import com.bitvoid.network.client.ClientWsStatus
 import com.bitvoid.network.client.RemoteChannelSummary
 import com.bitvoid.network.client.RemoteLiveClassSummary
 import com.bitvoid.network.client.RemoteMediaItem
+import com.bitvoid.network.connection.BitVoidConnectionPhase
 import com.bitvoid.network.connection.BitVoidConnectionState
 import com.bitvoid.network.connection.BitVoidHardwareIntegration
 import com.bitvoid.network.connection.BitVoidNodeClient
@@ -46,6 +47,7 @@ import com.bitvoid.network.service.BitVoidForegroundService
 import com.bitvoid.network.service.BitVoidNodeStateHolder
 import java.nio.charset.StandardCharsets
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -62,11 +64,25 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     private val appContext = application.applicationContext
     private val clientManager = BitVoidClientManager(appContext)
     private val clientRepository = BitVoidClientRepository()
-    private val hardwareIntegration = BitVoidHardwareIntegration(appContext)
+    private val hardwareIntegrationDelegate = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        BitVoidHardwareIntegration(appContext)
+    }
     private val callManager = BitVoidCallManager(appContext)
 
-    val hardwareConnectionState: StateFlow<BitVoidConnectionState> = hardwareIntegration.state
-    val hardwareNodeClient: BitVoidNodeClient get() = hardwareIntegration.nodeClient
+    private val _hardwareConnectionState = MutableStateFlow(
+        BitVoidConnectionState(
+            statusMessage = "ESP integration is optional. Open Client Node mode to start discovery."
+        )
+    )
+    val hardwareConnectionState: StateFlow<BitVoidConnectionState> =
+        _hardwareConnectionState.asStateFlow()
+    val hardwareNodeClient: BitVoidNodeClient?
+        get() = if (hardwareIntegrationDelegate.isInitialized()) {
+            hardwareIntegrationDelegate.value.nodeClient
+        } else {
+            null
+        }
+    private var hardwareStateJob: Job? = null
 
     private val _selectedMode = MutableStateFlow(NodeMode.HOST)
     val selectedMode: StateFlow<NodeMode> = _selectedMode.asStateFlow()
@@ -227,7 +243,6 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     private var customClientUrlPinned = false
 
     init {
-        hardwareIntegration.start()
         BitVoidChannelManager.ensureDefaultChannel()
         BitVoidDirectChatManager.registerUser(
             _myUsername.value,
@@ -427,6 +442,30 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
 
     fun selectMode(mode: NodeMode) {
         _selectedMode.value = mode
+        if (mode == NodeMode.CLIENT) {
+            startHardwareIntegrationIfNeeded()
+        }
+    }
+
+    private fun startHardwareIntegrationIfNeeded(): BitVoidHardwareIntegration? {
+        if (hardwareStateJob != null) return hardwareIntegrationDelegate.value
+        return try {
+            val integration = hardwareIntegrationDelegate.value
+            integration.start()
+            hardwareStateJob = viewModelScope.launch {
+                integration.state.collect { state ->
+                    _hardwareConnectionState.value = state
+                }
+            }
+            integration
+        } catch (error: Throwable) {
+            _hardwareConnectionState.value = BitVoidConnectionState(
+                phase = BitVoidConnectionPhase.ERROR,
+                statusMessage = "ESP integration is unavailable; phone-hosted sharing still works.",
+                errorMessage = error.message ?: "Unable to initialize optional ESP networking."
+            )
+            null
+        }
     }
 
     private fun syncGatewayToLocalIfAvailable() {
@@ -1124,7 +1163,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun refreshHardwareNodeConnection() {
-        hardwareIntegration.refresh()
+        startHardwareIntegrationIfNeeded()?.refresh()
     }
 
     fun openSandboxedBrowser(urlOverride: String? = null) {
@@ -1163,7 +1202,10 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         callManager.release()
         clientRepository.release()
         clientManager.release()
-        hardwareIntegration.close()
+        hardwareStateJob?.cancel()
+        if (hardwareIntegrationDelegate.isInitialized()) {
+            runCatching { hardwareIntegrationDelegate.value.close() }
+        }
         super.onCleared()
     }
 }
