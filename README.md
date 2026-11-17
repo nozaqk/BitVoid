@@ -59,6 +59,26 @@ app/src/main/java/com/bitvoid/network/
 └── ui/          # Responsive Compose screens and theme
 ```
 
+## Standalone ESP32 / ESP-12E companion connection
+
+The Android client includes an application-scoped hardware integration under
+`com.bitvoid.network.connection`:
+
+- `BitVoidConnectionManager` watches for the open `BitVoid_Node` Wi-Fi, binds the Android process
+  to that Wi-Fi, detects the `192.168.4.1` captive redirect, and resolves `bitvoid.local` through
+  Android mDNS, a raw multicast-DNS fallback, or DNS-SD `_http._tcp` discovery.
+- `BitVoidNodeClient` supplies persistent local-only HTTP APIs, reconnecting
+  `ws://bitvoid.local/ws/chat/{channelId}` messaging, and streaming HTTP `Range` requests for MP4
+  playback. Its DNS and socket factories are pinned to the selected ESP Wi-Fi network.
+- `BitVoidHardwareConnectionCard` is shown in Client Node mode and offers zero-config status,
+  retry controls, and an embedded WebView dashboard. The WebView retries `192.168.4.1` if the
+  platform WebView cannot resolve `.local`, while blocking navigation outside local addresses.
+
+The ESP firmware should use SSID `BitVoid_Node`, DHCP gateway `192.168.4.1`, hostname
+`bitvoid.local`, HTTP port 80, and (ideally) advertise a `_http._tcp` DNS-SD service whose name
+contains `BitVoid`. It should redirect captive probes such as `/generate_204` to
+`http://bitvoid.local`.
+
 ## Build
 
 1. Install Android Studio with Android SDK 36 and JDK 17.

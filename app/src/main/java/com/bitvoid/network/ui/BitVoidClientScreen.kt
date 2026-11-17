@@ -4,6 +4,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,6 +46,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.bitvoid.network.connection.BitVoidConnectionState
+import com.bitvoid.network.connection.BitVoidHardwareConnectionCard
 import com.bitvoid.network.model.ClientConnectionStatus
 import com.bitvoid.network.model.ClientState
 import com.bitvoid.network.model.DiscoveredNetwork
@@ -60,10 +64,12 @@ import com.bitvoid.network.ui.theme.VoidTextSecondary
 @Composable
 fun BitVoidClientHubContent(
     clientState: ClientState,
+    hardwareConnectionState: BitVoidConnectionState,
     onBack: () -> Unit,
     onScanNetworks: () -> Unit,
     onConnectNode: (String) -> Unit,
     onOpenWifiSettings: () -> Unit,
+    onRefreshHardwareNode: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var selectedSsid by rememberSaveable { mutableStateOf("") }
@@ -77,7 +83,8 @@ fun BitVoidClientHubContent(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp),
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         ClientGatewayBarCard(
@@ -88,6 +95,10 @@ fun BitVoidClientHubContent(
             onConnectNode = { onConnectNode(selectedSsid) },
             onSelectDiscoveredNetwork = { selectedSsid = it.ssid },
             onOpenWifiSettings = onOpenWifiSettings
+        )
+        BitVoidHardwareConnectionCard(
+            state = hardwareConnectionState,
+            onRefresh = onRefreshHardwareNode
         )
     }
 }

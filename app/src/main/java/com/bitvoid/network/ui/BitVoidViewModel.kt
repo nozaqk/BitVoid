@@ -26,6 +26,9 @@ import com.bitvoid.network.client.ClientWsStatus
 import com.bitvoid.network.client.RemoteChannelSummary
 import com.bitvoid.network.client.RemoteLiveClassSummary
 import com.bitvoid.network.client.RemoteMediaItem
+import com.bitvoid.network.connection.BitVoidConnectionState
+import com.bitvoid.network.connection.BitVoidHardwareIntegration
+import com.bitvoid.network.connection.BitVoidNodeClient
 import com.bitvoid.network.direct.BitVoidDirectChatManager
 import com.bitvoid.network.direct.BitVoidUserPrefs
 import com.bitvoid.network.direct.DirectConversationSummary
@@ -59,7 +62,11 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     private val appContext = application.applicationContext
     private val clientManager = BitVoidClientManager(appContext)
     private val clientRepository = BitVoidClientRepository()
+    private val hardwareIntegration = BitVoidHardwareIntegration(appContext)
     private val callManager = BitVoidCallManager(appContext)
+
+    val hardwareConnectionState: StateFlow<BitVoidConnectionState> = hardwareIntegration.state
+    val hardwareNodeClient: BitVoidNodeClient get() = hardwareIntegration.nodeClient
 
     private val _selectedMode = MutableStateFlow(NodeMode.HOST)
     val selectedMode: StateFlow<NodeMode> = _selectedMode.asStateFlow()
@@ -220,6 +227,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     private var customClientUrlPinned = false
 
     init {
+        hardwareIntegration.start()
         BitVoidChannelManager.ensureDefaultChannel()
         BitVoidDirectChatManager.registerUser(
             _myUsername.value,
@@ -1115,6 +1123,10 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         clientManager.openSystemWifiSettings()
     }
 
+    fun refreshHardwareNodeConnection() {
+        hardwareIntegration.refresh()
+    }
+
     fun openSandboxedBrowser(urlOverride: String? = null) {
         val target = urlOverride?.let { BitVoidClientManager.normalizeLocalPortalUrl(it) }
             ?: clientState.value.targetPortalUrl
@@ -1151,6 +1163,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         callManager.release()
         clientRepository.release()
         clientManager.release()
+        hardwareIntegration.close()
         super.onCleared()
     }
 }
