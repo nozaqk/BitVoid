@@ -307,6 +307,7 @@ fun BitVoidDashboard(
                         }
                     }
             },
+            onCopyChannelId = ::copyToClipboard,
             onOpenChannel = { channelId, privateKey ->
                 viewModel.openHubChannel(channelId, privateKey)
             },
