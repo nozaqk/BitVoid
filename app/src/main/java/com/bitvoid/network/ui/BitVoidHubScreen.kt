@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
@@ -404,6 +405,7 @@ fun BitVoidHubScreen(
     onOpenCreateChannel: () -> Unit,
     onEditChannel: (channelId: String) -> Unit,
     onDeleteChannel: (channelId: String) -> Unit,
+    onCopyChannelId: (label: String, channelId: String) -> Unit,
     onOpenChannel: (channelId: String, privateKey: String?) -> Unit,
     onSendChatMessage: (String) -> Unit,
     onLeaveChannel: () -> Unit,
@@ -776,7 +778,14 @@ fun BitVoidHubScreen(
                             "Locked · Tap & enter Private ID (${ch.mediaCount} media)"
                         },
                         isPublic = false,
+                        channelId = ch.channelId,
                         canManage = ch.isOwner,
+                        onCopyChannelId = { id ->
+                            onCopyChannelId(
+                                if (ch.isHidden) "Hidden Channel ID" else "Private Channel ID",
+                                id
+                            )
+                        },
                         onEdit = { ch.channelId?.let(onEditChannel) },
                         onDelete = { ch.channelId?.let(onDeleteChannel) },
                         onClick = {
@@ -1509,7 +1518,9 @@ private fun HubChannelRow(
     title: String,
     subtitle: String,
     isPublic: Boolean,
+    channelId: String? = null,
     canManage: Boolean = false,
+    onCopyChannelId: (String) -> Unit = {},
     onEdit: () -> Unit = {},
     onDelete: () -> Unit = {},
     onClick: () -> Unit,
@@ -1587,7 +1598,7 @@ private fun HubChannelRow(
                     ) {
                         Icon(
                             imageVector = Icons.Filled.MoreVert,
-                            contentDescription = "Edit or delete $title",
+                            contentDescription = "Options for $title",
                             tint = VoidTextPrimary
                         )
                     }
@@ -1596,6 +1607,20 @@ private fun HubChannelRow(
                         onDismissRequest = { menuExpanded = false },
                         containerColor = VoidSurface
                     ) {
+                        if (!isPublic && !channelId.isNullOrBlank()) {
+                            DropdownMenuItem(
+                                text = { Text("Copy channel ID", color = VoidTextPrimary) },
+                                leadingIcon = {
+                                    Icon(Icons.Filled.ContentCopy, contentDescription = null, tint = VoidMint)
+                                },
+                                onClick = {
+                                    menuExpanded = false
+                                    channelId?.let(onCopyChannelId)
+                                },
+                                modifier = Modifier.testTag("${testTag}_copy_id")
+                            )
+                            HorizontalDivider(color = VoidBorder)
+                        }
                         DropdownMenuItem(
                             text = { Text("Edit channel", color = VoidTextPrimary) },
                             leadingIcon = {

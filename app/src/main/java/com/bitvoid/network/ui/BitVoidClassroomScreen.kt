@@ -1,6 +1,9 @@
 package com.bitvoid.network.ui
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -29,7 +32,9 @@ import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
@@ -414,6 +419,9 @@ private fun AudioSessionHeader(
     onEndClass: () -> Unit
 ) {
     val isLiveClass = callUiState.sessionMode == SignalingSessionMode.LIVE_CLASSROOM
+    val liveClassCode = callUiState.liveClassCode?.trim().orEmpty()
+    val context = LocalContext.current
+    var classIdCopied by remember(liveClassCode) { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -443,13 +451,32 @@ private fun AudioSessionHeader(
                     } else {
                         append("${callUiState.participants.size.coerceAtLeast(1)} participant(s)")
                     }
-                    callUiState.liveClassCode?.takeIf { it.isNotBlank() }?.let { append(" · ID: $it") }
+                    liveClassCode.takeIf { it.isNotBlank() }?.let { append(" · ID: $it") }
                 },
                 style = MaterialTheme.typography.labelSmall,
                 color = VoidTextSecondary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+        }
+        if (isLiveClass && liveClassCode.isNotBlank()) {
+            IconButton(
+                onClick = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Live Class ID", liveClassCode))
+                    classIdCopied = true
+                },
+                modifier = Modifier
+                    .size(44.dp)
+                    .testTag("live_class_id_copy_button")
+            ) {
+                Icon(
+                    imageVector = if (classIdCopied) Icons.Filled.Check else Icons.Filled.ContentCopy,
+                    contentDescription = if (classIdCopied) "Live Class ID copied" else "Copy Live Class ID",
+                    tint = VoidMint,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
         }
         if (isLiveClass && callUiState.localRole == ParticipantRole.HOST_TEACHER) {
             OutlinedButton(
