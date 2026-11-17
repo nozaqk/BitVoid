@@ -28,7 +28,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -39,7 +38,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.ChevronRight
@@ -441,11 +439,8 @@ fun BitVoidHubScreen(
                 channelName = "@${activeDirectSession.peerUsername}",
                 channelToken = activeDirectSession.token,
                 localCallsign = activeDirectSession.myUsername,
-                channelMessages = directMessages,
-                onSendChatMessage = onSendDirectMessage,
                 callUiState = callUiState,
                 callActions = callActions,
-                onBack = leaveDirectMeeting,
                 modifier = modifier.fillMaxSize()
             )
             return
@@ -497,11 +492,8 @@ fun BitVoidHubScreen(
             channelName = roomName,
             channelToken = roomToken,
             localCallsign = callsign,
-            channelMessages = channelMessages,
-            onSendChatMessage = onSendChatMessage,
             callUiState = callUiState,
             callActions = callActions,
-            onBack = returnToHub,
             modifier = modifier.fillMaxSize()
         )
         return

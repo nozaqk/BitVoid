@@ -24,11 +24,9 @@ BitVoid is an offline-first Android local video node. A host phone creates an An
 - Token-gated private video routes and room APIs using `X-Room-Token`
 - Real-time NanoWSD channel and direct chat with ephemeral RAM-only history and arbitrary file attachments
 - Local-only, audio-only WebRTC voice calls with microphone mute, speaker routing, and no external STUN/TURN servers
-- Live classrooms with teacher/student roles, shareable `CLS-XXXX-XX` IDs, visible or hidden Hub listings, Q&A chat, and synchronized participant state
-- Android screen sharing through a media-projection foreground service, plus browser screen sharing where supported
-- Classroom presentation of PDF, PPT/PPTX, DOC/DOCX, images, text, and other downloadable materials with synchronized page selection
-- Native Compose and browser meeting stages backed by the host's authenticated `/ws/signaling` endpoint
-- Responsive browser voice-call controls; camera and screen presentation remain exclusive to Live Class sessions
+- Audio-only Live Classes with host/student roles, shareable `CLS-XXXX-XX` IDs, visible or hidden Hub listings, microphone controls, and synchronized participant state
+- Native Compose and browser audio meeting stages backed by the host's authenticated `/ws/signaling` endpoint
+- Responsive browser audio controls and participant layouts that use the full meeting stage
 - Professional browser attachment cards with responsive video/audio/image previews, file metadata, secure open/download actions, and upload progress
 - Ephemeral same-node username presence: direct chat and calls open only when the target is active on the current BitVoid Wi-Fi gateway
 - Host room dashboard showing assigned private videos and active chat participants
@@ -48,7 +46,7 @@ BitVoid is an offline-first Android local video node. A host phone creates an An
 ```text
 app/src/main/java/com/bitvoid/network/
 ├── MainActivity.kt
-├── call/        # WebRTC media, signaling, screen sharing, and document previews
+├── call/        # Audio-only WebRTC media and signaling
 ├── channel/     # Host channels and participant state
 ├── client/      # Peer discovery and client networking
 ├── direct/      # Ephemeral direct chat
@@ -84,8 +82,8 @@ The APK is produced at `app/build/outputs/apk/debug/app-debug.apk`.
 8. Nearby viewers join the displayed network and open `http://<gateway>:8080`. Captive-probe requests that reach BitVoid are redirected to the portal. The first screen asks for a Private Room ID, optional passkey, and chat alias; the public broadcast remains at `/public`.
 9. In another BitVoid app, open **CLIENT NODE**, scan, choose the Wi-Fi already connected to that phone, and tap **CONNECT NODE**. BitVoid does not switch Wi-Fi; it discovers the gateway through the current network. It also performs this discovery silently while the app is running and links automatically when a BitVoid node appears.
 10. Authenticated room members receive an in-memory token, can stream only videos assigned to that room, exchange real-time local chat messages, and share files.
-11. From **HUB**, start a voice call with a channel or username, or create a named Live Class for camera and screen presentation. Share its `CLS-XXXX-XX` ID with students on the same BitVoid network.
-12. During a Live Class, the teacher can share the Android screen, upload presentation materials, synchronize the current page, and use classroom Q&A while students follow in the native app or local browser portal.
+11. From **HUB**, start an audio call with a channel or username, or create a named audio-only Live Class. Share its `CLS-XXXX-XX` ID with students on the same BitVoid network.
+12. During a Live Class, the host and students use microphone audio and the participant stage; students can leave and the host can end the class from either the native app or local browser portal.
 
 ## Room, call, and classroom security model
 

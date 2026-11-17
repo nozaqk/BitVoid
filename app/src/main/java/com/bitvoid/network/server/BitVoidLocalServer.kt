@@ -2,7 +2,6 @@ package com.bitvoid.network.server
 
 import android.content.Context
 import com.bitvoid.network.call.BitVoidSignalingServer
-import com.bitvoid.network.call.LiveClassMaterial
 import com.bitvoid.network.call.ParticipantRole
 import com.bitvoid.network.call.SignalingPeer
 import com.bitvoid.network.call.SignalingSessionMode
@@ -19,7 +18,6 @@ import com.bitvoid.network.model.MediaCategory
 import com.bitvoid.network.room.BitVoidRoomManager
 import com.bitvoid.network.room.RoomSession
 import com.bitvoid.network.service.BitVoidNodeStateHolder
-import fi.iki.elonen.NanoHTTPD
 import fi.iki.elonen.NanoWSD
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -224,11 +222,10 @@ class BitVoidLocalServer(
             }
             val requestedMode = runCatching {
                 SignalingSessionMode.valueOf(params["mode"].orEmpty())
-            }.getOrDefault(SignalingSessionMode.VOICE_VIDEO_CALL)
-            // Direct Chat rooms are always ordinary voice calls. Do not let a modified or
-            // legacy client relabel a DM room as Live Class to recover camera/screen access.
+            }.getOrDefault(SignalingSessionMode.AUDIO_CALL)
+            // Direct Chat rooms are always ordinary voice calls.
             val mode = if (roomId.startsWith("dm__", ignoreCase = false)) {
-                SignalingSessionMode.VOICE_VIDEO_CALL
+                SignalingSessionMode.AUDIO_CALL
             } else {
                 requestedMode
             }
@@ -238,8 +235,6 @@ class BitVoidLocalServer(
             val peerId = params["peerId"]
             val displayName = params["name"]
             val isMuted = params["isMuted"]?.toBooleanStrictOrNull() ?: false
-            val isVideoOn = params["isVideoOn"]?.toBooleanStrictOrNull() ?: false
-            val isScreenSharing = params["isScreenSharing"]?.toBooleanStrictOrNull() ?: false
 
             return BitVoidSignalingWebSocket(
                 handshakeRequest = handshake,
@@ -249,9 +244,7 @@ class BitVoidLocalServer(
                 displayName = displayName,
                 mode = mode,
                 role = role,
-                initialMuted = isMuted,
-                initialVideoOn = isVideoOn,
-                initialScreenSharing = isScreenSharing
+                initialMuted = isMuted
             )
         }
         if (rawUri.startsWith("/ws/dm/")) {
@@ -331,7 +324,7 @@ class BitVoidLocalServer(
 
                 method == Method.POST && rawUri.startsWith("/api/dm/") && rawUri.endsWith("/call/invite") -> {
                     val dmId = extractDmIdFromPath(rawUri, "/call/invite")
-                    handleDirectCallInvite(dmId, session, authToken, ephemeralToken)
+                    handleDirectCallInvite(dmId, authToken, ephemeralToken)
                 }
 
                 method == Method.POST && rawUri.startsWith("/api/dm/") && rawUri.endsWith("/call/accept") -> {
@@ -351,7 +344,7 @@ class BitVoidLocalServer(
                     handleDirectCallCancelOrEnd(dmId, authToken, ephemeralToken)
                 }
 
-                // Live Class & Shared Presentation Materials POST endpoints
+                // Live Class POST endpoints
                 method == Method.POST && rawUri == "/api/live-class/start" -> {
                     requireSameWifiNode(session)
                     handleLiveClassStart(session, ephemeralToken)
@@ -360,12 +353,6 @@ class BitVoidLocalServer(
                 method == Method.POST && rawUri == "/api/live-class/join" -> {
                     requireSameWifiNode(session)
                     handleLiveClassJoin(session, ephemeralToken)
-                }
-
-                method == Method.POST && rawUri.startsWith("/api/live-class/") && rawUri.endsWith("/materials") -> {
-                    requireSameWifiNode(session)
-                    val roomId = extractLiveClassRoomId(rawUri, "/materials")
-                    handleLiveClassMaterialUpload(roomId, session, authToken, ephemeralToken)
                 }
 
                 // Legacy Room POST endpoints
@@ -501,17 +488,6 @@ class BitVoidLocalServer(
                     val username = session.parms["username"]?.trim()
                     serveLiveClassesListJson(
                         username = username,
-                        ephemeralToken = ephemeralToken,
-                        isHead = (method == Method.HEAD)
-                    )
-                }
-
-                rawUri.startsWith("/api/live-class/") && rawUri.endsWith("/materials") -> {
-                    requireSameWifiNode(session)
-                    val roomId = extractLiveClassRoomId(rawUri, "/materials")
-                    serveLiveClassMaterialsJson(
-                        roomId = roomId,
-                        authToken = authToken,
                         ephemeralToken = ephemeralToken,
                         isHead = (method == Method.HEAD)
                     )
@@ -665,11 +641,6 @@ class BitVoidLocalServer(
         return URLDecoder.decode(inner, StandardCharsets.UTF_8.name())
     }
 
-    private fun extractLiveClassRoomId(rawUri: String, suffix: String): String {
-        val inner = rawUri.removePrefix("/api/live-class/").removeSuffix(suffix)
-        return URLDecoder.decode(inner, StandardCharsets.UTF_8.name())
-    }
-
     private fun extractAuthToken(session: IHTTPSession): String? {
         val fromDmHeader = session.headers["x-dm-token"]
         if (!fromDmHeader.isNullOrBlank()) return fromDmHeader.trim()
@@ -762,11 +733,11 @@ class BitVoidLocalServer(
             body{margin:0;background:#07100d;color:#eef8f4;font:16px system-ui,sans-serif}.wrap{max-width:760px;margin:auto;padding:28px 18px 52px}
             .card{background:#101c18;border:1px solid #2a4840;border-radius:18px;padding:22px;margin:16px 0}h1,h2{color:#74f6c3}code{color:#7dddf2;overflow-wrap:anywhere}.steps{line-height:1.55}.fingerprint{font-size:12px;word-break:break-all;background:#07100d;border:1px solid #2a4840;border-radius:9px;padding:10px}
             a,.button{color:#07100d;background:#74f6c3;text-decoration:none;font-weight:800;border-radius:10px;padding:13px 16px;display:inline-block;margin:6px 8px 6px 0}.secondary{color:#eef8f4;background:transparent;border:1px solid #74f6c3}.muted{color:#aec2ba}.warning{color:#ffd58a}
-            </style></head><body><main class="wrap"><h1>Secure camera and microphone setup</h1>
+            </style></head><body><main class="wrap"><h1>Secure microphone setup</h1>
             <p class="muted">Complete this once on each browser device. Stay connected to the same BitVoid Wi-Fi node throughout setup.</p>
             <div class="card"><h2>1. Save the BitVoid Local Root CA</h2><p>Tap the first button for the widely compatible PEM certificate. If your device does not offer to save or install it, use the DER fallback.</p><a class="button" href="/bitvoid-local-ca.crt" target="_top">Save / install CA (.crt)</a><a class="button secondary" href="/bitvoid-local-ca.cer" target="_top">DER fallback (.cer)</a><p class="muted">If this page is inside a Wi-Fi sign-in mini-window and the button does nothing, open this page in Chrome, Edge, Firefox, or Safari and tap it again.</p><p>Verify the certificate name is <b>BitVoid Local Root CA</b>.</p><div class="fingerprint"><b>SHA-256</b><br>${htmlEscape(fingerprint)}</div></div>
             <div class="card steps"><h2>2. Install it as a trusted CA</h2><p><b>Android:</b> open Settings → Security &amp; privacy → More security settings → Encryption &amp; credentials → Install a certificate → CA certificate, then choose the downloaded <code>bitvoid-local-ca.crt</code>. A screen-lock confirmation may be required.</p><p><b>Windows:</b> open the file → Install Certificate → Current User → Place all certificates in <b>Trusted Root Certification Authorities</b>.</p><p><b>macOS:</b> open the file in Keychain Access, place it in the login keychain, open <b>BitVoid Local Root CA</b>, and set Trust → Always Trust.</p><p><b>iPhone / iPad:</b> download in Safari, approve the profile in Settings → General → VPN &amp; Device Management, then enable it in Settings → General → About → Certificate Trust Settings.</p><p><b>Firefox:</b> if it still warns, import the file in Settings → Privacy &amp; Security → Certificates → View Certificates → Authorities.</p><p class="warning">Only trust the certificate from the phone hosting your BitVoid node. Remove it when you no longer use that node.</p></div>
-            <div class="card"><h2>3. Reopen BitVoid over HTTPS</h2><p><code id="secure-url-code">${htmlEscape(secureUrl)}</code></p><a class="button" id="secure-portal-link" href="${htmlEscape(secureUrl)}" target="_top">Open secure BitVoid</a><p class="muted">Fully close the browser first if it cached an earlier warning. The address must exactly match the one above. Once trusted, the HTTPS page will show the normal camera and microphone permission prompts.</p></div>
+            <div class="card"><h2>3. Reopen BitVoid over HTTPS</h2><p><code id="secure-url-code">${htmlEscape(secureUrl)}</code></p><a class="button" id="secure-portal-link" href="${htmlEscape(secureUrl)}" target="_top">Open secure BitVoid</a><p class="muted">Fully close the browser first if it cached an earlier warning. The address must exactly match the one above. Once trusted, the HTTPS page will show the normal microphone permission prompt.</p></div>
             </main><script>
             (function(){var h=location.hostname;var host=h.indexOf(':')>=0?'['+h+']':h;var secure='https://'+host+':${BitVoidTlsManager.SECURE_PORT}';var u=new URLSearchParams(location.search).get('username');document.getElementById('secure-url-code').textContent=secure;document.getElementById('secure-portal-link').href=secure+(u?'?username='+encodeURIComponent(u):'');})();
             </script></body></html>
@@ -998,15 +969,11 @@ class BitVoidLocalServer(
 
     private fun handleDirectCallInvite(
         dmId: String,
-        session: IHTTPSession,
         authToken: String?,
         ephemeralToken: String
     ): Response {
         val directSession = BitVoidDirectChatManager.validateToken(authToken, requiredDmId = dmId)
             ?: return unauthorizedResponse(ephemeralToken)
-        // Calls are intentionally audio-only. Ignore legacy `withVideo` request fields from
-        // older portals so a peer cannot re-enable camera calling through the API.
-        runCatching { readPostBody(session) }
         return try {
             BitVoidSignalingServer.requestDirectCall(session = directSession)
             buildPaddedTextResponse(
@@ -1186,12 +1153,6 @@ class BitVoidLocalServer(
             put("isHidden", invite.isHidden)
             put("creatorUsername", invite.creatorUsername)
             put("callsign", hostSession.callsign)
-            put("activeMaterialId", "")
-            put("activePageIndex", 0)
-            put("media", JSONArray())
-            put("videos", JSONArray())
-            put("messages", JSONArray())
-            put("materials", JSONArray())
         }.toString()
 
         return buildPaddedTextResponse(
@@ -1257,15 +1218,7 @@ class BitVoidLocalServer(
             token = ephemeralToken
         )
 
-        val diskItems = BitVoidMediaManager.refreshFromDisk(context)
-        BitVoidChannelManager.syncMediaCatalog(diskItems)
         val channel = BitVoidChannelManager.getChannel(studentSession.channelId)
-        val mediaJson = buildMediaItemsArrayJson(BitVoidChannelManager.getChannelMedia(studentSession.channelId))
-        val historyJson = BitVoidChannelManager.getChatHistory(studentSession.channelId)
-            .joinToString(",") { BitVoidChannelManager.messageToJson(it) }
-        val roomState = BitVoidSignalingServer.getRoomState(invite.roomId)
-        val materialsJson = BitVoidSignalingServer.materialsToJsonArray(roomState?.materials.orEmpty()).toString()
-
         val payload = JSONObject().apply {
             put("token", studentSession.token)
             put("classCode", invite.classCode)
@@ -1276,153 +1229,13 @@ class BitVoidLocalServer(
             put("isHidden", invite.isHidden)
             put("creatorUsername", invite.creatorUsername)
             put("callsign", studentSession.callsign)
-            put("activeMaterialId", roomState?.activeMaterialId.orEmpty())
-            put("activePageIndex", roomState?.activePageIndex ?: 0)
-        }.toString().dropLast(1) +
-            ""","media":[$mediaJson],"videos":[$mediaJson],"messages":[$historyJson],"materials":$materialsJson}"""
+        }.toString()
 
         return buildPaddedTextResponse(
             status = Response.Status.OK,
             mimeType = "application/json; charset=utf-8",
             body = payload,
             token = ephemeralToken
-        )
-    }
-
-    private fun handleLiveClassMaterialUpload(
-        roomId: String,
-        session: IHTTPSession,
-        authToken: String?,
-        ephemeralToken: String
-    ): Response {
-        val cleanRoom = roomId.trim()
-        if (cleanRoom.isEmpty()) {
-            return buildPaddedTextResponse(
-                status = Response.Status.BAD_REQUEST,
-                mimeType = "application/json; charset=utf-8",
-                body = """{"error":"invalid_room"}""",
-                token = ephemeralToken
-            )
-        }
-
-        val isDm = cleanRoom.startsWith("dm__", ignoreCase = false)
-        var uploaderName = "Presenter"
-        var targetChannelId: String? = null
-
-        if (isDm) {
-            BitVoidDirectChatManager.validateToken(authToken, requiredDmId = cleanRoom)
-                ?: return unauthorizedResponse(ephemeralToken)
-            return buildPaddedTextResponse(
-                status = Response.Status.CONFLICT,
-                mimeType = "application/json; charset=utf-8",
-                body = """{"error":"live_class_only","detail":"Document presentation is available only in Live Class."}""",
-                token = ephemeralToken
-            )
-        } else {
-            val channel = BitVoidChannelManager.getChannel(cleanRoom)
-                ?: BitVoidSignalingServer.getRoomState(cleanRoom)?.let { BitVoidChannelManager.getChannel(it.channelId) }
-                ?: return buildPaddedTextResponse(
-                    status = Response.Status.NOT_FOUND,
-                    mimeType = "application/json; charset=utf-8",
-                    body = """{"error":"channel_not_found"}""",
-                    token = ephemeralToken
-                )
-            val validated = BitVoidChannelManager.validateToken(authToken, requiredChannelId = channel.channelId)
-            if (!channel.isPublic && validated == null) {
-                return unauthorizedResponse(ephemeralToken)
-            }
-            targetChannelId = channel.channelId
-            uploaderName = validated?.callsign ?: "Host-${ephemeralToken.takeLast(4).uppercase(Locale.US)}"
-        }
-
-        if (BitVoidSignalingServer.getRoomState(cleanRoom)?.mode != SignalingSessionMode.LIVE_CLASSROOM) {
-            return buildPaddedTextResponse(
-                status = Response.Status.CONFLICT,
-                mimeType = "application/json; charset=utf-8",
-                body = """{"error":"live_class_only","detail":"Document presentation is available only in Live Class."}""",
-                token = ephemeralToken
-            )
-        }
-
-        val (importedItem, _) = parseAndImportUploadedFile(session)
-            ?: return buildPaddedTextResponse(
-                status = Response.Status.BAD_REQUEST,
-                mimeType = "application/json; charset=utf-8",
-                body = """{"error":"missing_file","detail":"Select a document, PPT, PDF, or file to share."}""",
-                token = ephemeralToken
-            )
-
-        val encodedMediaId = urlEncode(importedItem.id)
-        val streamUrl = "/stream/$encodedMediaId"
-        val downloadUrl = "/download/$encodedMediaId"
-        val chId = targetChannelId!!
-        BitVoidChannelManager.addMediaToChannel(chId, importedItem.id)
-        BitVoidChannelManager.appendChatMessage(
-            channelId = chId,
-            callsign = uploaderName,
-            rawText = "Presented Live Class document: ${importedItem.title}",
-            attachment = importedItem
-        )
-
-        val material = LiveClassMaterial(
-            id = importedItem.id,
-            fileName = importedItem.title,
-            mimeType = importedItem.mimeType,
-            sizeBytes = importedItem.size,
-            uploadedBy = uploaderName,
-            downloadUrl = downloadUrl,
-            streamUrl = streamUrl,
-            uploadedAtMs = System.currentTimeMillis()
-        )
-        BitVoidSignalingServer.addMaterialToRoom(cleanRoom, material, setAsActive = true)
-        val roomState = BitVoidSignalingServer.getRoomState(cleanRoom)
-        val body = JSONObject().apply {
-            put("ok", true)
-            put("roomId", cleanRoom)
-            put("material", BitVoidSignalingServer.materialToJson(material))
-            put("activeMaterialId", roomState?.activeMaterialId ?: material.id)
-            put("activePageIndex", roomState?.activePageIndex ?: 0)
-            put("materials", BitVoidSignalingServer.materialsToJsonArray(roomState?.materials ?: listOf(material)))
-        }.toString()
-
-        return buildPaddedTextResponse(
-            status = Response.Status.OK,
-            mimeType = "application/json; charset=utf-8",
-            body = body,
-            token = ephemeralToken
-        )
-    }
-
-    private fun serveLiveClassMaterialsJson(
-        roomId: String,
-        authToken: String?,
-        ephemeralToken: String,
-        isHead: Boolean
-    ): Response {
-        val cleanRoom = roomId.trim()
-        if (cleanRoom.startsWith("dm__", ignoreCase = false)) {
-            BitVoidDirectChatManager.validateToken(authToken, requiredDmId = cleanRoom)
-                ?: return unauthorizedResponse(ephemeralToken)
-        } else {
-            val channel = BitVoidChannelManager.getChannel(cleanRoom)
-                ?: BitVoidSignalingServer.getRoomState(cleanRoom)?.let { BitVoidChannelManager.getChannel(it.channelId) }
-                ?: return buildPaddedTextResponse(
-                    status = Response.Status.NOT_FOUND,
-                    mimeType = "application/json; charset=utf-8",
-                    body = """{"error":"channel_not_found"}""",
-                    token = ephemeralToken
-                )
-            if (!channel.isPublic) {
-                BitVoidChannelManager.validateToken(authToken, requiredChannelId = channel.channelId)
-                    ?: return unauthorizedResponse(ephemeralToken)
-            }
-        }
-        return buildPaddedTextResponse(
-            status = Response.Status.OK,
-            mimeType = "application/json; charset=utf-8",
-            body = BitVoidSignalingServer.roomMaterialsToJson(cleanRoom),
-            token = ephemeralToken,
-            isHead = isHead
         )
     }
 
@@ -1650,7 +1463,6 @@ class BitVoidLocalServer(
             put("dmId", invite?.dmId.orEmpty())
             put("callerUsername", invite?.callerUsername.orEmpty())
             put("calleeUsername", invite?.calleeUsername.orEmpty())
-            put("withVideo", invite?.withVideo == true)
             put("createdAtMs", invite?.createdAtMs ?: 0L)
         }.toString()
         return buildPaddedTextResponse(
@@ -2172,7 +1984,7 @@ class BitVoidLocalServer(
         )
         response.addHeader(
             "Permissions-Policy",
-            "interest-cohort=(), camera=(self), microphone=(self), display-capture=(self), geolocation=(), usb=()"
+            "interest-cohort=(), microphone=(self), geolocation=(), usb=()"
         )
         response.addHeader("X-BitVoid-Session", ephemeralToken)
         response.addHeader("X-BitVoid-Block-Align", CONSTANT_BLOCK_SIZE.toString())
@@ -3078,7 +2890,7 @@ class BitVoidLocalServer(
             }
             .empty-title { color: var(--mint); font-weight: 700; margin-bottom: 4px; }
 
-            /* Live Class & Voice Call Stage */
+            /* Audio-only Live Class & Call Stage */
             .live-stage-panel {
               flex-shrink: 0;
               max-height: 52vh;
@@ -3090,9 +2902,9 @@ class BitVoidLocalServer(
               gap: 10px;
             }
             .live-stage-panel.meeting-active {
-              flex: 0 1 auto;
+              flex: 1 1 auto;
               min-height: 0;
-              max-height: min(72vh, calc(100dvh - 120px));
+              max-height: none;
               padding: 14px;
               overflow-y: auto;
               align-content: start;
@@ -3135,65 +2947,33 @@ class BitVoidLocalServer(
               justify-content: space-between;
               gap: 8px;
             }
-            .live-badge-pulse {
-              font-size: 10px;
-              font-weight: 700;
-              padding: 3px 9px;
-              border-radius: 999px;
-              border: 1px solid var(--crimson);
-              color: var(--crimson);
-              background: rgba(255, 77, 109, 0.14);
-            }
-            .live-video-grid {
+            .live-participants-grid {
               display: grid;
               grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
-              gap: 8px;
+              gap: 10px;
+              align-content: start;
             }
-            .live-video-tile {
-              position: relative;
-              background: #05070A;
-              border: 1px solid var(--border);
-              border-radius: 10px;
-              overflow: hidden;
-              min-height: 112px;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-            }
-            .live-video-tile.teacher-tile,
-            .live-video-tile.presenter-tile {
-              border-color: var(--mint);
-            }
-            .live-video-tile.presenter-tile {
-              grid-column: 1 / -1;
-              min-height: 220px;
-            }
-            .meeting-active .live-video-grid {
+            .meeting-active .live-participants-grid {
               grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
-              align-items: stretch;
             }
-            .meeting-active .live-video-tile {
-              min-height: 150px;
-              max-height: 300px;
-              box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
-            }
-            .meeting-active .live-video-tile.presenter-tile {
-              min-height: clamp(240px, 42vh, 520px);
-              max-height: 520px;
-            }
-            .live-waiting-state {
+            .live-participant-card {
+              min-height: 142px;
               display: flex;
               flex-direction: column;
               align-items: center;
               justify-content: center;
-              gap: 6px;
+              gap: 7px;
               padding: 14px;
               text-align: center;
               color: var(--muted);
+              background: #080c12;
+              border: 1px solid var(--border);
+              border-radius: 12px;
             }
-            .live-waiting-avatar {
-              width: 54px;
-              height: 54px;
+            .live-participant-card.teacher { border-color: var(--mint); }
+            .live-participant-avatar {
+              width: 58px;
+              height: 58px;
               display: flex;
               align-items: center;
               justify-content: center;
@@ -3201,55 +2981,16 @@ class BitVoidLocalServer(
               border: 2px solid var(--cyan);
               color: var(--cyan);
               background: rgba(56, 189, 248, 0.12);
-              font-size: 18px;
+              font-size: 19px;
               font-weight: 800;
             }
-            .live-waiting-title { color: var(--text); font-size: 13px; font-weight: 700; }
-            .teacher-tile .live-waiting-avatar {
+            .live-participant-card.teacher .live-participant-avatar {
               border-color: var(--mint);
               color: var(--mint);
               background: rgba(0, 255, 156, 0.12);
             }
-            .live-video-tile video {
-              position: absolute;
-              inset: 0;
-              width: 100%;
-              height: 100%;
-              object-fit: contain;
-              margin: 0;
-              border: none;
-              border-radius: 0;
-            }
-            .live-tile-label {
-              position: absolute;
-              left: 8px;
-              bottom: 8px;
-              background: rgba(13, 17, 23, 0.85);
-              border: 1px solid var(--border);
-              color: var(--text);
-              font-size: 10px;
-              font-weight: 700;
-              padding: 2px 7px;
-              border-radius: 6px;
-            }
-            .live-participants-grid {
-              display: none;
-            }
-            .live-participant-chip {
-              display: inline-flex;
-              align-items: center;
-              gap: 6px;
-              padding: 4px 9px;
-              border-radius: 999px;
-              background: var(--surface);
-              border: 1px solid var(--border);
-              font-size: 11px;
-              color: var(--text);
-            }
-            .live-participant-chip.teacher {
-              border-color: var(--mint);
-              color: var(--mint);
-            }
+            .live-participant-name { color: var(--text); font-size: 13px; font-weight: 700; }
+            .live-participant-state { font-size: 11px; }
             .live-controls-bar {
               display: flex;
               flex-wrap: wrap;
@@ -3283,49 +3024,6 @@ class BitVoidLocalServer(
               flex: 1;
               min-width: 160px;
             }
-            .live-doc-stage {
-              background: #080C12;
-              border: 1px solid rgba(56, 189, 248, 0.55);
-              border-radius: 10px;
-              padding: 8px 10px;
-              display: grid;
-              gap: 8px;
-            }
-            .live-doc-toolbar {
-              display: flex;
-              flex-wrap: wrap;
-              align-items: center;
-              justify-content: space-between;
-              gap: 6px;
-            }
-            .live-docs-bar {
-              display: flex;
-              flex-wrap: wrap;
-              gap: 6px;
-            }
-            .live-doc-chip {
-              background: var(--surface);
-              border: 1px solid var(--border);
-              color: var(--text);
-              padding: 4px 9px;
-              border-radius: 8px;
-              font-size: 11px;
-              font-weight: 600;
-            }
-            .live-doc-chip.active {
-              border-color: var(--mint);
-              color: var(--mint);
-              background: rgba(0, 255, 156, 0.12);
-            }
-            .live-doc-preview-frame {
-              width: 100%;
-              height: 220px;
-              border: 1px solid var(--border);
-              border-radius: 8px;
-              background: #05070A;
-              object-fit: contain;
-            }
-
             @media (max-width: 640px) {
               .wa-topbar { gap: 7px; padding: 8px; }
               .wa-top-avatar { width: 34px; height: 34px; }
@@ -3342,17 +3040,10 @@ class BitVoidLocalServer(
                 margin: -10px -10px 0;
                 padding: 9px 10px;
               }
-              .meeting-active .live-video-grid {
+              .meeting-active .live-participants-grid {
                 grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
               }
-              .meeting-active .live-video-tile {
-                min-height: 122px;
-                max-height: 220px;
-              }
-              .meeting-active .live-video-tile.presenter-tile {
-                min-height: clamp(220px, 38vh, 420px);
-                max-height: 420px;
-              }
+              .live-participant-card { min-height: 122px; }
               .meeting-active #live-active-controls,
               .meeting-active #direct-incoming-controls {
                 bottom: -10px;
@@ -3524,7 +3215,7 @@ class BitVoidLocalServer(
               <section id="live-stage-panel" class="live-stage-panel hidden">
                 <div class="live-head">
                   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                    <span id="live-mode-badge" class="pill">LIVE CLASS &amp; CALL STAGE</span>
+                    <span id="live-mode-badge" class="pill">AUDIO CLASS &amp; CALL</span>
                     <span id="live-class-code-pill" class="live-class-code-pill hidden">
                       <span>CLASS ID: <strong id="live-class-code-text">-</strong></span>
                       <button id="live-copy-code-btn" class="btn-ghost" style="padding:2px 6px;font-size:10px;" type="button">COPY</button>
@@ -3535,9 +3226,9 @@ class BitVoidLocalServer(
                 </div>
 
                 <div id="live-launcher-controls" class="live-controls-bar">
-                  <button id="rtc-start-class-host-btn" class="btn-primary" type="button">START LIVE CLASS (HOST)</button>
-                  <button id="rtc-join-class-student-btn" class="btn-cyan" type="button">JOIN LIVE CLASS (STUDENT)</button>
-                  <button id="rtc-start-call-btn" class="btn-amber" type="button">START VOICE CALL</button>
+                  <button id="rtc-start-class-host-btn" class="btn-primary" type="button">START LIVE AUDIO CLASS (HOST)</button>
+                  <button id="rtc-join-class-student-btn" class="btn-cyan" type="button">JOIN LIVE AUDIO CLASS</button>
+                  <button id="rtc-start-call-btn" class="btn-amber" type="button">START AUDIO CALL</button>
                 </div>
 
                 <div id="live-join-id-row" class="live-join-id-row hidden">
@@ -3558,25 +3249,7 @@ class BitVoidLocalServer(
 
                 <div id="live-error-msg" class="err hidden"></div>
 
-                <div id="live-presentation-stage" class="live-doc-stage hidden">
-                  <div class="live-doc-toolbar">
-                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                      <span class="pill pill-cyan">SHARED DOC / SLIDES</span>
-                      <strong id="live-doc-title" style="font-size:12px;">-</strong>
-                    </div>
-                    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                      <button id="rtc-slide-prev-btn" class="btn-ghost" style="padding:4px 8px;font-size:10px;" type="button">PREV</button>
-                      <span id="rtc-slide-page-label" class="muted-note">Page 1</span>
-                      <button id="rtc-slide-next-btn" class="btn-ghost" style="padding:4px 8px;font-size:10px;" type="button">NEXT</button>
-                      <a id="rtc-doc-open-link" class="btn btn-primary" style="padding:4px 8px;font-size:10px;" href="#" target="_blank">OPEN</a>
-                      <a id="rtc-doc-download-link" class="btn btn-ghost" style="padding:4px 8px;font-size:10px;" href="#" download>DOWNLOAD</a>
-                    </div>
-                  </div>
-                  <div id="live-materials-list" class="live-docs-bar"></div>
-                  <div id="live-doc-viewer-box"></div>
-                </div>
-
-                <div id="live-video-grid" class="live-video-grid"></div>
+                <div class="section-title">PARTICIPANTS</div>
                 <div id="live-participants-grid" class="live-participants-grid"></div>
               </section>
 
@@ -3662,16 +3335,6 @@ class BitVoidLocalServer(
               var directDeclineCallBtn = document.getElementById('direct-decline-call-btn');
               var directAcceptCallBtn = document.getElementById('direct-accept-call-btn');
               var liveErrorMsg = document.getElementById('live-error-msg');
-              var livePresentationStage = document.getElementById('live-presentation-stage');
-              var liveDocTitle = document.getElementById('live-doc-title');
-              var rtcSlidePrevBtn = document.getElementById('rtc-slide-prev-btn');
-              var rtcSlidePageLabel = document.getElementById('rtc-slide-page-label');
-              var rtcSlideNextBtn = document.getElementById('rtc-slide-next-btn');
-              var rtcDocOpenLink = document.getElementById('rtc-doc-open-link');
-              var rtcDocDownloadLink = document.getElementById('rtc-doc-download-link');
-              var liveMaterialsList = document.getElementById('live-materials-list');
-              var liveDocViewerBox = document.getElementById('live-doc-viewer-box');
-              var liveVideoGrid = document.getElementById('live-video-grid');
               var liveParticipantsGrid = document.getElementById('live-participants-grid');
 
               var toggleMediaBtn = document.getElementById('toggle-media-btn');
@@ -3697,21 +3360,15 @@ class BitVoidLocalServer(
 
               var rtcSocket = null;
               var rtcPeers = {};
-              var rtcRemoteStreams = {};
+              var rtcRemoteAudio = {};
               var rtcParticipantList = [];
               var rtcPeerId = '';
               var rtcRoomId = '';
-              var rtcMode = 'VOICE_VIDEO_CALL';
+              var rtcMode = 'AUDIO_CALL';
               var rtcRole = 'SPEAKER';
               var rtcClassCode = '';
-              var rtcMaterials = [];
-              var rtcActiveMaterialId = '';
-              var rtcActivePageIndex = 0;
               var rtcLocalStream = null;
-              var rtcScreenStream = null;
               var rtcMuted = false;
-              var rtcVideoOn = false;
-              var rtcScreenSharing = false;
               var directCallPromptOpen = false;
               var directCallConnecting = false;
               var directCallIncomingOpenPending = false;
@@ -4042,6 +3699,7 @@ class BitVoidLocalServer(
               function applyJoinedChannelData(data) {
                 activeDm = null;
                 activeChannel = data;
+                var isLiveAudioClass = !!data.classCode;
                 seenMsgIds = {};
                 chatBox.innerHTML = '';
                 var label = data.name || data.channelId;
@@ -4072,18 +3730,28 @@ class BitVoidLocalServer(
                   activeBadge.className = 'pill pill-amber';
                   exitChannelBtn.classList.remove('hidden');
                 }
-                renderWelcomeBanner(label, !!data.isPublic);
-                var list = data.media || data.videos || [];
-                currentChannelMediaSig = list.map(function (m) { return m.id; }).join('|');
-                renderMediaList(
-                  channelMediaFeed,
-                  list,
-                  data.token,
-                  'NO MEDIA IN CHANNEL YET',
-                  'Chat is active! Any media assigned by the Host appears here automatically.'
-                );
-                (data.messages || []).forEach(appendChatMessage);
-                connectChannelWs(data.channelId, data.token);
+                if (isLiveAudioClass) {
+                  if (activeSocket) {
+                    try { activeSocket.close(); } catch (e) {}
+                    activeSocket = null;
+                  }
+                  wsStatusEl.textContent = 'AUDIO';
+                  currentChannelMediaSig = '';
+                  channelMediaFeed.innerHTML = '';
+                } else {
+                  renderWelcomeBanner(label, !!data.isPublic);
+                  var list = data.media || data.videos || [];
+                  currentChannelMediaSig = list.map(function (m) { return m.id; }).join('|');
+                  renderMediaList(
+                    channelMediaFeed,
+                    list,
+                    data.token,
+                    'NO MEDIA IN CHANNEL YET',
+                    'Chat is active! Any media assigned by the Host appears here automatically.'
+                  );
+                  (data.messages || []).forEach(appendChatMessage);
+                  connectChannelWs(data.channelId, data.token);
+                }
                 highlightActiveSidebar();
                 closeSidebar();
               }
@@ -4272,21 +3940,21 @@ class BitVoidLocalServer(
                         liveStagePanel.classList.remove('hidden');
                         setMeetingStageActive(true);
                         liveRoomStatusEl.textContent = 'Ringing @' + activeDm.peerUsername + ' · your meeting stage is ready';
-                        renderRtcVideoTiles();
+                        renderRtcParticipants(rtcParticipantList);
                       } else if (phase === 'RINGING' && st.isIncoming && !rtcSocket) {
                         directCallPromptOpen = true;
                         liveStagePanel.classList.remove('hidden');
                         setMeetingStageActive(true);
                         liveRoomStatusEl.textContent = 'Incoming voice call from @' + st.callerUsername;
                         updateRtcControlsUi();
-                        renderRtcVideoTiles();
+                        renderRtcParticipants(rtcParticipantList);
                       } else if (phase === 'ACCEPTED') {
                         directCallPromptOpen = false;
                         updateRtcControlsUi();
                         if (!rtcSocket && !directCallConnecting &&
                             st.callerUsername && st.callerUsername.toLowerCase() === String(activeDm.myUsername).toLowerCase()) {
                           directCallConnecting = true;
-                          joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true, null, null, false);
+                          joinRtcSession('AUDIO_CALL', 'SPEAKER', true, null, null);
                         } else if (rtcSocket) {
                           liveRoomStatusEl.textContent = 'CALL WITH @' + activeDm.peerUsername + ' · Local P2P';
                         }
@@ -4569,59 +4237,6 @@ class BitVoidLocalServer(
                 }
               }
 
-              function renderLiveMaterials() {
-                if (!rtcMaterials || rtcMaterials.length === 0) {
-                  livePresentationStage.classList.add('hidden');
-                  liveMaterialsList.innerHTML = '';
-                  liveDocViewerBox.innerHTML = '';
-                  return;
-                }
-                livePresentationStage.classList.remove('hidden');
-                var activeMat = rtcMaterials.find(function (m) { return m.id === rtcActiveMaterialId; }) || rtcMaterials[0];
-                rtcActiveMaterialId = activeMat.id;
-
-                liveMaterialsList.innerHTML = rtcMaterials.map(function (m) {
-                  var cls = 'live-doc-chip' + (m.id === rtcActiveMaterialId ? ' active' : '');
-                  return '<button type="button" class="' + cls + '" data-mat-id="' + esc(m.id) + '">' + esc(m.fileName) + '</button>';
-                }).join('');
-                Array.prototype.forEach.call(liveMaterialsList.querySelectorAll('.live-doc-chip'), function (btn) {
-                  btn.onclick = function () {
-                    var mid = btn.getAttribute('data-mat-id');
-                    rtcActiveMaterialId = mid;
-                    rtcActivePageIndex = 0;
-                    renderLiveMaterials();
-                    if (rtcSocket && rtcSocket.readyState === 1) {
-                      rtcSocket.send(JSON.stringify({ type: 'active_material', materialId: mid, pageIndex: 0 }));
-                    }
-                  };
-                });
-
-                var tok = activeDm ? activeDm.token : (activeChannel ? activeChannel.token : '');
-                var q = tok ? ('?token=' + encodeURIComponent(tok)) : '';
-                var sUrl = (activeMat.streamUrl || '') + q;
-                var dUrl = (activeMat.downloadUrl || activeMat.streamUrl || '') + q;
-                liveDocTitle.textContent = activeMat.fileName + ' (' + fmtBytes(activeMat.sizeBytes || 0) + ' · by ' + (activeMat.uploadedBy || 'Presenter') + ')';
-                rtcSlidePageLabel.textContent = 'Slide / Page ' + (rtcActivePageIndex + 1);
-                rtcDocOpenLink.href = sUrl;
-                rtcDocDownloadLink.href = dUrl;
-                rtcDocDownloadLink.setAttribute('download', activeMat.fileName || 'document');
-
-                var lowerName = String(activeMat.fileName || '').toLowerCase();
-                var mime = String(activeMat.mimeType || '').toLowerCase();
-                if (mime.indexOf('image/') === 0) {
-                  liveDocViewerBox.innerHTML = '<img class="live-doc-preview-frame" src="' + esc(sUrl) + '" alt="' + esc(activeMat.fileName) + '">';
-                } else if (mime.indexOf('pdf') !== -1 || lowerName.endsWith('.pdf') || mime.indexOf('text/') === 0 || lowerName.endsWith('.txt')) {
-                  var pageHash = (mime.indexOf('pdf') !== -1 || lowerName.endsWith('.pdf')) ? ('#page=' + (rtcActivePageIndex + 1)) : '';
-                  liveDocViewerBox.innerHTML = '<iframe class="live-doc-preview-frame" src="' + esc(sUrl + pageHash) + '"></iframe>';
-                } else {
-                  liveDocViewerBox.innerHTML =
-                    '<div class="empty" style="padding:14px;">' +
-                      '<div class="empty-title">' + esc(activeMat.fileName) + '</div>' +
-                      '<p>Slide / Office presentation shared live (' + esc(activeMat.mimeType || 'document') + '). View synced slides in Android app or click OPEN / DOWNLOAD above.</p>' +
-                    '</div>';
-                }
-              }
-
               function isGeneralChatActive() {
                 return !!activeChannel &&
                   activeChannel.channelId === '${BitVoidChannelManager.DEFAULT_PUBLIC_CHANNEL_ID}';
@@ -4645,146 +4260,73 @@ class BitVoidLocalServer(
                   rtcStartClassHostBtn.classList.remove('hidden');
                   rtcJoinClassStudentBtn.classList.remove('hidden');
                   rtcStartCallBtn.classList.remove('hidden');
-                  rtcStartCallBtn.textContent = 'START VOICE CALL';
+                  rtcStartCallBtn.textContent = 'START AUDIO CALL';
                 }
                 directIncomingControls.classList.toggle(
                   'hidden',
                   !(activeDm && directCallPromptOpen && directCallLastPhase === 'RINGING' && !joined)
                 );
+                closeLiveStageBtn.classList.toggle('hidden', joined);
                 if (joined) {
                   var liveClassMode = rtcMode === 'LIVE_CLASSROOM';
+                  var isClassHost = liveClassMode && rtcRole === 'HOST_TEACHER';
                   liveLauncherControls.classList.add('hidden');
                   liveJoinIdRow.classList.add('hidden');
                   liveActiveControls.classList.remove('hidden');
                   rtcMuteBtn.textContent = rtcMuted ? 'MIC MUTED' : 'MIC ON';
-                  rtcLeaveBtn.classList.remove('hidden');
-                  if (liveClassMode && rtcRole === 'HOST_TEACHER') {
-                    rtcEndSessionBtn.classList.remove('hidden');
-                  } else {
-                    rtcEndSessionBtn.classList.add('hidden');
-                  }
+                  rtcLeaveBtn.classList.toggle('hidden', isClassHost);
+                  rtcEndSessionBtn.classList.toggle('hidden', !isClassHost);
                 } else {
                   liveLauncherControls.classList.toggle('hidden', !!activeDm || generalChat);
                   liveActiveControls.classList.add('hidden');
                   rtcLeaveBtn.classList.add('hidden');
+                  rtcEndSessionBtn.classList.add('hidden');
                 }
               }
 
               function renderRtcParticipants(peers) {
-                rtcParticipantList = peers || [];
-                liveParticipantsGrid.innerHTML = '';
-                renderRtcVideoTiles();
-              }
-
-              function appendRtcWaitingState(tile, title, subtitle, initials) {
-                var waiting = document.createElement('div');
-                waiting.className = 'live-waiting-state';
-                var avatar = document.createElement('div');
-                avatar.className = 'live-waiting-avatar';
-                avatar.textContent = String(initials || 'BV').slice(0, 2).toUpperCase();
-                var heading = document.createElement('div');
-                heading.className = 'live-waiting-title';
-                heading.textContent = title;
-                var note = document.createElement('div');
-                note.textContent = subtitle;
-                waiting.appendChild(avatar);
-                waiting.appendChild(heading);
-                waiting.appendChild(note);
-                tile.appendChild(waiting);
-              }
-
-              function renderRtcVideoTiles() {
-                liveVideoGrid.innerHTML = '';
-                var peers = rtcParticipantList.slice();
-
-                // While signaling is opening, show the local participant as a compact card rather
-                // than reserving the entire page for an empty presentation placeholder.
-                if (!peers.length && rtcSocket && rtcPeerId) {
-                  peers.push({
+                rtcParticipantList = Array.isArray(peers) ? peers.slice() : [];
+                var displayPeers = rtcParticipantList.slice();
+                if (!displayPeers.length && rtcSocket && rtcPeerId) {
+                  displayPeers.push({
                     peerId: rtcPeerId,
                     displayName: portalUsername || (activeDm ? activeDm.myUsername : 'You'),
                     role: rtcRole,
-                    isMuted: rtcMuted,
-                    isVideoOn: rtcVideoOn,
-                    isScreenSharing: rtcScreenSharing
+                    isMuted: rtcMuted
                   });
-                } else if (!peers.length && activeDm && directCallLastPhase === 'RINGING') {
-                  peers.push({
+                } else if (!displayPeers.length && activeDm && directCallLastPhase === 'RINGING') {
+                  displayPeers.push({
                     peerId: 'pending_remote',
                     displayName: '@' + activeDm.peerUsername,
                     role: 'SPEAKER',
-                    isMuted: true,
-                    isVideoOn: false,
-                    isScreenSharing: false
+                    isMuted: true
                   });
                 }
-
-                Object.keys(rtcRemoteStreams).forEach(function (pid) {
-                  if (!peers.some(function (p) { return p.peerId === pid; })) {
-                    peers.push({
-                      peerId: pid,
-                      displayName: pid,
-                      role: 'SPEAKER',
-                      isMuted: false,
-                      isVideoOn: false,
-                      isScreenSharing: false
-                    });
-                  }
-                });
-
-                peers.sort(function (a, b) {
-                  var presentingOrder = Number(!!b.isScreenSharing) - Number(!!a.isScreenSharing);
-                  if (presentingOrder) return presentingOrder;
-                  var teacherOrder = Number(b.role === 'HOST_TEACHER') - Number(a.role === 'HOST_TEACHER');
-                  if (teacherOrder) return teacherOrder;
+                displayPeers.sort(function (a, b) {
+                  var hostOrder = Number(b.role === 'HOST_TEACHER') - Number(a.role === 'HOST_TEACHER');
+                  if (hostOrder) return hostOrder;
                   return String(a.displayName || a.peerId).localeCompare(String(b.displayName || b.peerId));
                 });
-
-                peers.forEach(function (peer) {
+                liveParticipantsGrid.innerHTML = '';
+                displayPeers.forEach(function (peer) {
                   var isSelf = peer.peerId === rtcPeerId;
-                  var isLiveClass = rtcMode === 'LIVE_CLASSROOM';
-                  var isPresenting = isLiveClass && (isSelf ? rtcScreenSharing : !!peer.isScreenSharing);
-                  var isTeacher = isLiveClass && peer.role === 'HOST_TEACHER';
-                  var stream = isSelf
-                    ? (rtcScreenSharing && rtcScreenStream ? rtcScreenStream : rtcLocalStream)
-                    : rtcRemoteStreams[peer.peerId];
-                  var hasLiveVideo = isLiveClass && !!stream &&
-                    stream.getVideoTracks().some(function (track) { return track.readyState !== 'ended'; }) &&
-                    (isPresenting || (isSelf ? rtcVideoOn : !!peer.isVideoOn));
-                  var tile = document.createElement('div');
-                  tile.className = 'live-video-tile' +
-                    (isPresenting ? ' presenter-tile' : (isTeacher ? ' teacher-tile' : ''));
-
-                  if (hasLiveVideo) {
-                    var video = document.createElement('video');
-                    video.autoplay = true;
-                    video.muted = isSelf;
-                    video.playsInline = true;
-                    video.srcObject = stream;
-                    tile.appendChild(video);
-
-                    var label = document.createElement('span');
-                    label.className = 'live-tile-label';
-                    label.textContent = (isSelf ? 'YOU' : (peer.displayName || peer.peerId)) +
-                      (isPresenting ? ' · PRESENTING' : (isTeacher ? ' · HOST' : ''));
-                    tile.appendChild(label);
-                  } else {
-                    // Only the host carries a role word; students are identified by their ID.
-                    var roleLabel = peer.role === 'HOST_TEACHER'
-                      ? 'HOST'
-                      : (peer.role === 'SPEAKER' ? 'SPEAKER' : '');
-                    var audioLabel = peer.isMuted ? 'MUTED' : 'MIC LIVE';
-                    var subtitle = [roleLabel, audioLabel]
-                      .filter(function (part) { return !!part; })
-                      .join(' · ');
-                    appendRtcWaitingState(
-                      tile,
-                      (isSelf ? 'YOU · ' : '') + (peer.displayName || peer.peerId),
-                      subtitle,
-                      peer.displayName || peer.peerId
-                    );
-                  }
-                  liveVideoGrid.appendChild(tile);
+                  var isHost = peer.role === 'HOST_TEACHER';
+                  var name = peer.displayName || peer.peerId || 'Participant';
+                  var card = document.createElement('div');
+                  card.className = 'live-participant-card' + (isHost ? ' teacher' : '');
+                  var avatar = document.createElement('div');
+                  avatar.className = 'live-participant-avatar';
+                  avatar.textContent = String(name).slice(0, 2).toUpperCase();
+                  var title = document.createElement('div');
+                  title.className = 'live-participant-name';
+                  title.textContent = (isSelf ? 'YOU · ' : '') + name;
+                  var state = document.createElement('div');
+                  state.className = 'live-participant-state';
+                  state.textContent = (isHost ? 'HOST · ' : '') + (peer.isMuted ? 'MIC MUTED' : 'MIC LIVE');
+                  card.appendChild(avatar);
+                  card.appendChild(title);
+                  card.appendChild(state);
+                  liveParticipantsGrid.appendChild(card);
                 });
               }
 
@@ -4793,10 +4335,7 @@ class BitVoidLocalServer(
                 rtcSocket.send(JSON.stringify({
                   type: 'media_state',
                   roomId: rtcRoomId,
-                  isMuted: rtcMuted,
-                  isVideoOn: rtcMode === 'LIVE_CLASSROOM' && rtcVideoOn,
-                  isScreenSharing: rtcMode === 'LIVE_CLASSROOM' && rtcScreenSharing,
-                  role: rtcRole
+                  isMuted: rtcMuted
                 }));
               }
 
@@ -4806,24 +4345,23 @@ class BitVoidLocalServer(
                 return rtcPeerId < remotePeer.peerId;
               }
 
+              function removeRtcRemoteAudio(remotePeerId) {
+                var audio = rtcRemoteAudio[remotePeerId];
+                if (audio) {
+                  try { audio.pause(); } catch (e) {}
+                  audio.srcObject = null;
+                  if (audio.parentNode) audio.parentNode.removeChild(audio);
+                  delete rtcRemoteAudio[remotePeerId];
+                }
+              }
+
               function createOrGetRtcPeer(remotePeerId) {
                 if (rtcPeers[remotePeerId]) return rtcPeers[remotePeerId];
                 var pc = new RTCPeerConnection({ iceServers: [] });
                 rtcPeers[remotePeerId] = pc;
-
-                var activeOutVideo = rtcMode === 'LIVE_CLASSROOM'
-                  ? ((rtcScreenSharing && rtcScreenStream)
-                    ? rtcScreenStream.getVideoTracks()[0]
-                    : (rtcLocalStream ? rtcLocalStream.getVideoTracks()[0] : null))
-                  : null;
                 var activeOutAudio = rtcLocalStream ? rtcLocalStream.getAudioTracks()[0] : null;
-
                 var audioT = pc.addTransceiver('audio', { direction: 'sendrecv' });
                 if (activeOutAudio) audioT.sender.replaceTrack(activeOutAudio);
-                if (rtcMode === 'LIVE_CLASSROOM') {
-                  var videoT = pc.addTransceiver('video', { direction: 'sendrecv' });
-                  if (activeOutVideo) videoT.sender.replaceTrack(activeOutVideo);
-                }
 
                 pc.onicecandidate = function (ev) {
                   if (ev.candidate && rtcSocket && rtcSocket.readyState === 1) {
@@ -4839,25 +4377,29 @@ class BitVoidLocalServer(
                     }));
                   }
                 };
-
                 pc.ontrack = function (ev) {
-                  if (rtcMode !== 'LIVE_CLASSROOM' && ev.track && ev.track.kind === 'video') {
-                    ev.track.stop();
+                  if (!ev.track || ev.track.kind !== 'audio') {
+                    if (ev.track) ev.track.stop();
                     return;
                   }
-                  var stream = (ev.streams && ev.streams[0]) ? ev.streams[0] : new MediaStream([ev.track]);
-                  rtcRemoteStreams[remotePeerId] = stream;
-                  renderRtcVideoTiles();
+                  removeRtcRemoteAudio(remotePeerId);
+                  var audio = document.createElement('audio');
+                  audio.autoplay = true;
+                  audio.playsInline = true;
+                  audio.style.display = 'none';
+                  audio.srcObject = (ev.streams && ev.streams[0])
+                    ? ev.streams[0]
+                    : new MediaStream([ev.track]);
+                  document.body.appendChild(audio);
+                  rtcRemoteAudio[remotePeerId] = audio;
+                  audio.play().catch(function () {});
                 };
                 return pc;
               }
 
               function sendRtcOffer(remotePeerId) {
                 var pc = createOrGetRtcPeer(remotePeerId);
-                pc.createOffer({
-                  offerToReceiveAudio: true,
-                  offerToReceiveVideo: rtcMode === 'LIVE_CLASSROOM'
-                })
+                pc.createOffer({ offerToReceiveAudio: true })
                   .then(function (offer) {
                     return pc.setLocalDescription(offer).then(function () { return offer; });
                   })
@@ -4874,55 +4416,18 @@ class BitVoidLocalServer(
                   .catch(function () {});
               }
 
-              function replaceRtcOutgoingVideoTrack(track) {
-                Object.keys(rtcPeers).forEach(function (pid) {
-                  var transceiver = rtcPeers[pid].getTransceivers().find(function (tr) {
-                    return tr.receiver && tr.receiver.track && tr.receiver.track.kind === 'video';
-                  });
-                  if (transceiver && transceiver.sender) {
-                    transceiver.sender.replaceTrack(track || null).catch(function () {});
-                  }
-                });
-              }
-
-              function stopRtcScreenShare() {
-                var oldScreenStream = rtcScreenStream;
-                rtcScreenStream = null;
-                rtcScreenSharing = false;
-                if (oldScreenStream) {
-                  oldScreenStream.getTracks().forEach(function (t) {
-                    t.onended = null;
-                    t.stop();
-                  });
-                }
-                var camTrack = rtcLocalStream ? rtcLocalStream.getVideoTracks()[0] : null;
-                replaceRtcOutgoingVideoTrack(camTrack || null);
-                updateRtcControlsUi();
-                renderRtcVideoTiles();
-                sendRtcMediaState();
-              }
-
               function cleanupRtcPeersAndMedia() {
                 Object.keys(rtcPeers).forEach(function (pid) {
                   try { rtcPeers[pid].close(); } catch (e) {}
                 });
                 rtcPeers = {};
-                rtcRemoteStreams = {};
+                Object.keys(rtcRemoteAudio).forEach(removeRtcRemoteAudio);
+                rtcRemoteAudio = {};
                 if (rtcLocalStream) {
-                  rtcLocalStream.getTracks().forEach(function (t) { t.stop(); });
+                  rtcLocalStream.getTracks().forEach(function (track) { track.stop(); });
                   rtcLocalStream = null;
                 }
-                if (rtcScreenStream) {
-                  rtcScreenStream.getTracks().forEach(function (t) {
-                    t.onended = null;
-                    t.stop();
-                  });
-                  rtcScreenStream = null;
-                }
-                rtcScreenSharing = false;
-                rtcVideoOn = false;
                 rtcMuted = false;
-                liveVideoGrid.innerHTML = '';
               }
 
               function leaveRtcSession() {
@@ -4938,50 +4443,46 @@ class BitVoidLocalServer(
                 cleanupRtcPeersAndMedia();
                 renderRtcParticipants([]);
                 renderLiveClassCode('');
-                rtcMaterials = [];
-                rtcActiveMaterialId = '';
-                rtcActivePageIndex = 0;
-                renderLiveMaterials();
                 setMeetingStageActive(false);
                 updateRtcControlsUi();
-                liveRoomStatusEl.textContent = 'Left live session';
+                liveRoomStatusEl.textContent = 'Left audio session';
               }
 
               function mediaPermissionMessage(err) {
                 var name = err && err.name ? err.name : '';
                 if (name === 'NotAllowedError' || name === 'SecurityError') {
-                  return 'Microphone or Live Class camera permission was blocked. Update the browser site permissions, then try again.';
+                  return 'Microphone permission was blocked. Update the browser site permission, then try again.';
                 }
                 if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
-                  return 'No usable camera or microphone was found. Connect a device and check operating-system privacy settings.';
+                  return 'No usable microphone was found. Connect one and check operating-system privacy settings.';
                 }
                 if (name === 'NotReadableError' || name === 'TrackStartError') {
-                  return 'The camera or microphone is busy in another app. Close that app and try again.';
+                  return 'The microphone is busy in another app. Close that app and try again.';
                 }
-                return 'Unable to start camera or microphone: ' + ((err && err.message) || name || 'unknown browser error');
+                return 'Unable to start the microphone: ' + ((err && err.message) || name || 'unknown browser error');
               }
 
-              function joinRtcSession(mode, role, startWithMedia, roomOverride, presetClassCode, startWithVideo) {
+              function joinRtcSession(mode, role, startWithMedia, roomOverride, presetClassCode) {
                 var targetRoom = roomOverride || (activeDm ? activeDm.dmId : (activeChannel ? activeChannel.channelId : ''));
                 var targetToken = activeDm ? activeDm.token : (activeChannel ? activeChannel.token : '');
                 var targetChannelId = activeChannel ? activeChannel.channelId : targetRoom;
                 if (!targetRoom) {
-                  showRtcError('Open a channel or Direct Chat before starting a Live Class or Call.');
+                  showRtcError('Open a channel or Direct Chat before starting an audio session.');
                   return;
                 }
-                if (!activeDm && mode === 'VOICE_VIDEO_CALL' && isGeneralChatActive()) {
-                  showRtcError('Voice calls are unavailable in General Chat. Open P.Chat or another channel.');
+                if (!activeDm && mode === 'AUDIO_CALL' && isGeneralChatActive()) {
+                  showRtcError('Audio calls are unavailable in General Chat. Open P.Chat or another channel.');
                   liveStagePanel.classList.add('hidden');
                   setMeetingStageActive(false);
                   return;
                 }
                 if (typeof RTCPeerConnection === 'undefined') {
-                  showRtcError('WebRTC is not supported by this browser.');
+                  showRtcError('WebRTC audio is not supported by this browser.');
                   directCallConnecting = false;
                   return;
                 }
                 if (startWithMedia && !window.isSecureContext) {
-                  showRtcError((mode === 'LIVE_CLASSROOM' ? 'Camera and microphone' : 'Microphone') + ' access requires trusted HTTPS. Open /secure-setup, install the BitVoid local CA, then use the secure portal URL.');
+                  showRtcError('Microphone access requires trusted HTTPS. Open /secure-setup, install the BitVoid local CA, then use the secure portal URL.');
                   liveStagePanel.classList.remove('hidden');
                   setMeetingStageActive(true);
                   liveRoomStatusEl.innerHTML = 'Secure browser setup required · <a href="/secure-setup?username=' + encodeURIComponent(activeDm ? activeDm.myUsername : portalUsername) + '">OPEN SETUP</a>';
@@ -4989,7 +4490,7 @@ class BitVoidLocalServer(
                   return;
                 }
                 if (startWithMedia && (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)) {
-                  showRtcError('This browser does not expose microphone/media controls. Use a current Chrome, Edge, Firefox, or Safari over the secure portal URL.');
+                  showRtcError('This browser does not expose microphone controls. Use a current browser over the secure portal URL.');
                   directCallConnecting = false;
                   return;
                 }
@@ -5000,33 +4501,25 @@ class BitVoidLocalServer(
                 rtcRoomId = targetRoom;
                 rtcMode = mode;
                 rtcRole = role;
+                if (mode === 'LIVE_CLASSROOM' && activeSocket) {
+                  try { activeSocket.close(); } catch (e) {}
+                  activeSocket = null;
+                  wsStatusEl.textContent = 'AUDIO';
+                }
+                liveModeBadge.textContent = mode === 'LIVE_CLASSROOM' ? 'LIVE AUDIO CLASS' : 'AUDIO CALL';
                 if (presetClassCode) renderLiveClassCode(presetClassCode);
                 rtcPeerId = 'web_' + Math.random().toString(36).slice(2, 10);
-                rtcMuted = (role === 'STUDENT_VIEWER');
-                renderRtcVideoTiles();
+                rtcMuted = role === 'STUDENT_VIEWER';
 
-                // Live classes are audio-first: the stage no longer exposes camera controls.
-                var wantsVideo = false;
                 var mediaPromise = startWithMedia
-                  ? navigator.mediaDevices.getUserMedia({ audio: true, video: wantsVideo })
-                      .catch(function (err) {
-                        if (wantsVideo && (err.name === 'NotFoundError' || err.name === 'OverconstrainedError')) {
-                          showRtcError('Camera unavailable; continuing as a voice call.');
-                          return navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-                        }
-                        throw err;
-                      })
+                  ? navigator.mediaDevices.getUserMedia({ audio: true })
                   : Promise.resolve(null);
 
                 mediaPromise.then(function (stream) {
                   rtcLocalStream = stream;
                   if (stream) {
-                    stream.getAudioTracks().forEach(function (t) { t.enabled = !rtcMuted; });
-                    rtcVideoOn = mode === 'LIVE_CLASSROOM' &&
-                      stream.getVideoTracks().length > 0 && role !== 'STUDENT_VIEWER';
-                    stream.getVideoTracks().forEach(function (t) { t.enabled = rtcVideoOn; });
+                    stream.getAudioTracks().forEach(function (track) { track.enabled = !rtcMuted; });
                   } else {
-                    rtcVideoOn = false;
                     rtcMuted = true;
                   }
 
@@ -5041,23 +4534,21 @@ class BitVoidLocalServer(
                     '&mode=' + encodeURIComponent(rtcMode) +
                     '&role=' + encodeURIComponent(rtcRole) +
                     '&isMuted=' + rtcMuted +
-                    '&isVideoOn=' + rtcVideoOn +
-                    '&isScreenSharing=false' +
                     (targetToken ? ('&token=' + encodeURIComponent(targetToken)) : '');
 
                   rtcSocket = new WebSocket(wsUrl);
                   updateRtcControlsUi();
-                  renderRtcVideoTiles();
-                  liveRoomStatusEl.textContent = 'Connecting WebRTC signaling...';
+                  renderRtcParticipants([]);
+                  liveRoomStatusEl.textContent = 'Connecting audio signaling...';
 
                   rtcSocket.onopen = function () {
                     var callLabel = activeDm && directCallLastPhase === 'RINGING'
-                      ? ('RINGING @' + activeDm.peerUsername + ' · your meeting stage is ready')
-                      : (activeDm ? ('VOICE CALL WITH @' + activeDm.peerUsername) : 'VOICE CALL LIVE');
-                    liveRoomStatusEl.textContent = (rtcMode === 'LIVE_CLASSROOM' ? 'LIVE CLASS ACTIVE' : callLabel) + ' · Local P2P';
+                      ? ('RINGING @' + activeDm.peerUsername + ' · your audio stage is ready')
+                      : (activeDm ? ('AUDIO CALL WITH @' + activeDm.peerUsername) : 'AUDIO CALL LIVE');
+                    liveRoomStatusEl.textContent = (rtcMode === 'LIVE_CLASSROOM' ? 'LIVE AUDIO CLASS ACTIVE' : callLabel) + ' · Local P2P';
                   };
                   rtcSocket.onerror = function () {
-                    showRtcError('WebRTC signaling error on /ws/signaling.');
+                    showRtcError('WebRTC audio signaling error on /ws/signaling.');
                   };
                   rtcSocket.onclose = function () {
                     rtcSocket = null;
@@ -5069,17 +4560,11 @@ class BitVoidLocalServer(
                       var msg = JSON.parse(ev.data);
                       if (msg.type === 'welcome') {
                         if (msg.classCode) renderLiveClassCode(msg.classCode);
-                        if (Array.isArray(msg.materials)) {
-                          rtcMaterials = msg.materials;
-                          rtcActiveMaterialId = msg.activeMaterialId || '';
-                          rtcActivePageIndex = msg.activePageIndex || 0;
-                          renderLiveMaterials();
-                        }
                         renderRtcParticipants(msg.peers || []);
-                        (msg.peers || []).forEach(function (p) {
-                          if (p.peerId !== rtcPeerId) {
-                            createOrGetRtcPeer(p.peerId);
-                            if (shouldInitiateRtcOffer(p)) sendRtcOffer(p.peerId);
+                        (msg.peers || []).forEach(function (peer) {
+                          if (peer.peerId !== rtcPeerId) {
+                            createOrGetRtcPeer(peer.peerId);
+                            if (shouldInitiateRtcOffer(peer)) sendRtcOffer(peer.peerId);
                           }
                         });
                       } else if (msg.type === 'peer_joined') {
@@ -5092,19 +4577,12 @@ class BitVoidLocalServer(
                       } else if (msg.type === 'peers_update') {
                         if (msg.classCode) renderLiveClassCode(msg.classCode);
                         renderRtcParticipants(msg.peers || []);
-                        renderRtcVideoTiles();
-                      } else if (msg.type === 'material_shared' || msg.type === 'material_state') {
-                        if (Array.isArray(msg.materials)) rtcMaterials = msg.materials;
-                        if (msg.activeMaterialId) rtcActiveMaterialId = msg.activeMaterialId;
-                        if (typeof msg.activePageIndex === 'number') rtcActivePageIndex = msg.activePageIndex;
-                        renderLiveMaterials();
                       } else if (msg.type === 'peer_left') {
                         renderRtcParticipants(msg.peers || []);
                         if (msg.peerId && rtcPeers[msg.peerId]) {
                           try { rtcPeers[msg.peerId].close(); } catch (e) {}
                           delete rtcPeers[msg.peerId];
-                          delete rtcRemoteStreams[msg.peerId];
-                          renderRtcVideoTiles();
+                          removeRtcRemoteAudio(msg.peerId);
                         }
                       } else if (msg.type === 'session_ended') {
                         leaveRtcSession();
@@ -5112,38 +4590,26 @@ class BitVoidLocalServer(
                         var pc = createOrGetRtcPeer(msg.fromPeerId);
                         pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp })
                           .then(function () {
-                            if (rtcMode !== 'LIVE_CLASSROOM') {
-                              pc.getTransceivers().forEach(function (transceiver) {
-                                var receiverTrack = transceiver.receiver && transceiver.receiver.track;
-                                if (receiverTrack && receiverTrack.kind === 'video') {
-                                  receiverTrack.enabled = false;
-                                  transceiver.direction = 'inactive';
-                                }
-                              });
-                            }
-                            return pc.createAnswer({
-                              offerToReceiveAudio: true,
-                              offerToReceiveVideo: rtcMode === 'LIVE_CLASSROOM'
-                            });
+                            return pc.createAnswer({ offerToReceiveAudio: true });
                           })
-                          .then(function (ans) {
-                            return pc.setLocalDescription(ans).then(function () { return ans; });
+                          .then(function (answer) {
+                            return pc.setLocalDescription(answer).then(function () { return answer; });
                           })
-                          .then(function (ans) {
+                          .then(function (answer) {
                             if (rtcSocket && rtcSocket.readyState === 1) {
                               rtcSocket.send(JSON.stringify({
                                 type: 'answer',
                                 roomId: rtcRoomId,
                                 targetPeerId: msg.fromPeerId,
-                                sdp: ans.sdp
+                                sdp: answer.sdp
                               }));
                             }
                           })
                           .catch(function () {});
                       } else if (msg.type === 'answer' && msg.fromPeerId && msg.sdp) {
-                        var pcAns = rtcPeers[msg.fromPeerId];
-                        if (pcAns) {
-                          pcAns.setRemoteDescription({ type: 'answer', sdp: msg.sdp }).catch(function () {});
+                        var pcAnswer = rtcPeers[msg.fromPeerId];
+                        if (pcAnswer) {
+                          pcAnswer.setRemoteDescription({ type: 'answer', sdp: msg.sdp }).catch(function () {});
                         }
                       } else if (msg.type === 'ice' && msg.fromPeerId && msg.candidate) {
                         var pcIce = rtcPeers[msg.fromPeerId];
@@ -5157,7 +4623,7 @@ class BitVoidLocalServer(
                   directCallConnecting = false;
                   cleanupRtcPeersAndMedia();
                   showRtcError(mediaPermissionMessage(err));
-                  liveRoomStatusEl.textContent = 'Camera / microphone access required before media can connect';
+                  liveRoomStatusEl.textContent = 'Microphone access is required before audio can connect';
                 });
               }
 
@@ -5166,7 +4632,7 @@ class BitVoidLocalServer(
                 if (!window.isSecureContext) {
                   liveStagePanel.classList.remove('hidden');
                   setMeetingStageActive(true);
-                  renderRtcVideoTiles();
+                  renderRtcParticipants(rtcParticipantList);
                   showRtcError('Browser calls require the trusted HTTPS portal. Complete the one-time certificate setup first.');
                   liveRoomStatusEl.innerHTML = 'Secure browser setup required · <a href="/secure-setup?username=' + encodeURIComponent(activeDm.myUsername || '') + '">OPEN SETUP</a>';
                   return;
@@ -5180,7 +4646,7 @@ class BitVoidLocalServer(
                   fetch('/api/dm/' + encodeURIComponent(activeDm.dmId) + '/call/invite', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-DM-Token': activeDm.token },
-                    body: JSON.stringify({ withVideo: false })
+                    body: '{}'
                   }).then(function (r) {
                     if (!r.ok) {
                       return r.json().then(function (d) {
@@ -5195,7 +4661,7 @@ class BitVoidLocalServer(
                     setMeetingStageActive(true);
                     voiceCallBtn.classList.add('active');
                     liveRoomStatusEl.textContent = 'Ringing @' + activeDm.peerUsername + ' · opening your voice call';
-                    joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true, null, null, false);
+                    joinRtcSession('AUDIO_CALL', 'SPEAKER', true, null, null);
                   }).catch(function (err) {
                     showRtcError(err.message || 'Unable to ring this user.');
                   });
@@ -5225,7 +4691,7 @@ class BitVoidLocalServer(
                     directCallLastPhase = 'ACCEPTED';
                     directCallConnecting = true;
                     joinRtcSession(
-                      'VOICE_VIDEO_CALL',
+                      'AUDIO_CALL',
                       'SPEAKER',
                       true,
                       null,
@@ -5297,23 +4763,7 @@ class BitVoidLocalServer(
                   setMeetingStageActive(false);
                   return;
                 }
-                joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true, null, null, false);
-              });
-              rtcSlidePrevBtn.addEventListener('click', function () {
-                if (rtcActivePageIndex > 0) {
-                  rtcActivePageIndex = rtcActivePageIndex - 1;
-                  renderLiveMaterials();
-                  if (rtcSocket && rtcSocket.readyState === 1) {
-                    rtcSocket.send(JSON.stringify({ type: 'slide_nav', materialId: rtcActiveMaterialId, pageIndex: rtcActivePageIndex }));
-                  }
-                }
-              });
-              rtcSlideNextBtn.addEventListener('click', function () {
-                rtcActivePageIndex = rtcActivePageIndex + 1;
-                renderLiveMaterials();
-                if (rtcSocket && rtcSocket.readyState === 1) {
-                  rtcSocket.send(JSON.stringify({ type: 'slide_nav', materialId: rtcActiveMaterialId, pageIndex: rtcActivePageIndex }));
-                }
+                joinRtcSession('AUDIO_CALL', 'SPEAKER', true, null, null);
               });
               rtcMuteBtn.addEventListener('click', function () {
                 // Listeners join without a captured track; the MIC control acquires one on demand.
@@ -5322,7 +4772,7 @@ class BitVoidLocalServer(
                     showRtcError('This browser does not expose microphone controls.');
                     return;
                   }
-                  navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+                  navigator.mediaDevices.getUserMedia({ audio: true })
                     .then(function (micStream) {
                       var micTrack = micStream.getAudioTracks()[0];
                       if (!micTrack) return;
@@ -5342,7 +4792,7 @@ class BitVoidLocalServer(
                         }
                       });
                       updateRtcControlsUi();
-                      renderRtcVideoTiles();
+                      renderRtcParticipants(rtcParticipantList);
                       sendRtcMediaState();
                     })
                     .catch(function () {
@@ -6067,9 +5517,7 @@ class BitVoidLocalServer(
         private val displayName: String?,
         private val mode: SignalingSessionMode,
         private val role: ParticipantRole,
-        private val initialMuted: Boolean,
-        private val initialVideoOn: Boolean,
-        private val initialScreenSharing: Boolean
+        private val initialMuted: Boolean
     ) : WebSocket(handshakeRequest), BitVoidSignalingServer.SignalingSocketListener {
 
         private var activePeer: SignalingPeer? = null
@@ -6083,8 +5531,6 @@ class BitVoidLocalServer(
                 mode = mode,
                 role = role,
                 isMuted = initialMuted,
-                isVideoOn = initialVideoOn,
-                isScreenSharing = initialScreenSharing,
                 listener = this
             )
         }

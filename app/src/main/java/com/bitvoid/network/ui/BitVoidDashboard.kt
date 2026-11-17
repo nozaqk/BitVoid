@@ -41,7 +41,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -49,14 +48,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Dns
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PhotoLibrary
@@ -64,14 +59,9 @@ import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Router
-import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material.icons.filled.VpnKey
-import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.WifiFind
 import androidx.compose.material.icons.filled.WifiTethering
 import androidx.compose.material3.AlertDialog
@@ -91,8 +81,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -122,22 +110,17 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bitvoid.network.channel.BitVoidChannel
-import com.bitvoid.network.channel.ChannelParticipant
 import com.bitvoid.network.client.BitVoidClientManager
 import com.bitvoid.network.media.BitVoidMediaItem
 import com.bitvoid.network.model.AppBottomTab
 import com.bitvoid.network.model.AuditLogEntry
 import com.bitvoid.network.model.BitVoidNetworkConfig
-import com.bitvoid.network.model.ClientConnectionStatus
 import com.bitvoid.network.model.ClientState
-import com.bitvoid.network.model.DiscoveredNetwork
 import com.bitvoid.network.model.HostState
 import com.bitvoid.network.model.HotspotStatus
 import com.bitvoid.network.model.NodeMode
@@ -220,26 +203,8 @@ fun BitVoidDashboard(
             onCancelDirectCall = { dmId, token ->
                 viewModel.cancelDirectCall(dmId, token)
             },
-            onUploadClassroomDocument = { roomId, uri, isDirect ->
-                viewModel.uploadClassroomDocument(roomId, uri, isDirect)
-            },
-            onSelectClassroomMaterial = { materialId ->
-                viewModel.selectClassroomMaterial(materialId)
-            },
-            onSetClassroomSlidePage = { pageIndex ->
-                viewModel.setClassroomSlidePage(pageIndex)
-            },
-            onOpenMaterialExternally = { material ->
-                viewModel.openMaterialExternally(material)
-            },
             onToggleMicMute = { viewModel.toggleCallMicMute() },
-            onToggleCamera = { viewModel.toggleCallCamera() },
-            onSwitchCamera = { viewModel.switchCallCamera() },
             onToggleSpeakerphone = { viewModel.toggleCallSpeakerphone() },
-            onStartScreenShare = { resultCode, data ->
-                viewModel.startScreenShare(resultCode, data)
-            },
-            onStopScreenShare = { viewModel.stopScreenShare() },
             onLeaveSession = { viewModel.leaveCallSession() },
             onEndClassroomSession = { viewModel.endLiveClassSession() },
             onClearCallError = { viewModel.clearCallError() }

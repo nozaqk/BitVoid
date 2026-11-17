@@ -27,7 +27,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
@@ -1066,42 +1065,44 @@ class BitVoidLocalServerTest {
     }
 
     @Test
-    fun `portal html exposes an audio-first live class stage with top-bar leave`() {
+    fun `portal html exposes only audio live class controls and participant stage`() {
         BitVoidChannelManager.ensureDefaultChannel()
         val conn = URL("http://127.0.0.1:$testPort/").openConnection() as HttpURLConnection
         assertEquals(200, conn.responseCode)
         val permissionsPolicy = conn.getHeaderField("Permissions-Policy").orEmpty()
-        assertTrue(permissionsPolicy.contains("camera=(self)"))
         assertTrue(permissionsPolicy.contains("microphone=(self)"))
-        assertTrue(permissionsPolicy.contains("display-capture=(self)"))
+        assertFalse(permissionsPolicy.contains("camera="))
+        assertFalse(permissionsPolicy.contains("display-capture="))
 
         val html = String(conn.inputStream.readBytes(), StandardCharsets.UTF_8)
         conn.disconnect()
         assertTrue(html.contains("/ws/signaling"))
-        assertTrue(html.contains("LIVE CLASS / CALL"))
+        assertTrue(html.contains("AUDIO CLASS &amp; CALL"))
         assertTrue(html.contains("rtc-start-class-host-btn"))
-        assertTrue(html.contains("rtc-start-call-btn"))
-        assertTrue(html.contains("START VOICE CALL"))
-        assertFalse(html.contains("START VOICE / VIDEO CALL"))
+        assertTrue(html.contains("START LIVE AUDIO CLASS (HOST)"))
+        assertTrue(html.contains("START AUDIO CALL"))
         assertTrue(html.contains("rtc-leave-btn"))
-        assertTrue(html.contains("var subtitle = [roleLabel, audioLabel]"))
+        assertTrue(html.contains("live-participants-grid"))
+        assertTrue(html.contains("live-participant-card"))
+        assertTrue(html.contains("direct-incoming-controls"))
+        assertTrue(html.contains("meeting-active"))
+        assertTrue(html.contains("activeChannel.channelId === 'general-chat'"))
+        assertTrue(html.contains("joinRtcSession('AUDIO_CALL', 'SPEAKER', true, null, null)"))
+        assertTrue(html.contains("navigator.mediaDevices.getUserMedia({ audio: true })"))
+        assertTrue(html.contains("body: '{}'"))
         assertFalse(html.contains("rtc-share-screen-btn"))
         assertFalse(html.contains("rtc-cam-btn"))
         assertFalse(html.contains("rtc-upload-doc-btn"))
-        assertTrue(html.contains("direct-incoming-controls"))
-        assertTrue(html.contains("meeting-active"))
-        assertTrue(html.contains("var peers = rtcParticipantList.slice();"))
-        assertFalse(html.contains("Camera is off · audio meeting stage is ready"))
-        assertFalse(html.contains("Meeting participants"))
-        assertTrue(html.contains("Calls are unavailable in General Chat"))
-        assertTrue(html.contains("activeChannel.channelId === 'general-chat'"))
-        assertTrue(html.contains("joinRtcSession('VOICE_VIDEO_CALL', 'SPEAKER', true, null, null, false)"))
-        assertTrue(html.contains("body: JSON.stringify({ withVideo: false })"))
+        assertFalse(html.contains("live-presentation-stage"))
+        assertFalse(html.contains("live-video-grid"))
+        assertFalse(html.contains("isVideoOn"))
+        assertFalse(html.contains("isScreenSharing"))
+        assertFalse(html.contains("withVideo"))
         assertFalse(html.contains("window.confirm"))
     }
 
     @Test
-    fun `webrtc signaling ws enforces private channel auth and relays sdp offers answers ice and screen share state`() = runBlocking {
+    fun `audio webrtc signaling enforces auth strips non-audio sdp and syncs microphone state`() = runBlocking {
         val classChannel = BitVoidChannelManager.createChannel(
             rawName = "Mesh Classroom",
             isPublic = false,
@@ -1194,8 +1195,15 @@ class BitVoidLocalServerTest {
             assertEquals(2, statusJson.getInt("participantCount"))
             assertEquals("LIVE_CLASSROOM", statusJson.getString("mode"))
 
-            // 4. Relay SDP offer, answer, ICE candidate, and screen sharing state
-            teacherWs.send("""{"type":"offer","targetPeerId":"student_1","sdp":"v=0-offer"}""")
+            // 4. Relay SDP and ICE while retaining only the audio media section.
+            val mixedOfferSdp = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:1\r\n"
+            teacherWs.send(
+                JSONObject()
+                    .put("type", "offer")
+                    .put("targetPeerId", "student_1")
+                    .put("sdp", mixedOfferSdp)
+                    .toString()
+            )
             waitCount = 0
             while (studentMessages.none { it.optString("type") == "offer" } && waitCount < 30) {
                 delay(40)
@@ -1203,7 +1211,8 @@ class BitVoidLocalServerTest {
             }
             val offerMsg = studentMessages.first { it.optString("type") == "offer" }
             assertEquals("teacher_1", offerMsg.getString("fromPeerId"))
-            assertEquals("v=0-offer", offerMsg.getString("sdp"))
+            assertTrue(offerMsg.getString("sdp").contains("m=audio"))
+            assertFalse(offerMsg.getString("sdp").contains("m=video"))
 
             studentWs.send("""{"type":"answer","targetPeerId":"teacher_1","sdp":"v=0-answer"}""")
             studentWs.send("""{"type":"ice","targetPeerId":"teacher_1","candidate":"cand:1 1 udp 1 192.168.43.2 5000 typ host","sdpMid":"0","sdpMLineIndex":0}""")
@@ -1217,22 +1226,23 @@ class BitVoidLocalServerTest {
             assertEquals("v=0-answer", teacherMessages.first { it.optString("type") == "answer" }.getString("sdp"))
             assertTrue(teacherMessages.first { it.optString("type") == "ice" }.getString("candidate").contains("192.168.43.2"))
 
-            teacherWs.send("""{"type":"media_state","isMuted":false,"isVideoOn":true,"isScreenSharing":true}""")
+            teacherWs.send("""{"type":"media_state","isMuted":true}""")
             waitCount = 0
             while (studentMessages.none {
                     it.optString("type") == "peers_update" &&
-                        it.optJSONObject("peer")?.optBoolean("isScreenSharing") == true
+                        it.optJSONObject("peer")?.optBoolean("isMuted") == true
                 } && waitCount < 30
             ) {
                 delay(40)
                 waitCount++
             }
-            assertTrue(
-                studentMessages.any {
-                    it.optString("type") == "peers_update" &&
-                        it.optJSONObject("peer")?.optBoolean("isScreenSharing") == true
-                }
-            )
+            val updatedPeer = studentMessages.last {
+                it.optString("type") == "peers_update" &&
+                    it.optJSONObject("peer")?.optBoolean("isMuted") == true
+            }.getJSONObject("peer")
+            assertTrue(updatedPeer.getBoolean("isMuted"))
+            assertFalse(updatedPeer.has("isVideoOn"))
+            assertFalse(updatedPeer.has("isScreenSharing"))
 
             // 5. End session broadcasts session_ended and clears room
             teacherWs.send("""{"type":"end_session"}""")
@@ -1262,7 +1272,7 @@ class BitVoidLocalServerTest {
     }
 
     @Test
-    fun `live class generates CLS code validates join-by-id syncs uploaded documents and slides over signaling`() = runBlocking {
+    fun `audio live class generates CLS code validates join by id and exposes no presentation state`() = runBlocking {
         val classChannel = BitVoidChannelManager.createChannel(
             rawName = "Physics 101",
             isPublic = false,
@@ -1278,6 +1288,8 @@ class BitVoidLocalServerTest {
         val portalHtml = String(portalConn.inputStream.readBytes(), StandardCharsets.UTF_8)
         portalConn.disconnect()
         assertFalse(portalHtml.contains("rtc-upload-doc-btn"))
+        assertFalse(portalHtml.contains("live-presentation-stage"))
+        assertFalse(portalHtml.contains("slide_nav"))
         assertTrue(portalHtml.contains("live-class-code-pill"))
         assertTrue(portalHtml.contains("sidebar-class-code-input"))
         assertTrue(portalHtml.contains("live-join-id-row"))
@@ -1322,18 +1334,17 @@ class BitVoidLocalServerTest {
             val generatedClassCode = welcome.optString("classCode")
             assertTrue("Expected CLS-... Live Class ID, got '$generatedClassCode'", generatedClassCode.startsWith("CLS-"))
 
-            // 2. Unauthorized material upload on private classroom returns 401
-            val unauthUpload = postMultipartBytes(
-                url = "$baseUrl/api/live-class/${classChannel.channelId}/materials",
-                tokenHeader = null,
-                tokenValue = null,
-                boundary = "----BitVoidUnauthDoc",
-                fileName = "lecture1.pdf",
-                mimeType = "application/pdf",
-                fileBytes = "%PDF-1.4 LECTURE".toByteArray(StandardCharsets.UTF_8),
-                caption = ""
-            ).first
-            assertEquals(401, unauthUpload)
+            // 2. The former Live Class materials endpoint no longer exists.
+            val removedMaterialsEndpoint = (URL(
+                "$baseUrl/api/live-class/${classChannel.channelId}/materials"
+            ).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                setRequestProperty("X-Channel-Token", hostSession.token)
+                outputStream.use { it.write(ByteArray(0)) }
+            }
+            assertEquals(405, removedMaterialsEndpoint.responseCode)
+            removedMaterialsEndpoint.disconnect()
 
             // 3. Student joins purely via generated Live Class ID without knowing private CH-ID
             val joinRes = studentRepo.joinLiveClassByCode(generatedClassCode, "student-ada", baseUrl)
@@ -1342,6 +1353,9 @@ class BitVoidLocalServerTest {
             assertEquals(classChannel.channelId, joinInfo.roomId)
             assertEquals(generatedClassCode, joinInfo.classCode)
             assertTrue(joinInfo.token.startsWith("BVC."))
+            assertEquals(ClientWsStatus.DISCONNECTED, studentRepo.wsStatus.value)
+            assertTrue(studentRepo.channelMessages.value.isEmpty())
+            assertTrue(studentRepo.activeChannelSession.value?.mediaList.orEmpty().isEmpty())
 
             val studentUrl = "ws://127.0.0.1:$testPort/ws/signaling?roomId=${joinInfo.roomId}&channelId=${joinInfo.channelId}&peerId=stu_ada&displayName=${joinInfo.callsign}&mode=LIVE_CLASSROOM&role=STUDENT_VIEWER&token=${joinInfo.token}"
             studentWs = okClient.newWebSocket(
@@ -1359,45 +1373,17 @@ class BitVoidLocalServerTest {
             }
             assertEquals(generatedClassCode, studentMessages.first { it.optString("type") == "welcome" }.optString("classCode"))
 
-            // 4. Host uploads PPTX slide deck into active room; Student receives material_shared over WS
-            val (uploadCode, uploadBody) = postMultipartBytes(
-                url = "$baseUrl/api/live-class/${classChannel.channelId}/materials",
-                tokenHeader = "X-Channel-Token",
-                tokenValue = hostSession.token,
-                boundary = "----BitVoidSlideBoundary",
-                fileName = "quantum_slides.pptx",
-                mimeType = "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                fileBytes = "PK\u0003\u0004MOCK-PPTX-PAYLOAD".toByteArray(StandardCharsets.UTF_8),
-                caption = ""
-            )
-            assertEquals(200, uploadCode)
-            val uploadedMaterialId = JSONObject(uploadBody).getJSONObject("material").getString("id")
+            // 4. Welcome and subsequent signaling contain participant/audio state only.
+            val studentWelcome = studentMessages.first { it.optString("type") == "welcome" }
+            assertFalse(studentWelcome.has("materials"))
+            assertFalse(studentWelcome.has("activeMaterialId"))
+            assertFalse(studentWelcome.has("activePageIndex"))
 
-            waitCount = 0
-            while (studentMessages.none { it.optString("type") == "material_shared" } && waitCount < 30) {
-                delay(40)
-                waitCount++
-            }
-            val sharedEvent = studentMessages.first { it.optString("type") == "material_shared" }
-            assertEquals(uploadedMaterialId, sharedEvent.getString("activeMaterialId"))
-
-            // 5. Host advances slide page -> Student receives synchronized material_state
-            hostWs.send("""{"type":"slide_nav","materialId":"$uploadedMaterialId","pageIndex":4}""")
-            waitCount = 0
-            while (studentMessages.none {
-                    it.optString("type") == "material_state" && it.optInt("activePageIndex", -1) == 4
-                } && waitCount < 30
-            ) {
-                delay(40)
-                waitCount++
-            }
-            assertTrue(
-                studentMessages.any {
-                    it.optString("type") == "material_state" &&
-                        it.optString("activeMaterialId") == uploadedMaterialId &&
-                        it.optInt("activePageIndex") == 4
-                }
-            )
+            hostWs.send("""{"type":"slide_nav","materialId":"removed","pageIndex":4}""")
+            delay(150)
+            assertFalse(studentMessages.any {
+                it.optString("type") == "material_shared" || it.optString("type") == "material_state"
+            })
         } finally {
             hostWs?.cancel()
             studentWs?.cancel()
@@ -1451,7 +1437,6 @@ class BitVoidLocalServerTest {
                 aliceRepo.requestDirectCall(
                     dmId,
                     aliceSession.token,
-                    withVideo = true,
                     urlOverride = baseUrl
                 ).isSuccess
             )
@@ -1475,7 +1460,6 @@ class BitVoidLocalServerTest {
             assertEquals(DirectCallPhase.RINGING, ringing!!.directCallPhase)
             assertTrue(ringing.isIncoming)
             assertEquals("alice-call", ringing.callerUsername)
-            assertFalse(ringing.withVideo)
 
             assertTrue(bobRepo.acceptDirectCall(dmId, bobSession.token, baseUrl).isSuccess)
             aliceRepo.fetchDirectCallStatus(dmId, aliceSession.token, baseUrl)
@@ -1499,12 +1483,12 @@ class BitVoidLocalServerTest {
                 setRequestProperty("X-DM-Token", bobSession.token)
                 outputStream.use { it.write(ByteArray(0)) }
             }
-            assertEquals(409, dmMaterialUpload.responseCode)
+            assertEquals(405, dmMaterialUpload.responseCode)
             dmMaterialUpload.disconnect()
 
             aliceWs = okClient.newWebSocket(
                 Request.Builder()
-                    .url("ws://127.0.0.1:$testPort/ws/signaling?roomId=$dmId&channelId=$dmId&peerId=alice_p&displayName=alice-call&mode=VOICE_VIDEO_CALL&role=SPEAKER&token=${aliceSession.token}")
+                    .url("ws://127.0.0.1:$testPort/ws/signaling?roomId=$dmId&channelId=$dmId&peerId=alice_p&displayName=alice-call&mode=AUDIO_CALL&role=SPEAKER&token=${aliceSession.token}")
                     .build(),
                 object : WebSocketListener() {
                     override fun onMessage(webSocket: WebSocket, text: String) {
@@ -1514,9 +1498,8 @@ class BitVoidLocalServerTest {
             )
             bobWs = okClient.newWebSocket(
                 Request.Builder()
-                    // A modified Direct Chat client cannot relabel the call as Live Class or
-                    // advertise camera/screen media during its initial signaling join.
-                    .url("ws://127.0.0.1:$testPort/ws/signaling?roomId=$dmId&channelId=$dmId&peerId=bob_p&displayName=bob-call&mode=LIVE_CLASSROOM&role=HOST_TEACHER&isVideoOn=true&isScreenSharing=true&token=${bobSession.token}")
+                    // A modified Direct Chat client cannot relabel an audio call as Live Class.
+                    .url("ws://127.0.0.1:$testPort/ws/signaling?roomId=$dmId&channelId=$dmId&peerId=bob_p&displayName=bob-call&mode=LIVE_CLASSROOM&role=HOST_TEACHER&token=${bobSession.token}")
                     .build(),
                 object : WebSocketListener() {
                     override fun onMessage(webSocket: WebSocket, text: String) {
@@ -1535,15 +1518,15 @@ class BitVoidLocalServerTest {
             assertTrue(aliceSignals.any { it.optString("type") == "welcome" })
             assertTrue(bobSignals.any { it.optString("type") == "welcome" })
             val bobWelcome = bobSignals.first { it.optString("type") == "welcome" }
-            assertEquals(SignalingSessionMode.VOICE_VIDEO_CALL.name, bobWelcome.getString("mode"))
+            assertEquals(SignalingSessionMode.AUDIO_CALL.name, bobWelcome.getString("mode"))
             val welcomedBob = bobWelcome.getJSONArray("peers")
                 .let { peers ->
                     (0 until peers.length())
                         .map { peers.getJSONObject(it) }
                         .first { it.getString("peerId") == "bob_p" }
                 }
-            assertFalse(welcomedBob.getBoolean("isVideoOn"))
-            assertFalse(welcomedBob.getBoolean("isScreenSharing"))
+            assertFalse(welcomedBob.has("isVideoOn"))
+            assertFalse(welcomedBob.has("isScreenSharing"))
 
             // Valid participant receives active DM call status
             bobRepo.fetchDirectCallStatus(dmId, bobSession.token, baseUrl)
@@ -1561,10 +1544,8 @@ class BitVoidLocalServerTest {
             }
             assertEquals("v=0-dm-offer", bobSignals.first { it.optString("type") == "offer" }.getString("sdp"))
 
-            // Legacy or modified clients cannot re-enable camera/screen state in a voice call.
-            aliceWs.send(
-                """{"type":"media_state","isMuted":false,"isVideoOn":true,"isScreenSharing":true,"role":"SPEAKER"}"""
-            )
+            // Signaling synchronizes microphone state only.
+            aliceWs.send("""{"type":"media_state","isMuted":true}""")
             waitCount = 0
             while (bobSignals.none { it.optString("type") == "peers_update" } && waitCount < 30) {
                 delay(40)
@@ -1577,8 +1558,9 @@ class BitVoidLocalServerTest {
                         .map { peers.getJSONObject(it) }
                         .first { it.getString("peerId") == "alice_p" }
                 }
-            assertFalse(updatedAlice.getBoolean("isVideoOn"))
-            assertFalse(updatedAlice.getBoolean("isScreenSharing"))
+            assertTrue(updatedAlice.getBoolean("isMuted"))
+            assertFalse(updatedAlice.has("isVideoOn"))
+            assertFalse(updatedAlice.has("isScreenSharing"))
         } finally {
             aliceWs?.cancel()
             bobWs?.cancel()

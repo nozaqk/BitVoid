@@ -8,11 +8,8 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,31 +23,22 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.School
-import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -70,18 +58,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.bitvoid.network.call.BitVoidCallState
-import com.bitvoid.network.call.DocumentPreviewKind
-import com.bitvoid.network.call.LiveClassMaterial
-import com.bitvoid.network.call.RenderedMaterialDeck
 import com.bitvoid.network.ui.theme.VoidAmber
 import com.bitvoid.network.ui.theme.VoidBorder
 import com.bitvoid.network.ui.theme.VoidCrimson
@@ -208,7 +190,7 @@ fun JoinLiveClassByIdDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    text = "Enter the Live Class ID shared by your Host Teacher (for example CLS-ABCD-12) to join the Live Class & Presentation.",
+                    text = "Enter the Live Class ID shared by your Host Teacher (for example CLS-ABCD-12) to join the live audio class.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = VoidTextSecondary
                 )
@@ -454,363 +436,6 @@ fun StartLiveClassDialog(
 }
 
 @Composable
-fun ClassroomDocumentStage(
-    materials: List<LiveClassMaterial>,
-    activeMaterialId: String?,
-    activePageIndex: Int,
-    loadedDecks: Map<String, RenderedMaterialDeck>,
-    currentPageBitmap: ImageBitmap?,
-    isUploadingMaterial: Boolean,
-    isLoadingPreview: Boolean,
-    previewError: String?,
-    onUploadDocumentClick: () -> Unit,
-    onSelectMaterial: (String) -> Unit,
-    onChangePage: (Int) -> Unit,
-    onOpenMaterialExternally: (LiveClassMaterial) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val activeMaterial = materials.firstOrNull { it.id == activeMaterialId } ?: materials.firstOrNull()
-    val deck = activeMaterial?.let { loadedDecks[it.id] }
-    val totalPages = (deck?.totalPages ?: 1).coerceAtLeast(1)
-    val clampedPage = activePageIndex.coerceIn(0, totalPages - 1)
-
-    Card(
-        colors = CardDefaults.cardColors(containerColor = VoidSurface),
-        border = BorderStroke(1.5.dp, VoidCyan.copy(alpha = 0.7f)),
-        shape = RoundedCornerShape(14.dp),
-        modifier = modifier
-            .fillMaxWidth()
-            .testTag("classroom_document_stage")
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Description,
-                        contentDescription = null,
-                        tint = VoidCyan,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Text(
-                        text = activeMaterial?.fileName ?: "MEET DOCUMENT / SLIDE STAGE",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = VoidCyan,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                OutlinedButton(
-                    onClick = onUploadDocumentClick,
-                    enabled = !isUploadingMaterial,
-                    border = BorderStroke(1.dp, VoidAmber),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidAmber),
-                    contentPadding = PaddingValues(horizontal = 10.dp),
-                    modifier = Modifier
-                        .height(48.dp)
-                        .testTag("classroom_stage_upload_doc_button")
-                ) {
-                    if (isUploadingMaterial) {
-                        CircularProgressIndicator(
-                            color = VoidAmber,
-                            strokeWidth = 2.dp,
-                            modifier = Modifier.size(14.dp)
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Filled.UploadFile,
-                            contentDescription = "Upload document, PPT, or PDF",
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = if (isUploadingMaterial) "UPLOADING" else "UPLOAD DOC / PPT / PDF",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-
-            if (materials.isNotEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    materials.forEach { mat ->
-                        val isSelected = activeMaterial?.id == mat.id
-                        Surface(
-                            onClick = { onSelectMaterial(mat.id) },
-                            shape = RoundedCornerShape(999.dp),
-                            color = if (isSelected) VoidMintContainer else VoidObsidian,
-                            border = BorderStroke(1.dp, if (isSelected) VoidMint else VoidBorder),
-                            modifier = Modifier
-                                .height(40.dp)
-                                .testTag("live_doc_chip_${mat.id}")
-                        ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier.padding(horizontal = 12.dp)
-                            ) {
-                                Text(
-                                    text = mat.fileName,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (isSelected) VoidMint else VoidTextPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (activeMaterial == null) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(VoidObsidian)
-                        .border(1.dp, VoidBorder, RoundedCornerShape(10.dp))
-                        .padding(14.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "No presentation uploaded yet. Tap UPLOAD DOC / PPT / PDF to share PDFs, PowerPoint slides, Word docs, or images live with everyone in class.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = VoidTextSecondary
-                    )
-                }
-            } else {
-                // Document / Slide Canvas Viewer
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 190.dp, max = 300.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Color(0xFF05070A))
-                        .border(1.dp, VoidBorder, RoundedCornerShape(10.dp))
-                        .padding(8.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    when {
-                        isLoadingPreview -> {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                CircularProgressIndicator(color = VoidCyan, strokeWidth = 2.dp)
-                                Text(
-                                    text = "Syncing ${activeMaterial.fileName}...",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = VoidCyan
-                                )
-                            }
-                        }
-
-                        previewError != null -> {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(6.dp),
-                                modifier = Modifier.padding(12.dp)
-                            ) {
-                                Text(
-                                    text = previewError,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = VoidCrimson
-                                )
-                                OutlinedButton(
-                                    onClick = { onOpenMaterialExternally(activeMaterial) },
-                                    border = BorderStroke(1.dp, VoidCyan),
-                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidCyan),
-                                    modifier = Modifier.height(48.dp)
-                                ) {
-                                    Icon(Icons.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("OPEN FILE", style = MaterialTheme.typography.labelSmall)
-                                }
-                            }
-                        }
-
-                        currentPageBitmap != null -> {
-                            Image(
-                                bitmap = currentPageBitmap,
-                                contentDescription = "${activeMaterial.fileName} page ${clampedPage + 1}",
-                                contentScale = ContentScale.Fit,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-
-                        deck != null && deck.textSlides.isNotEmpty() -> {
-                            val slidePair = deck.textSlides.getOrElse(clampedPage) { deck.textSlides.first() }
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(Color(0xFF0E141D))
-                                    .padding(12.dp)
-                                    .verticalScroll(rememberScrollState()),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(VoidMintContainer)
-                                            .padding(horizontal = 8.dp, vertical = 2.dp)
-                                    ) {
-                                        Text(
-                                            text = deck.kind.label,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = VoidMint,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                    Text(
-                                        text = slidePair.first,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        color = VoidTextPrimary,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                                HorizontalDivider(thickness = 1.dp, color = VoidBorder)
-                                Text(
-                                    text = slidePair.second,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = VoidTextPrimary
-                                )
-                            }
-                        }
-
-                        else -> {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Text(
-                                    text = deck?.errorNote ?: "${activeMaterial.fileName} ready for class view",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = VoidTextSecondary
-                                )
-                                OutlinedButton(
-                                    onClick = { onOpenMaterialExternally(activeMaterial) },
-                                    border = BorderStroke(1.dp, VoidMint),
-                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidMint),
-                                    modifier = Modifier.height(48.dp)
-                                ) {
-                                    Icon(Icons.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("OPEN FILE", style = MaterialTheme.typography.labelSmall)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Bottom Slide Controls Toolbar
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = { onChangePage((clampedPage - 1).coerceAtLeast(0)) },
-                            enabled = clampedPage > 0,
-                            border = BorderStroke(1.dp, VoidBorder),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidTextPrimary),
-                            contentPadding = PaddingValues(horizontal = 10.dp),
-                            modifier = Modifier
-                                .height(48.dp)
-                                .testTag("classroom_slide_prev_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Previous slide or page",
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("PREV", style = MaterialTheme.typography.labelSmall)
-                        }
-
-                        Text(
-                            text = if (deck?.kind == DocumentPreviewKind.PPTX) {
-                                "Slide ${clampedPage + 1} / $totalPages"
-                            } else {
-                                "Page ${clampedPage + 1} / $totalPages"
-                            },
-                            style = MaterialTheme.typography.labelMedium,
-                            color = VoidMint,
-                            fontWeight = FontWeight.Bold
-                        )
-
-                        OutlinedButton(
-                            onClick = { onChangePage((clampedPage + 1).coerceAtMost(totalPages - 1)) },
-                            enabled = clampedPage < totalPages - 1,
-                            border = BorderStroke(1.dp, VoidBorder),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidTextPrimary),
-                            contentPadding = PaddingValues(horizontal = 10.dp),
-                            modifier = Modifier
-                                .height(48.dp)
-                                .testTag("classroom_slide_next_button")
-                        ) {
-                            Text("NEXT", style = MaterialTheme.typography.labelSmall)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                                contentDescription = "Next slide or page",
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
-
-                    OutlinedButton(
-                        onClick = { onOpenMaterialExternally(activeMaterial) },
-                        border = BorderStroke(1.dp, VoidCyan),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidCyan),
-                        contentPadding = PaddingValues(horizontal = 10.dp),
-                        modifier = Modifier
-                            .height(48.dp)
-                            .testTag("classroom_stage_open_doc_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.OpenInNew,
-                            contentDescription = "Open presentation in external app",
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("OPEN", style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
 fun DirectCallStagePanel(
     peerUsername: String,
     callUiState: BitVoidCallUiState,
@@ -942,7 +567,7 @@ fun DirectCallStagePanel(
                         color = VoidTextSecondary
                     )
                     Text(
-                        text = "Voice only · camera and video are disabled",
+                        text = "Microphone-only local audio",
                         style = MaterialTheme.typography.labelSmall,
                         color = VoidMint
                     )

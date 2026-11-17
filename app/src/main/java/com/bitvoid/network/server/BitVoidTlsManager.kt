@@ -35,7 +35,7 @@ import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
 /**
  * Creates an app-private local certificate authority and a short-lived gateway certificate.
  *
- * Browsers require a secure context before exposing camera and microphone APIs. BitVoid keeps
+ * Browsers require a secure context before exposing microphone APIs. BitVoid keeps
  * traffic local by serving the same portal over HTTPS on port 8443. A peer installs the exported
  * BitVoid Local CA once, then opens the secure URL shown by the gateway.
  */
