@@ -1,6 +1,7 @@
 package com.bitvoid.network.server
 
 import android.content.Context
+import com.bitvoid.network.model.BitVoidNetworkConfig
 import java.io.File
 import java.math.BigInteger
 import java.net.Inet4Address
@@ -223,7 +224,7 @@ object BitVoidTlsManager {
             GeneralNames(
                 buildList {
                     add(GeneralName(GeneralName.dNSName, "localhost"))
-                    add(GeneralName(GeneralName.dNSName, "bitvoid.local"))
+                    add(GeneralName(GeneralName.dNSName, BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME))
                     ipv4Hosts.forEach { add(GeneralName(GeneralName.iPAddress, it)) }
                 }.toTypedArray()
             )

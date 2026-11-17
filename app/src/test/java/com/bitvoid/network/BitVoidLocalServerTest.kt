@@ -12,11 +12,17 @@ import com.bitvoid.network.client.ClientWsStatus
 import com.bitvoid.network.direct.BitVoidDirectChatManager
 import com.bitvoid.network.direct.BitVoidUserPrefs
 import com.bitvoid.network.media.BitVoidMediaManager
+import com.bitvoid.network.model.BitVoidNetworkConfig
+import com.bitvoid.network.model.HostState
 import com.bitvoid.network.room.BitVoidRoomManager
 import com.bitvoid.network.server.BitVoidLocalServer
+import com.bitvoid.network.server.BitVoidMdnsResponder
+import com.bitvoid.network.service.BitVoidNodeStateHolder
 import fi.iki.elonen.NanoHTTPD
 import java.io.File
 import java.net.HttpURLConnection
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.Socket
 import java.net.URL
 import java.nio.charset.StandardCharsets
@@ -58,6 +64,7 @@ class BitVoidLocalServerTest {
         BitVoidChannelManager.clearAllForTests()
         BitVoidDirectChatManager.clearAllForTests()
         BitVoidSignalingServer.clearAllForTests()
+        BitVoidNodeStateHolder.updateHostState { HostState() }
         server = BitVoidLocalServer(context, port = testPort)
         server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
     }
@@ -71,6 +78,7 @@ class BitVoidLocalServerTest {
         BitVoidChannelManager.clearAllForTests()
         BitVoidDirectChatManager.clearAllForTests()
         BitVoidSignalingServer.clearAllForTests()
+        BitVoidNodeStateHolder.updateHostState { HostState() }
     }
 
     @Test
@@ -141,6 +149,36 @@ class BitVoidLocalServerTest {
         assertEquals("bitvoid", body.getString("service"))
         assertEquals("gateway", body.getString("nodeType"))
         assertEquals(1, body.getInt("protocolVersion"))
+        assertEquals(BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME, body.getString("hostname"))
+    }
+
+    @Test
+    fun `friendly gateway uses bitvoid local and mdns publishes its ipv4 address`() {
+        val hostState = HostState(
+            isServerRunning = true,
+            gatewayIp = "192.168.43.1",
+            gatewayHostname = BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME,
+            gatewayHostnamePort = 80
+        )
+        assertEquals("http://bitvoid.local", hostState.effectivePortalUrl)
+        assertEquals("http://192.168.43.1:8080", hostState.networkPortalUrl)
+
+        val query = byteArrayOf(
+            0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
+            7, 'b'.code.toByte(), 'i'.code.toByte(), 't'.code.toByte(),
+            'v'.code.toByte(), 'o'.code.toByte(), 'i'.code.toByte(), 'd'.code.toByte(),
+            5, 'l'.code.toByte(), 'o'.code.toByte(), 'c'.code.toByte(),
+            'a'.code.toByte(), 'l'.code.toByte(), 0,
+            0, 1, 0, 1
+        )
+        assertTrue(BitVoidMdnsResponder.isHostnameQuery(query))
+        val aaaaOnlyQuery = query.copyOf().apply { this[size - 3] = 28 }
+        assertFalse(BitVoidMdnsResponder.isHostnameQuery(aaaaOnlyQuery))
+
+        val address = InetAddress.getByName("192.168.43.1") as Inet4Address
+        val response = BitVoidMdnsResponder.buildAddressResponse(address)
+        assertEquals(0x84, response[2].toInt() and 0xFF)
+        assertTrue(response.takeLast(4).toByteArray().contentEquals(address.address))
     }
 
     @Test
@@ -391,7 +429,16 @@ class BitVoidLocalServerTest {
     }
 
     @Test
-    fun `os connectivity check domains receive 302 redirect to gateway portal`() {
+    fun `os connectivity check domains receive 302 redirect to friendly gateway hostname`() {
+        BitVoidNodeStateHolder.updateHostState {
+            HostState(
+                status = com.bitvoid.network.model.HotspotStatus.ACTIVE,
+                isServerRunning = true,
+                gatewayIp = "192.168.43.1",
+                gatewayHostname = BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME,
+                gatewayHostnamePort = 80
+            )
+        }
         val probeCases = listOf(
             "connectivitycheck.gstatic.com" to "/generate_204",
             "www.msftncsi.com" to "/ncsi.txt",
@@ -408,8 +455,8 @@ class BitVoidLocalServerTest {
                     .joinToString("\n")
                 assertTrue("Expected 302 for $hostDomain$path, got:\n$headersText", headersText.contains("302"))
                 assertTrue(
-                    "Expected redirect to http://192.168.43.1:8080/ for $hostDomain, got:\n$headersText",
-                    headersText.contains("http://192.168.43.1:8080/")
+                    "Expected redirect to http://bitvoid.local/ for $hostDomain, got:\n$headersText",
+                    headersText.contains("http://bitvoid.local/")
                 )
             }
         }
@@ -864,13 +911,22 @@ class BitVoidLocalServerTest {
     }
 
     @Test
-    fun `resolvePortalUrlAfterConnect overrides default placeholder with detected gateway IP`() {
+    fun `resolvePortalUrlAfterConnect preserves friendly hostname for public access`() {
+        assertEquals(
+            "http://bitvoid.local",
+            BitVoidClientManager.normalizeLocalPortalUrl("bitvoid.local")
+        )
         val resolvedFromDefault = BitVoidClientManager.resolvePortalUrlAfterConnect(
-            normalizedRequestedUrl = "http://192.168.43.1:8080",
+            normalizedRequestedUrl = BitVoidClientRepository.DEFAULT_GATEWAY_URL,
             wasDefaultPlaceholder = true,
             linkGatewayIp = "192.168.49.1"
         )
-        assertEquals("http://192.168.49.1:8080", resolvedFromDefault)
+        assertEquals("http://bitvoid.local", resolvedFromDefault)
+
+        val preferredUrls = BitVoidClientManager.orderNodeUrlsForSharedGateway(
+            listOf("http://192.168.49.1:8080", "http://bitvoid.local")
+        )
+        assertEquals("http://bitvoid.local", preferredUrls.first())
 
         val preservedCustomPort = BitVoidClientManager.resolvePortalUrlAfterConnect(
             normalizedRequestedUrl = "http://192.168.12.1:9090",
@@ -899,7 +955,7 @@ class BitVoidLocalServerTest {
                     .joinToString("\n")
                 assertTrue(headersText.contains("302"))
                 assertFalse("Captive portal must never redirect to 127.0.0.1", headersText.contains("127.0.0.1"))
-                assertTrue(headersText.contains("http://192.168.43.1:8080/"))
+                assertTrue(headersText.contains("http://bitvoid.local/"))
             }
         } finally {
             com.bitvoid.network.service.BitVoidNodeStateHolder.updateHostState {
