@@ -302,10 +302,9 @@ class BitVoidForegroundService : Service() {
             created.start(0, false)
             friendlyHttpServer = created
             FRIENDLY_HTTP_PORT
-        } catch (error: Exception) {
+        } catch (_: Exception) {
             friendlyHttpServer = null
             friendlyPort80Unavailable = true
-            Log.w(TAG, "Port 80 unavailable; using the regular local portal port", error)
             // The stable name still works on the regular HTTP port if Android reserves port 80.
             BitVoidLocalServer.DEFAULT_PORT
         }
