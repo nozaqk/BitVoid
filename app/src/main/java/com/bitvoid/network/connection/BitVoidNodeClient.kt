@@ -93,7 +93,9 @@ class BitVoidNodeClient(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val connectionPool = ConnectionPool(5, 2, TimeUnit.MINUTES)
     private val networkSocketFactory = CurrentNetworkSocketFactory(connectionManager)
-    private val localDns = Dns { hostname -> resolveLocalHostname(hostname) }
+    private val localDns = object : Dns {
+        override fun lookup(hostname: String): List<InetAddress> = resolveLocalHostname(hostname)
+    }
 
     private val httpClient = OkHttpClient.Builder()
         .socketFactory(networkSocketFactory)
