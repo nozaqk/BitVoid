@@ -8,6 +8,7 @@ import com.bitvoid.network.call.SignalingSessionMode
 import com.bitvoid.network.channel.BitVoidChannelManager
 import com.bitvoid.network.client.BitVoidClientManager
 import com.bitvoid.network.client.BitVoidClientRepository
+import com.bitvoid.network.client.ClientIncomingMessageEvent
 import com.bitvoid.network.client.ClientWsStatus
 import com.bitvoid.network.direct.BitVoidDirectChatManager
 import com.bitvoid.network.direct.BitVoidUserPrefs
@@ -30,8 +31,12 @@ import java.nio.charset.StandardCharsets
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.WebSocket
@@ -921,6 +926,9 @@ class BitVoidLocalServerTest {
             assertEquals(ClientWsStatus.LIVE, aliceRepo.directWsStatus.value)
             assertEquals(ClientWsStatus.LIVE, bobRepo.directWsStatus.value)
 
+            val incomingEvent = async(start = CoroutineStart.UNDISPATCHED) {
+                withTimeout(3_000L) { bobRepo.incomingMessages.first() }
+            }
             aliceRepo.sendDirectMessage("Direct ping without channel")
             attempts = 0
             while (bobRepo.directMessages.value.none { it.text == "Direct ping without channel" } && attempts < 30) {
@@ -928,6 +936,10 @@ class BitVoidLocalServerTest {
                 attempts++
             }
             assertTrue(bobRepo.directMessages.value.any { it.text == "Direct ping without channel" && it.sender == "alice-99" })
+            val receivedEvent = incomingEvent.await()
+            assertTrue(receivedEvent is ClientIncomingMessageEvent.Direct)
+            assertEquals("alice-99", receivedEvent.message.sender)
+            assertEquals("Direct ping without channel", receivedEvent.message.text)
 
             // Unauthorized direct message read returns 401
             val unauthConn = URL("http://127.0.0.1:$testPort/api/dm/${aliceSession.dmId}/messages")

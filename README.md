@@ -24,6 +24,7 @@ BitVoid is an offline-first Android local video node. A host phone creates an An
 - Cryptographically random, expiring room tokens held in memory only
 - Token-gated private video routes and room APIs using `X-Room-Token`
 - Real-time NanoWSD channel and direct chat with ephemeral RAM-only history and arbitrary file attachments
+- High-priority Android alerts for new remote channel/direct messages, with channel/sender identity and foreground-service delivery after the UI is dismissed
 - Local-only, audio-only WebRTC voice calls with microphone mute, speaker routing, and no external STUN/TURN servers
 - Audio-only Live Classes with host/student roles, shareable `CLS-XXXX-XX` IDs, visible or hidden Hub listings, microphone controls, and synchronized participant state
 - Native Compose and browser audio meeting stages backed by the host's authenticated `/ws/signaling` endpoint
@@ -142,6 +143,7 @@ The APK is produced at `app/build/outputs/apk/debug/app-debug.apk`.
 - BitVoid returns an absolute `302` portal redirect for common Android, Apple, Windows, Firefox, and Kindle probe paths and known probe Host headers. It advertises `bitvoid.local` with mDNS and serves the same portal on port 80 when Android permits that binding; otherwise the hostname is advertised with port 8080. A normal app cannot replace hotspot DHCP/DNS, transparently intercept every connectivity-check domain, install a trusted TLS certificate, or force every OEM captive-portal assistant to appear. The displayed hostname and IP fallback remain available.
 - Local Only Hotspot availability is device- and policy-dependent. Some managed devices or vendor Wi-Fi implementations can reject the request.
 - Android may throttle Wi-Fi scans. BitVoid falls back to the most recent permitted scan results.
+- Joined channel/direct-message WebSockets remain in BitVoid's foreground service when the UI is dismissed. Android always terminates this local background networking after an explicit app force-stop; without a cloud relay, no local message can arrive until BitVoid is opened and rejoins the node.
 - An already-open media response cannot be recalled after bytes have been sent. Switching a video to Private removes it from the next public index poll and makes subsequent public direct/range requests return `403`.
 - Byte-range responses necessarily expose the requested range and exact range length to make standards-compliant seeking possible; BitVoid pads privacy metadata and block-pads portal HTML without corrupting video payloads.
 

@@ -1,6 +1,7 @@
 package com.bitvoid.network
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -19,6 +20,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import com.bitvoid.network.service.BitVoidForegroundService
 import com.bitvoid.network.ui.BitVoidDashboard
 import com.bitvoid.network.ui.BitVoidViewModel
 import com.bitvoid.network.ui.theme.BitVoidTheme
@@ -105,5 +107,29 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+
+        handleMessageNotificationIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleMessageNotificationIntent(intent)
+    }
+
+    private fun handleMessageNotificationIntent(intent: Intent?) {
+        val destination = intent?.getStringExtra(
+            BitVoidForegroundService.EXTRA_MESSAGE_DESTINATION
+        ) ?: return
+        viewModel.openMessageNotification(
+            destination = destination,
+            conversationId = intent.getStringExtra(
+                BitVoidForegroundService.EXTRA_CONVERSATION_ID
+            ),
+            peerUsername = intent.getStringExtra(
+                BitVoidForegroundService.EXTRA_PEER_USERNAME
+            )
+        )
+        intent.removeExtra(BitVoidForegroundService.EXTRA_MESSAGE_DESTINATION)
     }
 }

@@ -3,8 +3,11 @@
     <string name="node_mode_host">HOST NODE</string>
     <string name="node_mode_client">NODE LOG</string>
     <string name="notification_channel_name">BitVoid Local Gateway</string>
-    <string name="notification_channel_desc">Persistent offline Wi-Fi hotspot and local anonymized HTTP server</string>
+    <string name="notification_channel_desc">Persistent offline Wi-Fi hotspot, local server, and message connection status</string>
+    <string name="message_notification_channel_name">BitVoid Messages</string>
+    <string name="message_notification_channel_desc">New local channel and direct-message alerts</string>
     <string name="action_stop_node">Stop Node</string>
+    <string name="action_stop_message_monitor">Stop Alerts</string>
     <string name="cd_node_banner">BitVoid tactical network node graphic</string>
     <string name="cd_power_toggle">Toggle BitVoid Gateway Node</string>
     <string name="cd_copy_value">Copy to clipboard</string>
