@@ -594,6 +594,23 @@ class BitVoidLocalServerTest {
     }
 
     @Test
+    fun `manual local gateway input is normalized and probes default app port fallback`() {
+        assertEquals(
+            "http://192.168.50.9:8080",
+            BitVoidClientManager.normalizeLocalPortalUrl("192.168.50.9:8080/some/page?ignored=1")
+        )
+        assertEquals(
+            listOf("http://bitvoid.local", "http://bitvoid.local:8080"),
+            BitVoidClientManager.expandLocalPortalCandidates("bitvoid.local")
+        )
+        assertEquals(
+            listOf("http://192.168.50.9:8080"),
+            BitVoidClientManager.expandLocalPortalCandidates("http://192.168.50.9:8080")
+        )
+        assertNull(BitVoidClientManager.normalizeLocalPortalUrl("https://example.com"))
+    }
+
+    @Test
     fun `all discovered nodes choose the same lowest ipv4 shared gateway`() {
         val ordered = BitVoidClientManager.orderNodeUrlsForSharedGateway(
             listOf(
