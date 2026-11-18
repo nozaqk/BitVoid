@@ -39,8 +39,9 @@ BitVoid is an offline-first Android local video node. A host phone creates an An
 - Identifying request headers discarded by the server
 - Fixed-size privacy padding header and 4 KiB-block portal body padding
 - **Node Log** replaces Client Node and records Wi-Fi changes, scans, local identity checks, ESP32/Pi coordinator heartbeats, gateway selection, reconnects, and errors in memory
-- Silent same-Wi-Fi BitVoid mesh discovery probes the local subnet, verifies `/api/node` protocol identity, exchanges `/api/mesh/nodes` registries, and automatically routes every app to the same available app gateway
-- No gateway IP or URL entry is required: Android apps, ESP32, and Raspberry Pi coordinators can use different private addresses while converging through the same-LAN registry
+- Node Log automatically refreshes visible Wi-Fi names, probes the active local subnet, verifies `/api/node` identities, and exchanges `/api/mesh/nodes` registries
+- Apps automatically route to an available BitVoid gateway; if none exists, Node Log starts and shares this phone's LAN gateway, with manual local IP/URL entry available as a verified fallback
+- Android apps, ESP32, and Raspberry Pi coordinators can use different private addresses while converging through the same-LAN registry
 - Sandboxed local WebView with room JavaScript enabled but WebRTC injection-blocked; cookies, persistent cache, external hosts, camera, microphone, and geolocation remain disabled
 
 ## Project structure
@@ -142,7 +143,8 @@ The APK is produced at `app/build/outputs/apk/debug/app-debug.apk`.
 - BitVoid never requests or advertises a password-free hotspot. An unsecured system hotspot is rejected as a BitVoid broadcast, and the local vault remains available only through server-only mode until a protected network is present.
 - BitVoid returns an absolute `302` portal redirect for common Android, Apple, Windows, Firefox, and Kindle probe paths and known probe Host headers. It advertises `bitvoid.local` with mDNS and serves the same portal on port 80 when Android permits that binding; otherwise the hostname is advertised with port 8080. A normal app cannot replace hotspot DHCP/DNS, transparently intercept every connectivity-check domain, install a trusted TLS certificate, or force every OEM captive-portal assistant to appear. The displayed hostname and IP fallback remain available.
 - Local Only Hotspot availability is device- and policy-dependent. Some managed devices or vendor Wi-Fi implementations can reject the request.
-- Android may throttle Wi-Fi scans. BitVoid falls back to the most recent permitted scan results.
+- Android may throttle Wi-Fi scans. BitVoid falls back to the most recent permitted scan results and automatically clears a scan if an OEM suppresses the completion broadcast.
+- Mesh sharing is same-LAN: devices connected to the same routed Wi-Fi can use `http://bitvoid.local` or the displayed local IP URL. Separate client-isolated SSIDs cannot reach one another unless their router already bridges them.
 - Joined channel/direct-message WebSockets remain in BitVoid's foreground service when the UI is dismissed. Android always terminates this local background networking after an explicit app force-stop; without a cloud relay, no local message can arrive until BitVoid is opened and rejoins the node.
 - An already-open media response cannot be recalled after bytes have been sent. Switching a video to Private removes it from the next public index poll and makes subsequent public direct/range requests return `403`.
 - Byte-range responses necessarily expose the requested range and exact range length to make standards-compliant seeking possible; BitVoid pads privacy metadata and block-pads portal HTML without corrupting video payloads.

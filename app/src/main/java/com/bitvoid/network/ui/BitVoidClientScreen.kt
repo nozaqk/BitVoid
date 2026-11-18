@@ -30,6 +30,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -75,16 +76,23 @@ fun BitVoidClientHubContent(
     onBack: () -> Unit,
     onScanNetworks: () -> Unit,
     onConnectNode: (String) -> Unit,
+    onConnectGatewayUrl: (String) -> Unit,
     onOpenWifiSettings: () -> Unit,
     onRefreshHardwareNode: () -> Unit,
     onClearConnectionLogs: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var selectedSsid by rememberSaveable { mutableStateOf("") }
+    var gatewayAddress by rememberSaveable { mutableStateOf(clientState.targetPortalUrl) }
 
     LaunchedEffect(clientState.currentWifiSsid) {
         clientState.currentWifiSsid?.takeIf { it.isNotBlank() }?.let { current ->
             selectedSsid = current
+        }
+    }
+    LaunchedEffect(clientState.connectionStatus, clientState.targetPortalUrl) {
+        if (clientState.connectionStatus == ClientConnectionStatus.CONNECTED) {
+            gatewayAddress = clientState.targetPortalUrl
         }
     }
 
@@ -100,6 +108,9 @@ fun BitVoidClientHubContent(
             onBack = onBack,
             onScanNetworks = onScanNetworks,
             onConnectNode = { onConnectNode(selectedSsid) },
+            gatewayAddress = gatewayAddress,
+            onGatewayAddressChange = { gatewayAddress = it },
+            onConnectGatewayUrl = { onConnectGatewayUrl(gatewayAddress) },
             onSelectDiscoveredNetwork = { selectedSsid = it.ssid },
             onOpenWifiSettings = onOpenWifiSettings
         )
@@ -121,6 +132,9 @@ private fun ClientGatewayBarCard(
     onBack: () -> Unit,
     onScanNetworks: () -> Unit,
     onConnectNode: () -> Unit,
+    gatewayAddress: String,
+    onGatewayAddressChange: (String) -> Unit,
+    onConnectGatewayUrl: () -> Unit,
     onSelectDiscoveredNetwork: (DiscoveredNetwork) -> Unit,
     onOpenWifiSettings: () -> Unit
 ) {
@@ -193,7 +207,7 @@ private fun ClientGatewayBarCard(
             }
 
             Text(
-                text = "BitVoid automatically verifies and links app, ESP32, and Pi identities on Android's current Wi-Fi. IP addresses and portal URLs are discovered in the background; no manual URL entry is required.",
+                text = "BitVoid automatically scans Wi-Fi and links app, ESP32, and Pi identities on Android's current network. A local gateway IP/URL can also be entered as a fallback.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = VoidTextSecondary
             )
@@ -240,6 +254,35 @@ private fun ClientGatewayBarCard(
                         tint = VoidCyan
                     )
                 }
+            }
+
+            OutlinedTextField(
+                value = gatewayAddress,
+                onValueChange = onGatewayAddressChange,
+                label = { Text("GATEWAY IP OR URL") },
+                supportingText = {
+                    Text("Automatic discovery is preferred; use a local IP/URL as a fallback.")
+                },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("client_gateway_url_input")
+            )
+            Button(
+                onClick = onConnectGatewayUrl,
+                enabled = gatewayAddress.isNotBlank() &&
+                    !clientState.isScanning &&
+                    clientState.connectionStatus != ClientConnectionStatus.CONNECTING,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = VoidMint,
+                    contentColor = VoidObsidian
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(46.dp)
+                    .testTag("client_connect_gateway_url")
+            ) {
+                Text("CONNECT GATEWAY")
             }
 
             Button(
@@ -368,7 +411,7 @@ private fun ClientGatewayBarCard(
             }
 
             Text(
-                text = "Background discovery refreshes every 15 seconds. If no app gateway exists, BitVoid starts one on this phone while ESP32/Pi coordinators continue sharing the mesh registry.",
+                text = "Mesh discovery refreshes every 15 seconds and Wi-Fi names refresh automatically. If no app gateway exists, Node Log starts one on this phone for every device on the same Wi-Fi.",
                 style = MaterialTheme.typography.labelSmall,
                 color = VoidTextSecondary
             )

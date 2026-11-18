@@ -14,6 +14,8 @@ import android.net.wifi.ScanResult
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
@@ -81,6 +83,8 @@ class BitVoidClientManager(private val context: Context) {
         appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
     private var scanReceiver: BroadcastReceiver? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var scanTimeout: Runnable? = null
     private val discoveryMutex = Mutex()
     private var lastMeshSignature: String? = null
     private var lastSelectedGateway: String? = null
@@ -154,13 +158,24 @@ class BitVoidClientManager(private val context: Context) {
         @Suppress("DEPRECATION")
         val started = try {
             wifiManager.startScan()
-        } catch (_: SecurityException) {
+        } catch (_: Exception) {
             false
         }
         if (!started) {
             // Android can throttle scans; cached results still provide a useful list.
             unregisterScanReceiver()
             publishScanResults()
+        } else {
+            // Some devices accept startScan() but suppress the result broadcast. Never leave Node
+            // Log stuck in SCANNING; publish Android's cached results after a short deadline.
+            val timeout = Runnable {
+                if (scanReceiver != null) {
+                    unregisterScanReceiver()
+                    publishScanResults()
+                }
+            }
+            scanTimeout = timeout
+            mainHandler.postDelayed(timeout, WIFI_SCAN_TIMEOUT_MS)
         }
     }
 
@@ -358,6 +373,61 @@ class BitVoidClientManager(private val context: Context) {
         return ClientNodeConnectResult.CONNECTED
     }
 
+    /** Verifies a manually entered local IP/URL, then links the complete mesh it advertises. */
+    suspend fun connectToGatewayUrl(rawUrl: String): Boolean {
+        val normalized = normalizeLocalPortalUrl(rawUrl)?.trimEnd('/')
+        if (normalized == null) {
+            BitVoidNodeStateHolder.updateClientState {
+                it.copy(errorMessage = "Enter a local gateway such as http://bitvoid.local or http://192.168.1.20:8080.")
+            }
+            return false
+        }
+        val link = resolveCurrentWifiLink()
+        if (link == null) {
+            BitVoidNodeStateHolder.updateClientState {
+                it.copy(
+                    connectionStatus = ClientConnectionStatus.ERROR,
+                    errorMessage = "Connect this phone to the gateway's Wi-Fi before using its IP or URL."
+                )
+            }
+            return false
+        }
+
+        BitVoidNodeStateHolder.updateClientState {
+            it.copy(
+                connectionStatus = ClientConnectionStatus.CONNECTING,
+                currentWifiSsid = link.ssid,
+                targetPortalUrl = normalized,
+                statusMessage = "Verifying $normalized on ${link.ssid ?: "the current Wi-Fi"}…",
+                errorMessage = null
+            )
+        }
+        val discovery = discoverNodesOnLink(link, normalized)
+        if (discovery.gatewayUrls.isEmpty()) {
+            BitVoidNodeStateHolder.updateClientState {
+                it.copy(
+                    connectionStatus = ClientConnectionStatus.ERROR,
+                    currentWifiSsid = link.ssid,
+                    connectedSsid = null,
+                    linkedNodeUrls = emptyList(),
+                    coordinatorUrls = discovery.coordinatorUrls,
+                    meshNodeCount = discovery.nodeCount,
+                    errorMessage = "No BitVoid gateway answered at $normalized on the current Wi-Fi."
+                )
+            }
+            return false
+        }
+
+        connectivityManager.bindProcessToNetwork(link.network)
+        publishLinkedNodes(
+            link = link,
+            activeSsid = link.ssid ?: "Current Wi-Fi",
+            discovery = discovery,
+            silent = false
+        )
+        return true
+    }
+
     /** Finds all BitVoid peers without exposing discovery progress in the UI. */
     suspend fun discoverAndLinkSilently(): String? {
         val state = BitVoidNodeStateHolder.clientState.value
@@ -413,14 +483,33 @@ class BitVoidClientManager(private val context: Context) {
 
         val discovery = discoverNodesOnLink(link, state.targetPortalUrl)
         if (discovery.gatewayUrls.isEmpty()) {
-            if (discovery.coordinatorUrls.isNotEmpty()) {
-                BitVoidNodeStateHolder.updateClientState {
-                    it.copy(
-                        currentWifiSsid = link.ssid,
-                        coordinatorUrls = discovery.coordinatorUrls,
-                        meshNodeCount = discovery.nodeCount
-                    )
-                }
+            if (state.connectionStatus == ClientConnectionStatus.CONNECTED ||
+                state.linkedNodeUrls.isNotEmpty()
+            ) {
+                log(
+                    NodeConnectionEventType.RETRY,
+                    "Shared gateway unavailable",
+                    "No BitVoid app gateway currently answers on ${link.ssid ?: "the current Wi-Fi"}; automatic recovery is active."
+                )
+            }
+            // Keep all BitVoid probes pinned to Wi-Fi so Android cannot leak local node traffic to
+            // cellular while this app waits for (or starts) a gateway.
+            connectivityManager.bindProcessToNetwork(link.network)
+            BitVoidNodeStateHolder.updateClientState {
+                it.copy(
+                    connectionStatus = ClientConnectionStatus.DISCONNECTED,
+                    currentWifiSsid = link.ssid ?: "Current Wi-Fi",
+                    connectedSsid = null,
+                    linkedNodeUrls = emptyList(),
+                    coordinatorUrls = discovery.coordinatorUrls,
+                    meshNodeCount = discovery.nodeCount,
+                    statusMessage = if (discovery.coordinatorUrls.isEmpty()) {
+                        "No app gateway found on ${link.ssid ?: "the current Wi-Fi"}. Automatic gateway startup is ready."
+                    } else {
+                        "${discovery.coordinatorUrls.size} coordinator(s) found; waiting for an app gateway."
+                    },
+                    errorMessage = null
+                )
             }
             return null
         }
@@ -490,18 +579,20 @@ class BitVoidClientManager(private val context: Context) {
     ): MeshDiscoveryResult = discoveryMutex.withLock {
         withContext(Dispatchers.IO) {
             val candidates = buildList {
-                add(BitVoidClientRepository.DEFAULT_GATEWAY_URL)
+                addAll(expandLocalPortalCandidates(BitVoidClientRepository.DEFAULT_GATEWAY_URL))
                 normalizeLocalPortalUrl(preferredPortalUrl.orEmpty())?.let { preferred ->
                     val host = android.net.Uri.parse(preferred).host
                     if (host != null && host != "127.0.0.1" && host != "localhost") {
-                        add(preferred.trimEnd('/'))
+                        addAll(expandLocalPortalCandidates(preferred))
                     }
                 }
                 buildSubnetCandidateHosts(link.localIpv4, link.gatewayHosts).forEach { host ->
                     add("http://$host:8080")
+                    if (host in link.gatewayHosts) add("http://$host")
                 }
                 if (BitVoidNodeStateHolder.hostState.value.isServerRunning) {
                     add("http://${link.localIpv4}:8080")
+                    add("http://${link.localIpv4}")
                 }
             }.distinct()
 
@@ -565,10 +656,14 @@ class BitVoidClientManager(private val context: Context) {
     }
 
     private fun reachablePortalUrl(node: DiscoveredMeshNode): String? {
+        // Always prefer the exact URL that answered the identity probe. A gateway can have several
+        // interfaces, and its advertised address may belong to a hotspot or stale LAN that this
+        // client cannot route to.
+        val verifiedSource = normalizeMeshCandidateUrl(node.baseUrl)?.trimEnd('/')
         val advertised = node.descriptor.directPortalUrl
             ?.let(::normalizeMeshCandidateUrl)
             ?.trimEnd('/')
-        return advertised ?: normalizeMeshCandidateUrl(node.baseUrl)?.trimEnd('/')
+        return verifiedSource ?: advertised
     }
 
     private fun normalizeMeshCandidateUrl(rawUrl: String): String? {
@@ -734,6 +829,8 @@ class BitVoidClientManager(private val context: Context) {
     }
 
     private fun unregisterScanReceiver() {
+        scanTimeout?.let(mainHandler::removeCallbacks)
+        scanTimeout = null
         scanReceiver?.let { receiver ->
             try {
                 appContext.unregisterReceiver(receiver)
@@ -806,6 +903,7 @@ class BitVoidClientManager(private val context: Context) {
         private const val REGISTRY_CONNECT_TIMEOUT_MS = 700
         private const val REGISTRY_READ_TIMEOUT_MS = 900
         private const val MAX_GOSSIP_CANDIDATES = 128
+        private const val WIFI_SCAN_TIMEOUT_MS = 5_000L
 
         /** Gateway addresses are tried first, followed by every peer in the current /24 LAN. */
         fun buildSubnetCandidateHosts(
@@ -866,14 +964,26 @@ class BitVoidClientManager(private val context: Context) {
         fun normalizeLocalPortalUrl(rawInput: String): String? {
             val trimmed = rawInput.trim()
             if (trimmed.isEmpty()) return "http://${BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME}"
-            val withScheme = if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-                trimmed
-            } else {
-                "http://$trimmed"
-            }
+            val hasHttpScheme = trimmed.startsWith("http://", ignoreCase = true) ||
+                trimmed.startsWith("https://", ignoreCase = true)
+            val withScheme = if (hasHttpScheme) trimmed else "http://$trimmed"
             val parsed = android.net.Uri.parse(withScheme)
-            val host = parsed.host ?: return null
-            return if (isPrivateLocalHost(host)) withScheme else null
+            val scheme = parsed.scheme?.lowercase()?.takeIf { it == "http" || it == "https" }
+                ?: return null
+            val host = parsed.host?.lowercase()?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            if (!isPrivateLocalHost(host)) return null
+            val hostLiteral = if (host.contains(':') && !host.startsWith('[')) "[$host]" else host
+            val portSuffix = parsed.port.takeIf { it in 1..65535 }?.let { ":$it" }.orEmpty()
+            return "$scheme://$hostLiteral$portSuffix"
+        }
+
+        fun expandLocalPortalCandidates(rawInput: String): List<String> {
+            val normalized = normalizeLocalPortalUrl(rawInput) ?: return emptyList()
+            val parsed = android.net.Uri.parse(normalized)
+            if (parsed.port != -1 || parsed.scheme != "http") return listOf(normalized)
+            val host = parsed.host ?: return listOf(normalized)
+            val hostLiteral = if (host.contains(':') && !host.startsWith('[')) "[$host]" else host
+            return listOf(normalized, "http://$hostLiteral:8080")
         }
 
         fun isPrivateLocalHost(host: String): Boolean {

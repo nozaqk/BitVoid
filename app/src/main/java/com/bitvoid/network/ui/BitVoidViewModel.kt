@@ -61,6 +61,10 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private const val MESH_REFRESH_INTERVAL_MS = 15_000L
+private const val AUTOMATIC_WIFI_SCAN_INTERVAL_MS = 60_000L
+private const val AUTO_GATEWAY_RETRY_INTERVAL_MS = 30_000L
+
 class BitVoidViewModel(application: Application) : AndroidViewModel(application) {
 
     private val appContext = application.applicationContext
@@ -244,6 +248,9 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, BitVoidCallUiState())
 
     private var customClientUrlPinned = false
+    private var autoGatewayStartInProgress = false
+    private var lastAutoGatewayAttemptMs = 0L
+    private var lastAutomaticWifiScanMs = 0L
 
     init {
         BitVoidNodeStateHolder.appendNodeConnectionLog(
@@ -347,17 +354,28 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             }
         }
         viewModelScope.launch {
-            // Refresh every BitVoid node over the phone's existing Wi-Fi without exposing
-            // discovery progress or asking Android to switch networks. A phone hosting its own
-            // gateway still scans so all peers converge on the same deterministic gateway.
+            // Refresh every BitVoid node over the phone's existing Wi-Fi without asking Android to
+            // switch networks. In Node Log mode, recover a missing mesh by automatically starting
+            // this phone's LAN gateway, then advertise it for every other app to discover.
             delay(1_500L)
             while (isActive) {
                 if (clientState.value.connectionStatus != ClientConnectionStatus.CONNECTING &&
                     !clientState.value.isScanning
                 ) {
-                    clientManager.discoverAndLinkSilently()
+                    val gateway = clientManager.discoverAndLinkSilently()
+                    if (gateway == null && _selectedMode.value == NodeMode.CLIENT) {
+                        ensureAutomaticGatewayOnCurrentWifi()
+                    }
                 }
-                delay(15_000L)
+                val now = System.currentTimeMillis()
+                if (_selectedMode.value == NodeMode.CLIENT &&
+                    !clientState.value.isScanning &&
+                    now - lastAutomaticWifiScanMs >= AUTOMATIC_WIFI_SCAN_INTERVAL_MS
+                ) {
+                    lastAutomaticWifiScanMs = now
+                    clientManager.scanNearbyNetworks()
+                }
+                delay(MESH_REFRESH_INTERVAL_MS)
             }
         }
         viewModelScope.launch {
@@ -527,7 +545,64 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         _selectedMode.value = mode
         if (mode == NodeMode.CLIENT) {
             startHardwareIntegrationIfNeeded()
+            lastAutomaticWifiScanMs = System.currentTimeMillis()
+            clientManager.scanNearbyNetworks()
+            viewModelScope.launch {
+                var scanWaits = 0
+                while (clientState.value.isScanning && scanWaits < 60) {
+                    delay(100L)
+                    scanWaits++
+                }
+                if (_selectedMode.value == NodeMode.CLIENT) {
+                    val gateway = clientManager.discoverAndLinkSilently()
+                    if (gateway == null) ensureAutomaticGatewayOnCurrentWifi()
+                }
+            }
         }
+    }
+
+    private suspend fun ensureAutomaticGatewayOnCurrentWifi() {
+        val now = System.currentTimeMillis()
+        if (autoGatewayStartInProgress ||
+            clientState.value.currentWifiSsid.isNullOrBlank() ||
+            hostState.value.status == HotspotStatus.STARTING ||
+            hostState.value.isServerRunning ||
+            now - lastAutoGatewayAttemptMs < AUTO_GATEWAY_RETRY_INTERVAL_MS
+        ) {
+            return
+        }
+        autoGatewayStartInProgress = true
+        lastAutoGatewayAttemptMs = now
+        BitVoidNodeStateHolder.appendNodeConnectionLog(
+            NodeConnectionEventType.GATEWAY,
+            "Starting shared app gateway",
+            "No app gateway answered on ${clientState.value.currentWifiSsid}; this phone will share one automatically."
+        )
+        val started = runCatching {
+            BitVoidForegroundService.startServerOnly(appContext)
+        }.isSuccess
+        if (!started) {
+            BitVoidNodeStateHolder.appendNodeConnectionLog(
+                NodeConnectionEventType.ERROR,
+                "Automatic gateway start blocked",
+                "Open Node Log and allow BitVoid's foreground-service notification, then retry.",
+                isError = true
+            )
+            autoGatewayStartInProgress = false
+            return
+        }
+        var gatewayWaits = 0
+        while ((!hostState.value.isServerRunning || hostState.value.gatewayIp.isBlank()) &&
+            hostState.value.status != HotspotStatus.ERROR &&
+            gatewayWaits < 80
+        ) {
+            delay(100L)
+            gatewayWaits++
+        }
+        if (hostState.value.isServerRunning) {
+            clientManager.discoverAndLinkSilently()
+        }
+        autoGatewayStartInProgress = false
     }
 
     private fun startHardwareIntegrationIfNeeded(): BitVoidHardwareIntegration? {
@@ -768,7 +843,14 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun scanNearbyNodes() {
+        lastAutomaticWifiScanMs = System.currentTimeMillis()
         clientManager.scanNearbyNetworks()
+    }
+
+    fun connectToGatewayUrl(rawUrl: String) {
+        viewModelScope.launch {
+            clientManager.connectToGatewayUrl(rawUrl)
+        }
     }
 
     fun connectToNode(ssid: String) {

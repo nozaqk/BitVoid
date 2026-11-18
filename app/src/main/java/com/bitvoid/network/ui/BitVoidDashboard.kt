@@ -248,6 +248,7 @@ fun BitVoidDashboard(
             onBack = { viewModel.selectMode(NodeMode.HOST) },
             onScanNetworks = { viewModel.scanNearbyNodes() },
             onConnectNode = { ssid -> viewModel.connectToNode(ssid) },
+            onConnectGatewayUrl = { url -> viewModel.connectToGatewayUrl(url) },
             onOpenWifiSettings = { viewModel.openSystemWifiSettings() },
             onRefreshHardwareNode = { viewModel.refreshHardwareNodeConnection() },
             onClearConnectionLogs = { viewModel.clearNodeConnectionLogs() }
