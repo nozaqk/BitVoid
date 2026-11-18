@@ -113,6 +113,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bitvoid.network.channel.BitVoidChannel
 import com.bitvoid.network.client.BitVoidClientManager
@@ -217,6 +219,7 @@ fun BitVoidDashboard(
     var editingChannelId by rememberSaveable { mutableStateOf<String?>(null) }
     var showProtocolDialog by rememberSaveable { mutableStateOf(false) }
     var showQrDialog by rememberSaveable { mutableStateOf(false) }
+    var showNodeAccessDialog by rememberSaveable { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
@@ -417,6 +420,7 @@ fun BitVoidDashboard(
                         onToggleHost = { viewModel.toggleHostGateway() },
                         onOpenProtocolDialog = { showProtocolDialog = true },
                         onOpenQrDialog = { showQrDialog = true },
+                        onOpenNodeAccess = { showNodeAccessDialog = true },
                         onOpenWifiSettings = { viewModel.openSystemWifiSettings() },
                         onOpenHotspotSettings = { viewModel.openHotspotTetherSettings() },
                         onPickDocuments = onPickDocuments,
@@ -460,6 +464,7 @@ fun BitVoidDashboard(
                     onToggleHost = { viewModel.toggleHostGateway() },
                     onOpenProtocolDialog = { showProtocolDialog = true },
                     onOpenQrDialog = { showQrDialog = true },
+                    onOpenNodeAccess = { showNodeAccessDialog = true },
                     onOpenWifiSettings = { viewModel.openSystemWifiSettings() },
                     onOpenHotspotSettings = { viewModel.openHotspotTetherSettings() },
                     onPickDocuments = onPickDocuments,
@@ -498,6 +503,14 @@ fun BitVoidDashboard(
             hostState = hostState,
             onCopy = ::copyToClipboard,
             onDismiss = { showQrDialog = false }
+        )
+    }
+
+    if (showNodeAccessDialog) {
+        HostNodeAccessDialog(
+            hostState = hostState,
+            onCopy = ::copyToClipboard,
+            onDismiss = { showNodeAccessDialog = false }
         )
     }
 
@@ -588,6 +601,7 @@ private fun CompactDashboardContent(
     onToggleHost: () -> Unit,
     onOpenProtocolDialog: () -> Unit,
     onOpenQrDialog: () -> Unit,
+    onOpenNodeAccess: () -> Unit,
     onOpenWifiSettings: () -> Unit,
     onOpenHotspotSettings: () -> Unit,
     onPickDocuments: () -> Unit,
@@ -633,15 +647,8 @@ private fun CompactDashboardContent(
                                 onToggleHost = onToggleHost,
                                 onOpenProtocolDialog = onOpenProtocolDialog,
                                 onOpenQrDialog = onOpenQrDialog,
+                                onOpenNodeAccess = onOpenNodeAccess,
                                 onOpenClientNode = { onSelectMode(NodeMode.CLIENT) }
-                            )
-                        }
-                    }
-                    item(key = "host_credentials_card") {
-                        Box(modifier = Modifier.padding(horizontal = 16.dp)) {
-                            HostCredentialsCard(
-                                hostState = hostState,
-                                onCopy = onCopy
                             )
                         }
                     }
@@ -713,6 +720,7 @@ private fun WideDashboardContent(
     onToggleHost: () -> Unit,
     onOpenProtocolDialog: () -> Unit,
     onOpenQrDialog: () -> Unit,
+    onOpenNodeAccess: () -> Unit,
     onOpenWifiSettings: () -> Unit,
     onOpenHotspotSettings: () -> Unit,
     onPickDocuments: () -> Unit,
@@ -766,6 +774,7 @@ private fun WideDashboardContent(
                             onToggleHost = onToggleHost,
                             onOpenProtocolDialog = onOpenProtocolDialog,
                             onOpenQrDialog = onOpenQrDialog,
+                            onOpenNodeAccess = onOpenNodeAccess,
                             onOpenClientNode = onOpenClientNode
                         )
                     }
@@ -778,12 +787,6 @@ private fun WideDashboardContent(
                     contentPadding = PaddingValues(bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    item {
-                        HostCredentialsCard(
-                            hostState = hostState,
-                            onCopy = onCopy
-                        )
-                    }
                     item { PrivacyTelemetryCard(hostState = hostState) }
                 }
             }
@@ -863,6 +866,7 @@ private fun HostPowerControlCard(
     onToggleHost: () -> Unit,
     onOpenProtocolDialog: () -> Unit,
     onOpenQrDialog: () -> Unit,
+    onOpenNodeAccess: () -> Unit,
     onOpenClientNode: () -> Unit
 ) {
     val isActive = hostState.status == HotspotStatus.ACTIVE ||
@@ -926,7 +930,7 @@ private fun HostPowerControlCard(
                 ) {
                     Icon(
                         imageVector = Icons.Filled.MoreVert,
-                        contentDescription = "Network protocol and QR options",
+                        contentDescription = "Node access and host options",
                         tint = VoidTextPrimary
                     )
                 }
@@ -936,6 +940,35 @@ private fun HostPowerControlCard(
                     onDismissRequest = { menuExpanded = false },
                     containerColor = VoidSurfaceElevated
                 ) {
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(
+                                    text = "Node Access & Join",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = VoidTextPrimary
+                                )
+                                Text(
+                                    text = "SSID, passphrase and portal links",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = VoidMint
+                                )
+                            }
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Filled.Lock,
+                                contentDescription = null,
+                                tint = VoidMint
+                            )
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            onOpenNodeAccess()
+                        },
+                        modifier = Modifier.testTag("menu_node_access")
+                    )
+                    HorizontalDivider(color = VoidBorder)
                     DropdownMenuItem(
                         text = {
                             Column {
@@ -1146,6 +1179,76 @@ private fun HostPowerControlCard(
                         text = err,
                         style = MaterialTheme.typography.bodyMedium,
                         color = VoidCrimson
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HostNodeAccessDialog(
+    hostState: HostState,
+    onCopy: (String, String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.94f)
+                .fillMaxHeight(0.9f)
+                .widthIn(max = 680.dp)
+                .testTag("node_access_dialog"),
+            shape = RoundedCornerShape(18.dp),
+            color = VoidObsidian,
+            border = BorderStroke(1.dp, VoidMint.copy(alpha = 0.6f))
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 18.dp, top = 10.dp, end = 6.dp, bottom = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "HOST CONNECTION DETAILS",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = VoidMint,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Share only with devices joining this local node",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = VoidTextSecondary
+                        )
+                    }
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.testTag("close_node_access_dialog")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Close node access details",
+                            tint = VoidTextPrimary
+                        )
+                    }
+                }
+                HorizontalDivider(color = VoidBorder)
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(12.dp)
+                ) {
+                    HostCredentialsCard(
+                        hostState = hostState,
+                        onCopy = onCopy
                     )
                 }
             }
