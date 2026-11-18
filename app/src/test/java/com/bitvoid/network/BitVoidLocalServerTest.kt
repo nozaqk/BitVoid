@@ -12,6 +12,7 @@ import com.bitvoid.network.client.ClientWsStatus
 import com.bitvoid.network.direct.BitVoidDirectChatManager
 import com.bitvoid.network.direct.BitVoidUserPrefs
 import com.bitvoid.network.media.BitVoidMediaManager
+import com.bitvoid.network.mesh.BitVoidMeshProtocol
 import com.bitvoid.network.model.BitVoidNetworkConfig
 import com.bitvoid.network.model.HostState
 import com.bitvoid.network.room.BitVoidRoomManager
@@ -154,14 +155,34 @@ class BitVoidLocalServerTest {
 
         assertEquals(200, conn.responseCode)
         assertEquals("1", conn.getHeaderField("X-BitVoid-Node"))
-        assertEquals("1", conn.getHeaderField("X-BitVoid-Protocol"))
+        assertEquals("2", conn.getHeaderField("X-BitVoid-Protocol"))
+        assertEquals(
+            BitVoidMeshProtocol.IDENTITY_MODE,
+            conn.getHeaderField(BitVoidMeshProtocol.HEADER_IDENTITY)
+        )
         val body = JSONObject(conn.inputStream.bufferedReader().readText())
         assertEquals("bitvoid", body.getString("service"))
-        assertEquals("gateway", body.getString("nodeType"))
-        assertEquals(1, body.getInt("protocolVersion"))
+        assertTrue(body.getString("nodeId").startsWith("android-"))
+        assertEquals(BitVoidMeshProtocol.TYPE_ANDROID_GATEWAY, body.getString("nodeType"))
+        assertEquals(2, body.getInt("protocolVersion"))
+        assertFalse(body.getBoolean("coordinator"))
+        assertTrue(body.getBoolean("portalAvailable"))
         assertEquals(BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME, body.getString("hostname"))
         assertEquals("http://bitvoid.local", body.getString("portalUrl"))
         assertEquals("http://192.168.43.1:8080", body.getString("directPortalUrl"))
+
+        val meshConn = URL("http://127.0.0.1:$testPort/api/mesh/nodes")
+            .openConnection() as HttpURLConnection
+        assertEquals(200, meshConn.responseCode)
+        assertEquals("1", meshConn.getHeaderField(BitVoidMeshProtocol.HEADER_NODE))
+        val meshBody = JSONObject(meshConn.inputStream.bufferedReader().readText())
+        assertEquals(2, meshBody.getInt("protocolVersion"))
+        assertEquals(1, meshBody.getJSONArray("nodes").length())
+        assertEquals(
+            body.getString("nodeId"),
+            meshBody.getJSONArray("nodes").getJSONObject(0).getString("nodeId")
+        )
+        meshConn.disconnect()
     }
 
     @Test

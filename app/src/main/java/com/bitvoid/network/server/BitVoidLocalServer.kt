@@ -13,6 +13,8 @@ import com.bitvoid.network.direct.BitVoidDirectChatManager
 import com.bitvoid.network.direct.DirectSession
 import com.bitvoid.network.media.BitVoidMediaItem
 import com.bitvoid.network.media.BitVoidMediaManager
+import com.bitvoid.network.mesh.BitVoidMeshIdentity
+import com.bitvoid.network.mesh.BitVoidMeshProtocol
 import com.bitvoid.network.model.AuditLogEntry
 import com.bitvoid.network.model.MediaCategory
 import com.bitvoid.network.room.BitVoidRoomManager
@@ -377,6 +379,10 @@ class BitVoidLocalServer(
                     serveNodeIdentity(ephemeralToken, isHead = (method == Method.HEAD))
                 }
 
+                rawUri == "/api/mesh/nodes" -> {
+                    serveMeshNodes(ephemeralToken, isHead = (method == Method.HEAD))
+                }
+
                 rawUri == "/bitvoid-local-ca.crt" || rawUri == "/bitvoid-local-ca.pem" -> {
                     serveLocalCaCertificate(ephemeralToken, pem = true, isHead = (method == Method.HEAD))
                 }
@@ -664,13 +670,43 @@ class BitVoidLocalServer(
         return bodyMap["postData"] ?: ""
     }
 
-    /** Lightweight identity response used by silent same-Wi-Fi client discovery. */
+    /** Lightweight public identity response used by silent same-Wi-Fi mesh discovery. */
     private fun serveNodeIdentity(ephemeralToken: String, isHead: Boolean): Response {
+        val payload = buildLocalMeshIdentityJson().toString()
+        val payloadBytes = payload.toByteArray(StandardCharsets.UTF_8)
+        val response = newFixedLengthResponse(
+            Response.Status.OK,
+            "application/json; charset=utf-8",
+            ByteArrayInputStream(if (isHead) ByteArray(0) else payloadBytes),
+            payloadBytes.size.toLong()
+        )
+        response.setGzipEncoding(false)
+        response.addHeader("Content-Length", payloadBytes.size.toString())
+        response.addHeader("Cache-Control", "no-store")
+        response.addHeader(BitVoidMeshProtocol.HEADER_NODE, "1")
+        response.addHeader(
+            BitVoidMeshProtocol.HEADER_PROTOCOL,
+            BitVoidMeshProtocol.PROTOCOL_VERSION.toString()
+        )
+        response.addHeader(BitVoidMeshProtocol.HEADER_IDENTITY, BitVoidMeshProtocol.IDENTITY_MODE)
+        response.addHeader("X-BitVoid-Session", ephemeralToken)
+        if (!isHead) {
+            totalBytesServed.addAndGet(payloadBytes.size.toLong())
+        }
+        return response
+    }
+
+    private fun buildLocalMeshIdentityJson(): JSONObject {
         val hostState = BitVoidNodeStateHolder.hostState.value
-        val payload = JSONObject().apply {
-            put("service", "bitvoid")
-            put("nodeType", "gateway")
-            put("protocolVersion", 1)
+        return JSONObject().apply {
+            put("service", BitVoidMeshProtocol.SERVICE)
+            put("nodeId", BitVoidMeshIdentity.getOrCreateNodeId(context))
+            put("nodeType", BitVoidMeshProtocol.TYPE_ANDROID_GATEWAY)
+            put("protocolVersion", BitVoidMeshProtocol.PROTOCOL_VERSION)
+            put("identityMode", BitVoidMeshProtocol.IDENTITY_MODE)
+            put("coordinator", false)
+            put("portalAvailable", true)
+            put("gatewayPriority", 100)
             put("hostname", BitVoidMdnsResponder.HOSTNAME)
             put("portalUrl", hostState.effectivePortalUrl)
             put(
@@ -678,7 +714,52 @@ class BitVoidLocalServer(
                 if (hostState.hasClientGatewayAddress) hostState.networkPortalUrl else JSONObject.NULL
             )
             put("port", DEFAULT_PORT)
-            put("features", JSONArray(listOf("channels", "calls", "liveClass", "files")))
+            put(
+                "features",
+                JSONArray(listOf("mesh-v2", "channels", "calls", "liveClass", "files"))
+            )
+        }
+    }
+
+    private fun serveMeshNodes(ephemeralToken: String, isHead: Boolean): Response {
+        val clientState = BitVoidNodeStateHolder.clientState.value
+        val nodes = JSONArray().put(buildLocalMeshIdentityJson())
+        clientState.linkedNodeUrls.forEach { url ->
+            nodes.put(
+                JSONObject().apply {
+                    put("service", BitVoidMeshProtocol.SERVICE)
+                    put("nodeId", "peer-${Integer.toHexString(url.hashCode())}")
+                    put("nodeType", BitVoidMeshProtocol.TYPE_ANDROID_GATEWAY)
+                    put("protocolVersion", BitVoidMeshProtocol.PROTOCOL_VERSION)
+                    put("identityMode", BitVoidMeshProtocol.IDENTITY_MODE)
+                    put("coordinator", false)
+                    put("portalAvailable", true)
+                    put("gatewayPriority", 100)
+                    put("directPortalUrl", url)
+                    put("portalUrl", url)
+                }
+            )
+        }
+        clientState.coordinatorUrls.forEach { url ->
+            nodes.put(
+                JSONObject().apply {
+                    put("service", BitVoidMeshProtocol.SERVICE)
+                    put("nodeId", "coordinator-${Integer.toHexString(url.hashCode())}")
+                    put("nodeType", "coordinator")
+                    put("protocolVersion", BitVoidMeshProtocol.PROTOCOL_VERSION)
+                    put("identityMode", BitVoidMeshProtocol.IDENTITY_MODE)
+                    put("coordinator", true)
+                    put("portalAvailable", false)
+                    put("gatewayPriority", 10)
+                    put("directPortalUrl", url)
+                }
+            )
+        }
+        val payload = JSONObject().apply {
+            put("service", BitVoidMeshProtocol.SERVICE)
+            put("protocolVersion", BitVoidMeshProtocol.PROTOCOL_VERSION)
+            put("identityMode", BitVoidMeshProtocol.IDENTITY_MODE)
+            put("nodes", nodes)
         }.toString()
         val payloadBytes = payload.toByteArray(StandardCharsets.UTF_8)
         val response = newFixedLengthResponse(
@@ -690,12 +771,14 @@ class BitVoidLocalServer(
         response.setGzipEncoding(false)
         response.addHeader("Content-Length", payloadBytes.size.toString())
         response.addHeader("Cache-Control", "no-store")
-        response.addHeader("X-BitVoid-Node", "1")
-        response.addHeader("X-BitVoid-Protocol", "1")
+        response.addHeader(BitVoidMeshProtocol.HEADER_NODE, "1")
+        response.addHeader(
+            BitVoidMeshProtocol.HEADER_PROTOCOL,
+            BitVoidMeshProtocol.PROTOCOL_VERSION.toString()
+        )
+        response.addHeader(BitVoidMeshProtocol.HEADER_IDENTITY, BitVoidMeshProtocol.IDENTITY_MODE)
         response.addHeader("X-BitVoid-Session", ephemeralToken)
-        if (!isHead) {
-            totalBytesServed.addAndGet(payloadBytes.size.toLong())
-        }
+        if (!isHead) totalBytesServed.addAndGet(payloadBytes.size.toLong())
         return response
     }
 

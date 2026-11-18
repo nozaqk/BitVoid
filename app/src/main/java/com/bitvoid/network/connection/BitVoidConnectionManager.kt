@@ -14,6 +14,7 @@ import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import androidx.core.content.ContextCompat
+import com.bitvoid.network.mesh.BitVoidMeshProtocol
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.DataOutputStream
@@ -377,8 +378,9 @@ class BitVoidConnectionManager(
         }
 
         if (selectedNetwork != network) return
-        selectedAddress = endpoint?.address
-        _state.value = if (endpoint != null) {
+        val identityVerified = endpoint?.let { verifyNodeIdentity(network, it) } == true
+        selectedAddress = endpoint?.address?.takeIf { identityVerified }
+        _state.value = if (endpoint != null && identityVerified) {
             _state.value.copy(
                 phase = BitVoidConnectionPhase.READY,
                 isProcessBound = true,
@@ -392,9 +394,40 @@ class BitVoidConnectionManager(
                 phase = BitVoidConnectionPhase.ERROR,
                 endpoint = null,
                 captivePortalRedirectUrl = captiveProbe.redirectUrl,
-                statusMessage = "$NODE_WIFI_SSID is connected, but the hardware node did not answer.",
-                errorMessage = "No mDNS A record, DNS-SD HTTP service, captive redirect, or gateway response was received."
+                statusMessage = "$NODE_WIFI_SSID is connected, but no verified BitVoid identity answered.",
+                errorMessage = if (endpoint == null) {
+                    "No mDNS A record, DNS-SD HTTP service, captive redirect, or gateway response was received."
+                } else {
+                    "The discovered endpoint did not provide a compatible X-BitVoid-Node identity."
+                }
             )
+        }
+    }
+
+    private fun verifyNodeIdentity(network: Network, endpoint: BitVoidNodeEndpoint): Boolean {
+        var connection: HttpURLConnection? = null
+        return try {
+            connection = network.openConnection(
+                URL("${endpoint.directUrl.trimEnd('/')}/api/node")
+            ) as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.instanceFollowRedirects = false
+            connection.connectTimeout = 1_200
+            connection.readTimeout = 1_200
+            connection.setRequestProperty("X-BitVoid-Discovery", "1")
+            if (connection.responseCode != HttpURLConnection.HTTP_OK ||
+                connection.getHeaderField(BitVoidMeshProtocol.HEADER_NODE) != "1"
+            ) return false
+            val version = connection.getHeaderField(BitVoidMeshProtocol.HEADER_PROTOCOL)
+                ?.toIntOrNull() ?: 1
+            version in 1..BitVoidMeshProtocol.PROTOCOL_VERSION &&
+                (version == 1 ||
+                    connection.getHeaderField(BitVoidMeshProtocol.HEADER_IDENTITY) ==
+                    BitVoidMeshProtocol.IDENTITY_MODE)
+        } catch (_: Exception) {
+            false
+        } finally {
+            connection?.disconnect()
         }
     }
 

@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.WifiFind
@@ -30,6 +31,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -49,6 +51,8 @@ import com.bitvoid.network.connection.BitVoidHardwareConnectionCard
 import com.bitvoid.network.model.ClientConnectionStatus
 import com.bitvoid.network.model.ClientState
 import com.bitvoid.network.model.DiscoveredNetwork
+import com.bitvoid.network.model.NodeConnectionEventType
+import com.bitvoid.network.model.NodeConnectionLogEntry
 import com.bitvoid.network.ui.theme.VoidAmber
 import com.bitvoid.network.ui.theme.VoidBorder
 import com.bitvoid.network.ui.theme.VoidCrimson
@@ -58,16 +62,21 @@ import com.bitvoid.network.ui.theme.VoidObsidian
 import com.bitvoid.network.ui.theme.VoidSurface
 import com.bitvoid.network.ui.theme.VoidTextPrimary
 import com.bitvoid.network.ui.theme.VoidTextSecondary
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun BitVoidClientHubContent(
     clientState: ClientState,
     hardwareConnectionState: BitVoidConnectionState,
+    connectionLogs: List<NodeConnectionLogEntry>,
     onBack: () -> Unit,
     onScanNetworks: () -> Unit,
     onConnectNode: (String) -> Unit,
     onOpenWifiSettings: () -> Unit,
     onRefreshHardwareNode: () -> Unit,
+    onClearConnectionLogs: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var selectedSsid by rememberSaveable { mutableStateOf("") }
@@ -92,6 +101,10 @@ fun BitVoidClientHubContent(
             onConnectNode = { onConnectNode(selectedSsid) },
             onSelectDiscoveredNetwork = { selectedSsid = it.ssid },
             onOpenWifiSettings = onOpenWifiSettings
+        )
+        NodeConnectionLogCard(
+            logs = connectionLogs,
+            onClear = onClearConnectionLogs
         )
         BitVoidHardwareConnectionCard(
             state = hardwareConnectionState,
@@ -152,7 +165,7 @@ private fun ClientGatewayBarCard(
                         )
                     }
                     Text(
-                        text = "WI-FI SCAN",
+                        text = "NODE LOG & MESH",
                         style = MaterialTheme.typography.titleMedium,
                         color = VoidTextPrimary,
                         fontWeight = FontWeight.Bold
@@ -161,7 +174,7 @@ private fun ClientGatewayBarCard(
                 ClientBadgeChip(
                     label = when (clientState.connectionStatus) {
                         ClientConnectionStatus.CONNECTED -> {
-                            val count = clientState.linkedNodeUrls.size.coerceAtLeast(1)
+                            val count = clientState.meshNodeCount.coerceAtLeast(1)
                             "$count ${if (count == 1) "NODE" else "NODES"} LINKED"
                         }
                         ClientConnectionStatus.CONNECTING -> "FINDING NODES"
@@ -179,7 +192,7 @@ private fun ClientGatewayBarCard(
             }
 
             Text(
-                text = "BitVoid never joins or switches Wi-Fi here. Connect this phone in Android first, then select that same network to link every local BitVoid node through one shared gateway.",
+                text = "BitVoid automatically verifies and links app, ESP32, and Pi identities on Android's current Wi-Fi. IP addresses and portal URLs are discovered in the background; no manual URL entry is required.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = VoidTextSecondary
             )
@@ -298,16 +311,16 @@ private fun ClientGatewayBarCard(
             }
 
             if (clientState.connectionStatus == ClientConnectionStatus.CONNECTED) {
-                val linkedCount = clientState.linkedNodeUrls.size.coerceAtLeast(1)
+                val linkedCount = clientState.meshNodeCount.coerceAtLeast(1)
                 Text(
                     text = "${linkedCount} ${if (linkedCount == 1) "node" else "nodes"} linked · Shared gateway: ${clientState.targetPortalUrl}",
                     style = MaterialTheme.typography.bodySmall,
                     color = VoidMint,
                     modifier = Modifier.testTag("client_linked_gateway")
                 )
-                if (clientState.linkedNodeUrls.size > 1) {
+                if (clientState.meshNodeCount > 1) {
                     Text(
-                        text = "All reachable BitVoid nodes on this Wi-Fi are linked and use the same gateway selection.",
+                        text = "${clientState.linkedNodeUrls.size} app gateway(s) · ${clientState.coordinatorUrls.size} ESP32/Pi coordinator(s) · all use the same LAN identity protocol.",
                         style = MaterialTheme.typography.labelSmall,
                         color = VoidTextSecondary,
                         modifier = Modifier.testTag("client_linked_node_count")
@@ -345,19 +358,132 @@ private fun ClientGatewayBarCard(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = if (clientState.connectionStatus == ClientConnectionStatus.CONNECTING) {
-                        "LINKING BITVOID NODES"
+                        "REFRESHING BITVOID MESH"
                     } else {
-                        "CONNECT NODE"
+                        "REFRESH MESH NOW"
                     },
                     style = MaterialTheme.typography.labelLarge
                 )
             }
 
             Text(
-                text = "BitVoid silently refreshes all nodes on this Wi-Fi. If none exists, Connect Nodes starts a local gateway on the current Wi-Fi and shares it.",
+                text = "Background discovery refreshes every 15 seconds. If no app gateway exists, BitVoid starts one on this phone while ESP32/Pi coordinators continue sharing the mesh registry.",
                 style = MaterialTheme.typography.labelSmall,
                 color = VoidTextSecondary
             )
+        }
+    }
+}
+
+@Composable
+private fun NodeConnectionLogCard(
+    logs: List<NodeConnectionLogEntry>,
+    onClear: () -> Unit
+) {
+    val timeFormatter = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("node_connection_log"),
+        colors = CardDefaults.cardColors(containerColor = VoidSurface),
+        border = BorderStroke(1.dp, VoidCyan.copy(alpha = 0.55f)),
+        shape = RoundedCornerShape(14.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(9.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "CONNECTION EVENT LOG",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = VoidCyan,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "${logs.size} in-memory event(s) · newest first",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = VoidTextSecondary
+                    )
+                }
+                TextButton(
+                    onClick = onClear,
+                    modifier = Modifier.testTag("clear_node_connection_log")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Delete,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(5.dp))
+                    Text("CLEAR")
+                }
+            }
+
+            HorizontalDivider(color = VoidBorder)
+
+            if (logs.isEmpty()) {
+                Text(
+                    text = "No events yet. Automatic same-LAN discovery runs in the background.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = VoidTextSecondary,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+            } else {
+                logs.take(50).forEach { entry ->
+                    val accent = when {
+                        entry.isError || entry.type == NodeConnectionEventType.ERROR -> VoidCrimson
+                        entry.type == NodeConnectionEventType.CONNECTED -> VoidMint
+                        entry.type == NodeConnectionEventType.COORDINATOR ||
+                            entry.type == NodeConnectionEventType.GATEWAY -> VoidCyan
+                        entry.type == NodeConnectionEventType.RETRY -> VoidAmber
+                        else -> VoidTextSecondary
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(VoidObsidian)
+                            .border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(9.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Text(
+                            text = timeFormatter.format(Date(entry.timestampMillis)),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = accent
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "${entry.type.name} · ${entry.title}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = VoidTextPrimary,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = entry.detail,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = VoidTextSecondary
+                            )
+                        }
+                    }
+                }
+                if (logs.size > 50) {
+                    Text(
+                        text = "Showing the latest 50 of ${logs.size} events.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = VoidTextSecondary
+                    )
+                }
+            }
         }
     }
 }

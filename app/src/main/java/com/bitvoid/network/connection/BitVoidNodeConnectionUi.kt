@@ -60,7 +60,7 @@ import com.bitvoid.network.ui.theme.VoidTextPrimary
 import com.bitvoid.network.ui.theme.VoidTextSecondary
 import java.io.ByteArrayInputStream
 
-/** Compact status/control card that can be embedded in the existing Client Node screen. */
+/** Compact legacy direct-hardware card embedded in the Node Log screen. */
 @Composable
 fun BitVoidHardwareConnectionCard(
     state: BitVoidConnectionState,
@@ -102,7 +102,7 @@ fun BitVoidHardwareConnectionCard(
                 )
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "ESP HARDWARE NODE",
+                        text = "DIRECT BITVOID_NODE LINK (OPTIONAL)",
                         style = MaterialTheme.typography.titleSmall,
                         color = VoidTextPrimary,
                         fontWeight = FontWeight.Bold

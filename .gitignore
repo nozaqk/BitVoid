@@ -16,3 +16,8 @@
 local.properties
 .env
 debug.keystore
+controllers/esp32/include/bitvoid_config.h
+controllers/esp32/.pio/
+__pycache__/
+*.pyc
+.venv/
