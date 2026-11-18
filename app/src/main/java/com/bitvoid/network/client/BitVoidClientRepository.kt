@@ -21,8 +21,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -97,6 +100,24 @@ data class ClientDirectSession(
     val peerUsername: String,
     val token: String
 )
+
+/**
+ * A newly received WebSocket chat frame. History snapshots, presence updates, call signaling,
+ * and Live Class state never enter this stream.
+ */
+sealed interface ClientIncomingMessageEvent {
+    val message: ClientChatMessage
+
+    data class Channel(
+        val session: ClientChannelSession,
+        override val message: ClientChatMessage
+    ) : ClientIncomingMessageEvent
+
+    data class Direct(
+        val session: ClientDirectSession,
+        override val message: ClientChatMessage
+    ) : ClientIncomingMessageEvent
+}
 
 data class IncomingDirectCall(
     val dmId: String,
@@ -232,6 +253,11 @@ class BitVoidClientRepository {
 
     private val _directMessages = MutableStateFlow<List<ClientChatMessage>>(emptyList())
     val directMessages: StateFlow<List<ClientChatMessage>> = _directMessages.asStateFlow()
+
+    private val _incomingMessages = MutableSharedFlow<ClientIncomingMessageEvent>(
+        extraBufferCapacity = 64
+    )
+    val incomingMessages: SharedFlow<ClientIncomingMessageEvent> = _incomingMessages.asSharedFlow()
 
     private val _directWsStatus = MutableStateFlow(ClientWsStatus.DISCONNECTED)
     val directWsStatus: StateFlow<ClientWsStatus> = _directWsStatus.asStateFlow()
@@ -1511,7 +1537,15 @@ class BitVoidClientRepository {
                 }
                 "chat" -> {
                     val msgObj = json.optJSONObject("message") ?: return
-                    appendMessageIfNew(parseMessageObject(msgObj))
+                    val message = parseMessageObject(msgObj)
+                    val session = _activeChannelSession.value
+                    if (appendMessageIfNew(message) && session != null &&
+                        session.channelId == message.channelId
+                    ) {
+                        _incomingMessages.tryEmit(
+                            ClientIncomingMessageEvent.Channel(session, message)
+                        )
+                    }
                 }
                 "presence" -> {
                     val count = json.optInt("activeCount", 1).coerceAtLeast(1)
@@ -1606,23 +1640,33 @@ class BitVoidClientRepository {
                 }
                 "chat" -> {
                     val msgObj = json.optJSONObject("message") ?: return
-                    appendDirectMessageIfNew(parseMessageObject(msgObj))
+                    val message = parseMessageObject(msgObj)
+                    val session = _activeDirectSession.value
+                    if (appendDirectMessageIfNew(message) && session != null &&
+                        session.dmId == message.channelId
+                    ) {
+                        _incomingMessages.tryEmit(
+                            ClientIncomingMessageEvent.Direct(session, message)
+                        )
+                    }
                 }
             }
         } catch (_: Exception) {
         }
     }
 
-    private fun appendMessageIfNew(msg: ClientChatMessage) {
+    private fun appendMessageIfNew(msg: ClientChatMessage): Boolean {
         val current = _channelMessages.value
-        if (current.any { it.id == msg.id }) return
+        if (current.any { it.id == msg.id }) return false
         _channelMessages.value = (current + msg).takeLast(120)
+        return true
     }
 
-    private fun appendDirectMessageIfNew(msg: ClientChatMessage) {
+    private fun appendDirectMessageIfNew(msg: ClientChatMessage): Boolean {
         val current = _directMessages.value
-        if (current.any { it.id == msg.id }) return
+        if (current.any { it.id == msg.id }) return false
         _directMessages.value = (current + msg).takeLast(150)
+        return true
     }
 
     private fun closeSocketOnly() {

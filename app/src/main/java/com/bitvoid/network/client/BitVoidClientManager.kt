@@ -726,9 +726,11 @@ class BitVoidClientManager(private val context: Context) {
         appContext.startActivity(intent)
     }
 
-    fun release() {
+    fun release(preserveNetworkBinding: Boolean = false) {
         unregisterScanReceiver()
-        disconnectFromNode()
+        if (!preserveNetworkBinding) {
+            disconnectFromNode()
+        }
     }
 
     private fun unregisterScanReceiver() {

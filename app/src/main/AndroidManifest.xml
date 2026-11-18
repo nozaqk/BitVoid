@@ -63,7 +63,8 @@
         <service
             android:name="com.bitvoid.network.service.BitVoidForegroundService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice|dataSync" />
+            android:foregroundServiceType="connectedDevice|dataSync"
+            android:stopWithTask="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

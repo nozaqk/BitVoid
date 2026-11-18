@@ -24,6 +24,7 @@ import androidx.core.content.ContextCompat
 import com.bitvoid.network.MainActivity
 import com.bitvoid.network.call.BitVoidSignalingServer
 import com.bitvoid.network.channel.BitVoidChannelManager
+import com.bitvoid.network.client.BitVoidClientRepositoryProvider
 import com.bitvoid.network.media.BitVoidMediaManager
 import com.bitvoid.network.model.BitVoidNetworkConfig
 import com.bitvoid.network.model.BitVoidNetworkPrefs
@@ -52,9 +53,15 @@ class BitVoidForegroundService : Service() {
         const val ACTION_START_SERVER_ONLY = "com.bitvoid.network.action.START_SERVER_ONLY"
         const val ACTION_STOP_NODE = "com.bitvoid.network.action.STOP_NODE"
         const val ACTION_REFRESH_FILES = "com.bitvoid.network.action.REFRESH_FILES"
+        const val ACTION_START_MESSAGE_MONITOR = "com.bitvoid.network.action.START_MESSAGE_MONITOR"
+        const val ACTION_STOP_MESSAGE_MONITOR = "com.bitvoid.network.action.STOP_MESSAGE_MONITOR"
 
+        const val EXTRA_MESSAGE_DESTINATION = "com.bitvoid.network.extra.MESSAGE_DESTINATION"
+        const val EXTRA_CONVERSATION_ID = "com.bitvoid.network.extra.CONVERSATION_ID"
+        const val EXTRA_PEER_USERNAME = "com.bitvoid.network.extra.PEER_USERNAME"
 
         private const val CHANNEL_ID = "bitvoid_node_channel"
+        private const val MESSAGE_CHANNEL_ID = "bitvoid_message_channel_v1"
         private const val NOTIFICATION_ID = 7070
         private const val FRIENDLY_HTTP_PORT = 80
         const val DEFAULT_SSID = BitVoidNetworkConfig.DEFAULT_VISIBLE_SSID
@@ -80,6 +87,20 @@ class BitVoidForegroundService : Service() {
             context.startService(intent)
         }
 
+        fun startMessageMonitoring(context: Context) {
+            val intent = Intent(context, BitVoidForegroundService::class.java).apply {
+                action = ACTION_START_MESSAGE_MONITOR
+            }
+            ContextCompat.startForegroundService(context, intent)
+        }
+
+        fun stopMessageMonitoring(context: Context) {
+            val intent = Intent(context, BitVoidForegroundService::class.java).apply {
+                action = ACTION_STOP_MESSAGE_MONITOR
+            }
+            context.startService(intent)
+        }
+
         fun refreshSharedFiles(context: Context) {
             val files = BitVoidMediaManager.refreshFromDisk(context.applicationContext)
             BitVoidChannelManager.syncMediaCatalog(files)
@@ -91,6 +112,12 @@ class BitVoidForegroundService : Service() {
     private var uptimeJob: Job? = null
     private var ipProbeJob: Job? = null
     private var mediaSyncJob: Job? = null
+    private var messageNotificationJob: Job? = null
+
+    @Volatile
+    private var isNodeForegroundActive = false
+    @Volatile
+    private var isMessageMonitoringActive = false
 
     private var localServer: BitVoidLocalServer? = null
     private var friendlyHttpServer: BitVoidLocalServer? = null
@@ -112,18 +139,46 @@ class BitVoidForegroundService : Service() {
         wifiP2pManager = applicationContext.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         mdnsResponder = BitVoidMdnsResponder(applicationContext)
-        ensureNotificationChannel()
+        ensureNotificationChannels()
         BitVoidChannelManager.ensureDefaultChannel()
         refreshFileList()
         observeMediaVisibilityChanges()
+        observeIncomingMessages()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP_NODE -> {
+                isNodeForegroundActive = false
                 shutdownNode()
-                stopSelf()
+                if (isMessageMonitoringActive) {
+                    promoteToForeground("Listening for local channel and direct messages...")
+                } else {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                }
                 return START_NOT_STICKY
+            }
+
+            ACTION_START_MESSAGE_MONITOR -> {
+                isMessageMonitoringActive = true
+                if (!isNodeForegroundActive &&
+                    !promoteToForeground("Listening for local channel and direct messages...")
+                ) {
+                    isMessageMonitoringActive = false
+                    stopSelf()
+                }
+                return if (isNodeForegroundActive) START_STICKY else START_NOT_STICKY
+            }
+
+            ACTION_STOP_MESSAGE_MONITOR -> {
+                isMessageMonitoringActive = false
+                if (!isNodeForegroundActive) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                return START_STICKY
             }
 
             ACTION_REFRESH_FILES -> {
@@ -132,7 +187,9 @@ class BitVoidForegroundService : Service() {
             }
 
             ACTION_START_SERVER_ONLY -> {
+                isNodeForegroundActive = true
                 if (!promoteToForeground("Initializing local HTTP vault...")) {
+                    isNodeForegroundActive = false
                     stopSelf()
                     return START_NOT_STICKY
                 }
@@ -141,7 +198,9 @@ class BitVoidForegroundService : Service() {
             }
 
             ACTION_START_HOST_NODE, null -> {
+                isNodeForegroundActive = true
                 if (!promoteToForeground("Initializing password-protected BitVoid Host Engine...")) {
+                    isNodeForegroundActive = false
                     stopSelf()
                     return START_NOT_STICKY
                 }
@@ -149,14 +208,18 @@ class BitVoidForegroundService : Service() {
                 return START_STICKY
             }
         }
-        return START_STICKY
+        return if (isNodeForegroundActive) START_STICKY else START_NOT_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        isNodeForegroundActive = false
+        isMessageMonitoringActive = false
         shutdownNode()
+        stopForeground(STOP_FOREGROUND_REMOVE)
         mediaSyncJob?.cancel()
+        messageNotificationJob?.cancel()
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -167,6 +230,17 @@ class BitVoidForegroundService : Service() {
             BitVoidMediaManager.mediaItems.collect { items ->
                 BitVoidChannelManager.syncMediaCatalog(items)
                 BitVoidNodeStateHolder.updateHostState { it.copy(sharedFiles = items) }
+            }
+        }
+    }
+
+    private fun observeIncomingMessages() {
+        messageNotificationJob?.cancel()
+        messageNotificationJob = serviceScope.launch {
+            BitVoidClientRepositoryProvider.repository.incomingMessages.collect { event ->
+                if (!isMessageMonitoringActive) return@collect
+                val spec = BitVoidMessageNotifications.createSpec(event) ?: return@collect
+                showMessageNotification(spec)
             }
         }
     }
@@ -203,6 +277,16 @@ class BitVoidForegroundService : Service() {
         }
     }
 
+    private fun handleNodeStartupFailure() {
+        isNodeForegroundActive = false
+        if (isMessageMonitoringActive) {
+            promoteToForeground("Listening for local channel and direct messages...")
+        } else {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
+    }
+
     private fun startFullHostNode() {
         val networkConfig = BitVoidNetworkPrefs.load(applicationContext)
         BitVoidNodeStateHolder.updateHostState {
@@ -226,8 +310,7 @@ class BitVoidForegroundService : Service() {
     private fun startEmbeddedServerOnly() {
         releaseHotspotOnly()
         if (!ensureHttpServerRunning()) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            handleNodeStartupFailure()
             return
         }
 
@@ -382,8 +465,7 @@ class BitVoidForegroundService : Service() {
     private fun startLocalOnlyHotspotWpa2() {
         releaseHotspotOnly()
         if (!ensureHttpServerRunning()) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            handleNodeStartupFailure()
             return
         }
 
@@ -459,8 +541,7 @@ class BitVoidForegroundService : Service() {
                     isP2pGroupActive = true
                     if (!ensureHttpServerRunning()) {
                         releaseHotspotOnly()
-                        stopForeground(STOP_FOREGROUND_REMOVE)
-                        stopSelf()
+                        handleNodeStartupFailure()
                         return
                     }
 
@@ -522,8 +603,7 @@ class BitVoidForegroundService : Service() {
                         hotspotReservation = reservation
                         if (!ensureHttpServerRunning()) {
                             releaseHotspotOnly()
-                            stopForeground(STOP_FOREGROUND_REMOVE)
-                            stopSelf()
+                            handleNodeStartupFailure()
                             return
                         }
 
@@ -589,8 +669,7 @@ class BitVoidForegroundService : Service() {
         radioHint: String?
     ) {
         if (!ensureHttpServerRunning()) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            handleNodeStartupFailure()
             return
         }
 
@@ -975,11 +1054,10 @@ class BitVoidForegroundService : Service() {
                 uptimeSeconds = 0L
             )
         }
-        stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
-    private fun ensureNotificationChannel() {
-        val channel = NotificationChannel(
+    private fun ensureNotificationChannels() {
+        val serviceChannel = NotificationChannel(
             CHANNEL_ID,
             getString(R.string.notification_channel_name),
             NotificationManager.IMPORTANCE_LOW
@@ -987,11 +1065,56 @@ class BitVoidForegroundService : Service() {
             description = getString(R.string.notification_channel_desc)
             setShowBadge(false)
         }
-        notificationManager.createNotificationChannel(channel)
+        val messageChannel = NotificationChannel(
+            MESSAGE_CHANNEL_ID,
+            getString(R.string.message_notification_channel_name),
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = getString(R.string.message_notification_channel_desc)
+            enableVibration(true)
+            setShowBadge(true)
+        }
+        notificationManager.createNotificationChannels(listOf(serviceChannel, messageChannel))
     }
 
     private fun updateNotification(contentText: String) {
         notificationManager.notify(NOTIFICATION_ID, buildNotification(contentText))
+    }
+
+    private fun showMessageNotification(spec: MessageNotificationSpec) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+
+        val launchIntent = Intent(this, MainActivity::class.java).apply {
+            action = "com.bitvoid.network.action.OPEN_MESSAGE.${spec.destination.wireValue}.${spec.conversationId}"
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(EXTRA_MESSAGE_DESTINATION, spec.destination.wireValue)
+            putExtra(EXTRA_CONVERSATION_ID, spec.conversationId)
+            spec.peerUsername?.let { putExtra(EXTRA_PEER_USERNAME, it) }
+        }
+        val contentPendingIntent = PendingIntent.getActivity(
+            this,
+            spec.notificationId,
+            launchIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(this, MESSAGE_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_bitvoid_notify)
+            .setContentTitle(spec.title)
+            .setContentText(spec.body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(spec.body))
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setAutoCancel(true)
+            .setContentIntent(contentPendingIntent)
+            .build()
+
+        notificationManager.notify(spec.notificationId, notification)
     }
 
     private fun buildNotification(contentText: String): Notification {
@@ -1005,19 +1128,26 @@ class BitVoidForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val stopAction = if (isNodeForegroundActive) {
+            ACTION_STOP_NODE
+        } else {
+            ACTION_STOP_MESSAGE_MONITOR
+        }
         val stopIntent = Intent(this, BitVoidForegroundService::class.java).apply {
-            action = ACTION_STOP_NODE
+            action = stopAction
         }
         val stopPendingIntent = PendingIntent.getService(
             this,
-            1,
+            if (isNodeForegroundActive) 1 else 2,
             stopIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_bitvoid_notify)
-            .setContentTitle("BitVoid Gateway Active")
+            .setContentTitle(
+                if (isNodeForegroundActive) "BitVoid Gateway Active" else "BitVoid Messages Active"
+            )
             .setContentText(contentText)
             .setStyle(NotificationCompat.BigTextStyle().bigText(contentText))
             .setOngoing(true)
@@ -1025,7 +1155,13 @@ class BitVoidForegroundService : Service() {
             .setContentIntent(contentPendingIntent)
             .addAction(
                 android.R.drawable.ic_menu_close_clear_cancel,
-                getString(R.string.action_stop_node),
+                getString(
+                    if (isNodeForegroundActive) {
+                        R.string.action_stop_node
+                    } else {
+                        R.string.action_stop_message_monitor
+                    }
+                ),
                 stopPendingIntent
             )
             .build()

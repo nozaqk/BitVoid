@@ -17,6 +17,7 @@ import com.bitvoid.network.channel.BitVoidChannel
 import com.bitvoid.network.channel.BitVoidChannelManager
 import com.bitvoid.network.client.BitVoidClientManager
 import com.bitvoid.network.client.BitVoidClientRepository
+import com.bitvoid.network.client.BitVoidClientRepositoryProvider
 import com.bitvoid.network.client.ChannelCallStatus
 import com.bitvoid.network.client.ClientChannelSession
 import com.bitvoid.network.client.ClientChatMessage
@@ -64,7 +65,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
 
     private val appContext = application.applicationContext
     private val clientManager = BitVoidClientManager(appContext)
-    private val clientRepository = BitVoidClientRepository()
+    private val clientRepository = BitVoidClientRepositoryProvider.repository
     private val hardwareIntegrationDelegate = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         BitVoidHardwareIntegration(appContext)
     }
@@ -258,6 +259,23 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         BitVoidDirectChatManager.refreshConversationsForUser(_myUsername.value)
         loadSavedNetworkPreferences()
         viewModelScope.launch {
+            var wasMonitoringMessages = false
+            combine(
+                clientRepository.activeChannelSession,
+                clientRepository.activeDirectSession
+            ) { channelSession, directSession ->
+                (channelSession != null && !channelSession.isLiveClassRoom) || directSession != null
+            }.collect { hasActiveConversation ->
+                if (hasActiveConversation) {
+                    BitVoidForegroundService.startMessageMonitoring(appContext)
+                    wasMonitoringMessages = true
+                } else if (wasMonitoringMessages) {
+                    BitVoidForegroundService.stopMessageMonitoring(appContext)
+                    wasMonitoringMessages = false
+                }
+            }
+        }
+        viewModelScope.launch {
             BitVoidMediaManager.mediaItems.collect { items ->
                 BitVoidChannelManager.syncMediaCatalog(items)
                 BitVoidNodeStateHolder.updateHostState { it.copy(sharedFiles = items) }
@@ -448,6 +466,35 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                     configuredSsid = saved.ssid,
                     configuredPassphrase = saved.passphrase
                 )
+            }
+        }
+    }
+
+    fun openMessageNotification(
+        destination: String?,
+        conversationId: String?,
+        peerUsername: String?
+    ) {
+        val cleanConversationId = conversationId?.trim().orEmpty()
+        when (destination) {
+            "channel" -> {
+                _selectedBottomTab.value = AppBottomTab.HUB
+                if (cleanConversationId.isNotEmpty() &&
+                    activeChannelSession.value?.channelId != cleanConversationId
+                ) {
+                    openHubChannel(cleanConversationId)
+                }
+            }
+
+            "direct" -> {
+                _selectedBottomTab.value = AppBottomTab.PCHAT
+                val cleanPeer = peerUsername?.trim()?.removePrefix("@").orEmpty()
+                if (cleanPeer.isNotEmpty() &&
+                    (activeDirectSession.value?.dmId != cleanConversationId ||
+                        !activeDirectSession.value?.peerUsername.equals(cleanPeer, ignoreCase = true))
+                ) {
+                    openDirectChat(cleanPeer)
+                }
             }
         }
     }
@@ -1264,10 +1311,15 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
 
     override fun onCleared() {
         callManager.release()
-        clientRepository.release()
-        clientManager.release()
+        // The process-wide repository is owned by the foreground service while a conversation is
+        // joined, so dismissing the Activity must not close its WebSockets or release the Wi-Fi
+        // network binding they rely on.
+        val keepMessageConnection =
+            activeDirectSession.value != null ||
+                activeChannelSession.value?.isLiveClassRoom == false
+        clientManager.release(preserveNetworkBinding = keepMessageConnection)
         hardwareStateJob?.cancel()
-        if (hardwareIntegrationDelegate.isInitialized()) {
+        if (hardwareIntegrationDelegate.isInitialized() && !keepMessageConnection) {
             runCatching { hardwareIntegrationDelegate.value.close() }
         }
         super.onCleared()
