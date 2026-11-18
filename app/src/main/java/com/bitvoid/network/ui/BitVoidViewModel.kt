@@ -42,6 +42,7 @@ import com.bitvoid.network.model.ClientConnectionStatus
 import com.bitvoid.network.model.ClientState
 import com.bitvoid.network.model.HostState
 import com.bitvoid.network.model.HotspotStatus
+import com.bitvoid.network.model.NodeConnectionEventType
 import com.bitvoid.network.model.NodeMode
 import com.bitvoid.network.service.BitVoidForegroundService
 import com.bitvoid.network.service.BitVoidNodeStateHolder
@@ -71,7 +72,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
 
     private val _hardwareConnectionState = MutableStateFlow(
         BitVoidConnectionState(
-            statusMessage = "ESP integration is optional. Open Client Node mode to start discovery."
+            statusMessage = "Hardware integration is optional. Open Node Log to monitor discovery."
         )
     )
     val hardwareConnectionState: StateFlow<BitVoidConnectionState> =
@@ -101,6 +102,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
 
     val hostState: StateFlow<HostState> = BitVoidNodeStateHolder.hostState
     val auditLogs: StateFlow<List<AuditLogEntry>> = BitVoidNodeStateHolder.auditLogs
+    val nodeConnectionLogs = BitVoidNodeStateHolder.nodeConnectionLogs
     val clientState: StateFlow<ClientState> = BitVoidNodeStateHolder.clientState
     val channels: StateFlow<List<BitVoidChannel>> = BitVoidChannelManager.channelsFlow
     val directConversations: StateFlow<List<DirectConversationSummary>> = BitVoidDirectChatManager.conversationsFlow
@@ -243,6 +245,11 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     private var customClientUrlPinned = false
 
     init {
+        BitVoidNodeStateHolder.appendNodeConnectionLog(
+            NodeConnectionEventType.APP,
+            "BitVoid mesh monitor started",
+            "Automatic same-LAN identity discovery is active."
+        )
         BitVoidChannelManager.ensureDefaultChannel()
         BitVoidDirectChatManager.registerUser(
             _myUsername.value,
@@ -274,7 +281,36 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             }
         }
         viewModelScope.launch {
+            var previousHostStatus: HotspotStatus? = null
+            var previousHostGateway: String? = null
             hostState.collect { hState ->
+                if (previousHostStatus != null && previousHostStatus != hState.status) {
+                    val eventType = when (hState.status) {
+                        HotspotStatus.ACTIVE, HotspotStatus.SERVER_ONLY -> NodeConnectionEventType.GATEWAY
+                        HotspotStatus.ERROR -> NodeConnectionEventType.ERROR
+                        HotspotStatus.IDLE -> NodeConnectionEventType.DISCONNECTED
+                        HotspotStatus.STARTING -> NodeConnectionEventType.RETRY
+                    }
+                    BitVoidNodeStateHolder.appendNodeConnectionLog(
+                        eventType,
+                        "App gateway ${hState.status.name.lowercase().replace('_', ' ')}",
+                        hState.errorMessage ?: if (hState.hasClientGatewayAddress) {
+                            hState.networkPortalUrl
+                        } else {
+                            "No client gateway address is currently assigned."
+                        },
+                        isError = hState.status == HotspotStatus.ERROR
+                    )
+                }
+                if (hState.hasClientGatewayAddress && hState.networkPortalUrl != previousHostGateway) {
+                    BitVoidNodeStateHolder.appendNodeConnectionLog(
+                        NodeConnectionEventType.GATEWAY,
+                        "App gateway address assigned",
+                        hState.networkPortalUrl
+                    )
+                    previousHostGateway = hState.networkPortalUrl
+                }
+                previousHostStatus = hState.status
                 if (!customClientUrlPinned &&
                     clientState.value.connectionStatus != ClientConnectionStatus.CONNECTED &&
                     hState.isServerRunning &&
@@ -453,8 +489,27 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             val integration = hardwareIntegrationDelegate.value
             integration.start()
             hardwareStateJob = viewModelScope.launch {
+                var previousSignature: String? = null
                 integration.state.collect { state ->
                     _hardwareConnectionState.value = state
+                    val signature = "${state.phase}|${state.endpoint?.directUrl}|${state.errorMessage}"
+                    if (signature != previousSignature) {
+                        val eventType = when (state.phase) {
+                            BitVoidConnectionPhase.READY -> NodeConnectionEventType.CONNECTED
+                            BitVoidConnectionPhase.ERROR -> NodeConnectionEventType.ERROR
+                            BitVoidConnectionPhase.BINDING -> NodeConnectionEventType.WIFI
+                            BitVoidConnectionPhase.DISCOVERING -> NodeConnectionEventType.DISCOVERY
+                            BitVoidConnectionPhase.WAITING_FOR_WIFI -> NodeConnectionEventType.RETRY
+                            BitVoidConnectionPhase.STOPPED -> NodeConnectionEventType.DISCONNECTED
+                        }
+                        BitVoidNodeStateHolder.appendNodeConnectionLog(
+                            eventType,
+                            "Hardware node ${state.phase.name.lowercase().replace('_', ' ')}",
+                            state.errorMessage ?: state.statusMessage,
+                            isError = state.phase == BitVoidConnectionPhase.ERROR
+                        )
+                        previousSignature = signature
+                    }
                 }
             }
             integration
@@ -654,6 +709,15 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
 
     fun clearAuditLogs() {
         BitVoidNodeStateHolder.clearAuditLogs()
+    }
+
+    fun clearNodeConnectionLogs() {
+        BitVoidNodeStateHolder.clearNodeConnectionLogs()
+        BitVoidNodeStateHolder.appendNodeConnectionLog(
+            NodeConnectionEventType.APP,
+            "Node Log cleared",
+            "New connection events will appear here."
+        )
     }
 
     fun scanNearbyNodes() {

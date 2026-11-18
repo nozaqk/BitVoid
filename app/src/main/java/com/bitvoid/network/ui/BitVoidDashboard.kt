@@ -151,6 +151,7 @@ fun BitVoidDashboard(
     val selectedBottomTab by viewModel.selectedBottomTab.collectAsStateWithLifecycle()
     val hostState by viewModel.hostState.collectAsStateWithLifecycle()
     val auditLogs by viewModel.auditLogs.collectAsStateWithLifecycle()
+    val nodeConnectionLogs by viewModel.nodeConnectionLogs.collectAsStateWithLifecycle()
     val clientState by viewModel.clientState.collectAsStateWithLifecycle()
     val hardwareConnectionState by viewModel.hardwareConnectionState.collectAsStateWithLifecycle()
     val isImporting by viewModel.isImportingFiles.collectAsStateWithLifecycle()
@@ -240,11 +241,13 @@ fun BitVoidDashboard(
         BitVoidClientHubContent(
             clientState = clientState,
             hardwareConnectionState = hardwareConnectionState,
+            connectionLogs = nodeConnectionLogs,
             onBack = { viewModel.selectMode(NodeMode.HOST) },
             onScanNetworks = { viewModel.scanNearbyNodes() },
             onConnectNode = { ssid -> viewModel.connectToNode(ssid) },
             onOpenWifiSettings = { viewModel.openSystemWifiSettings() },
-            onRefreshHardwareNode = { viewModel.refreshHardwareNodeConnection() }
+            onRefreshHardwareNode = { viewModel.refreshHardwareNodeConnection() },
+            onClearConnectionLogs = { viewModel.clearNodeConnectionLogs() }
         )
     }
 
@@ -966,12 +969,12 @@ private fun HostPowerControlCard(
                         text = {
                             Column {
                                 Text(
-                                    text = "Client Node",
+                                    text = "Node Log",
                                     style = MaterialTheme.typography.labelLarge,
                                     color = VoidTextPrimary
                                 )
                                 Text(
-                                    text = "Find and connect to a nearby BitVoid node",
+                                    text = "Monitor automatic app, ESP32, and Pi mesh links",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = VoidMint
                                 )

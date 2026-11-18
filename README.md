@@ -37,9 +37,9 @@ BitVoid is an offline-first Android local video node. A host phone creates an An
 - No request logs, no client IP/MAC retention, ephemeral per-response session IDs
 - Identifying request headers discarded by the server
 - Fixed-size privacy padding header and 4 KiB-block portal body padding
-- Client Node is reduced to a Wi-Fi scanner: it never joins or switches networks, and only links through the Wi-Fi already connected to the phone
-- Silent same-Wi-Fi BitVoid discovery probes the local subnet, identifies `/api/node`, and automatically routes the app to a discovered gateway without showing discovery progress
-- Manual **Connect Node** validates the selected SSID against the phone's current Wi-Fi and discovers the host URL automatically—no gateway URL or Wi-Fi passphrase entry is required
+- **Node Log** replaces Client Node and records Wi-Fi changes, scans, local identity checks, ESP32/Pi coordinator heartbeats, gateway selection, reconnects, and errors in memory
+- Silent same-Wi-Fi BitVoid mesh discovery probes the local subnet, verifies `/api/node` protocol identity, exchanges `/api/mesh/nodes` registries, and automatically routes every app to the same available app gateway
+- No gateway IP or URL entry is required: Android apps, ESP32, and Raspberry Pi coordinators can use different private addresses while converging through the same-LAN registry
 - Sandboxed local WebView with room JavaScript enabled but WebRTC injection-blocked; cookies, persistent cache, external hosts, camera, microphone, and geolocation remain disabled
 
 ## Project structure
@@ -52,16 +52,34 @@ app/src/main/java/com/bitvoid/network/
 ├── client/      # Peer discovery and client networking
 ├── direct/      # Ephemeral direct chat
 ├── media/       # Imported media catalog
+├── mesh/        # Shared Android/ESP32/Pi local identity protocol
 ├── model/       # Host/client and network configuration models
 ├── room/        # Private room authorization
 ├── server/      # Local HTTP and WebSocket portal
 ├── service/     # Foreground host engine and node state
 └── ui/          # Responsive Compose screens and theme
+controllers/
+├── esp32/       # PlatformIO same-LAN coordinator firmware
+└── pi/          # Python Raspberry Pi/Linux coordinator service
 ```
 
-## Standalone ESP32 / ESP-12E companion connection
+## Same-LAN app, ESP32, and Raspberry Pi mesh
 
-The Android client includes an application-scoped hardware integration under
+Every component answers the public BitVoid `local-identity-v1` protocol. This deliberately avoids
+an embedded universal “hidden key”: secrets compiled into an APK or firmware can be extracted and
+would provide misleading authentication. Nodes must answer the BitVoid identity headers and JSON
+metadata on the private LAN before they enter the mesh.
+
+Android scans the current `/24`, exchanges coordinator registries, registers a background heartbeat,
+and chooses an available Android app gateway deterministically. The Pi and ESP32 implementations
+scan/monitor their existing Wi-Fi and share live node addresses through `/api/mesh/nodes`; they do
+not route general internet traffic. See `controllers/pi/README.md` and
+`controllers/esp32/README.md`.
+
+## Optional direct `BitVoid_Node` hardware link
+
+In addition to the same-LAN mesh, the Android client retains an application-scoped isolated-AP
+hardware integration under
 `com.bitvoid.network.connection`:
 
 - `BitVoidConnectionManager` watches for the open `BitVoid_Node` Wi-Fi, binds the Android process
@@ -70,7 +88,7 @@ The Android client includes an application-scoped hardware integration under
 - `BitVoidNodeClient` supplies persistent local-only HTTP APIs, reconnecting
   `ws://bitvoid.local/ws/chat/{channelId}` messaging, and streaming HTTP `Range` requests for MP4
   playback. Its DNS and socket factories are pinned to the selected ESP Wi-Fi network.
-- `BitVoidHardwareConnectionCard` is shown in Client Node mode and offers zero-config status,
+- `BitVoidHardwareConnectionCard` is shown in Node Log and offers zero-config status,
   retry controls, and an embedded WebView dashboard. The WebView retries `192.168.4.1` if the
   platform WebView cannot resolve `.local`, while blocking navigation outside local addresses.
 
@@ -101,7 +119,7 @@ The APK is produced at `app/build/outputs/apk/debug/app-debug.apk`.
 6. Press **START BITVOID HOST ENGINE**. BitVoid creates a password-protected Wi-Fi Direct group or Android Local Only Hotspot and displays the active credentials. If Android returns an unsecured hotspot, BitVoid refuses it and keeps the vault in server-only mode.
 7. Confirm the security card and use the join-share button to send friends the SSID, required passphrase, portal URL, and WPA Wi-Fi QR payload.
 8. Nearby viewers join the displayed network and open `http://bitvoid.local`. BitVoid advertises that stable name over local multicast DNS, while the displayed IP endpoint remains available as a fallback. Captive-probe requests that reach BitVoid are redirected to the friendly hostname. The first screen asks for a Private Room ID, optional passkey, and chat alias; the public broadcast remains at `/public`.
-9. In another BitVoid app, open **CLIENT NODE**, scan, choose the Wi-Fi already connected to that phone, and tap **CONNECT NODE**. BitVoid does not switch Wi-Fi; it discovers the gateway through the current network. It also performs this discovery silently while the app is running and links automatically when a BitVoid node appears.
+9. In another BitVoid app, open **NODE LOG**. BitVoid automatically discovers app gateways and ESP32/Pi coordinators through the phone's current Wi-Fi, records each connection event, and links without IP or URL entry. **Refresh Mesh Now** is available only as an optional immediate retry.
 10. Authenticated room members receive an in-memory token, can stream only videos assigned to that room, exchange real-time local chat messages, and share files.
 11. From **HUB**, start an audio call with a channel or username, or create a named audio-only Live Class. Share its `CLS-XXXX-XX` ID with students on the same BitVoid network.
 12. During a Live Class, the host and students use microphone audio and the participant stage; students can leave and the host can end the class from either the native app or local browser portal.

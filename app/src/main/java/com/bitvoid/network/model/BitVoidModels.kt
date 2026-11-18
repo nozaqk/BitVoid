@@ -40,6 +40,29 @@ data class AuditLogEntry(
     val strippedHeaderCount: Int
 )
 
+enum class NodeConnectionEventType {
+    APP,
+    WIFI,
+    SCAN,
+    DISCOVERY,
+    IDENTITY,
+    COORDINATOR,
+    GATEWAY,
+    CONNECTED,
+    DISCONNECTED,
+    RETRY,
+    ERROR
+}
+
+data class NodeConnectionLogEntry(
+    val id: String,
+    val timestampMillis: Long,
+    val type: NodeConnectionEventType,
+    val title: String,
+    val detail: String,
+    val isError: Boolean = false
+)
+
 data class HostState(
     val status: HotspotStatus = HotspotStatus.IDLE,
     val isServerRunning: Boolean = false,
@@ -162,6 +185,8 @@ data class ClientState(
     val currentWifiSsid: String? = null,
     val connectedSsid: String? = null,
     val linkedNodeUrls: List<String> = emptyList(),
+    val coordinatorUrls: List<String> = emptyList(),
+    val meshNodeCount: Int = 0,
     val targetPortalUrl: String = "http://${BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME}",
     val statusMessage: String = "Standby — ready to scan or connect to a BitVoid node",
     val errorMessage: String? = null,
