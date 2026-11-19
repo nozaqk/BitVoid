@@ -48,8 +48,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.bitvoid.network.connection.BitVoidConnectionState
-import com.bitvoid.network.connection.BitVoidHardwareConnectionCard
 import com.bitvoid.network.model.ClientConnectionStatus
 import com.bitvoid.network.model.ClientState
 import com.bitvoid.network.model.DiscoveredNetwork
@@ -71,14 +69,12 @@ import java.util.Locale
 @Composable
 fun BitVoidClientHubContent(
     clientState: ClientState,
-    hardwareConnectionState: BitVoidConnectionState,
     connectionLogs: List<NodeConnectionLogEntry>,
     onBack: () -> Unit,
     onScanNetworks: () -> Unit,
     onConnectNode: (String) -> Unit,
     onConnectGatewayUrl: (String) -> Unit,
     onOpenWifiSettings: () -> Unit,
-    onRefreshHardwareNode: () -> Unit,
     onClearConnectionLogs: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -117,10 +113,6 @@ fun BitVoidClientHubContent(
         NodeConnectionLogCard(
             logs = connectionLogs,
             onClear = onClearConnectionLogs
-        )
-        BitVoidHardwareConnectionCard(
-            state = hardwareConnectionState,
-            onRefresh = onRefreshHardwareNode
         )
     }
 }

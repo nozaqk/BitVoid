@@ -153,7 +153,6 @@ fun BitVoidDashboard(
     val auditLogs by viewModel.auditLogs.collectAsStateWithLifecycle()
     val nodeConnectionLogs by viewModel.nodeConnectionLogs.collectAsStateWithLifecycle()
     val clientState by viewModel.clientState.collectAsStateWithLifecycle()
-    val hardwareConnectionState by viewModel.hardwareConnectionState.collectAsStateWithLifecycle()
     val isImporting by viewModel.isImportingFiles.collectAsStateWithLifecycle()
     val channels by viewModel.channels.collectAsStateWithLifecycle()
 
@@ -241,14 +240,12 @@ fun BitVoidDashboard(
     val clientHubContent: @Composable () -> Unit = {
         BitVoidClientHubContent(
             clientState = clientState,
-            hardwareConnectionState = hardwareConnectionState,
             connectionLogs = nodeConnectionLogs,
             onBack = { viewModel.selectMode(NodeMode.HOST) },
             onScanNetworks = { viewModel.scanNearbyNodes() },
             onConnectNode = { ssid -> viewModel.connectToNode(ssid) },
             onConnectGatewayUrl = { url -> viewModel.connectToGatewayUrl(url) },
             onOpenWifiSettings = { viewModel.openSystemWifiSettings() },
-            onRefreshHardwareNode = { viewModel.refreshHardwareNodeConnection() },
             onClearConnectionLogs = { viewModel.clearNodeConnectionLogs() }
         )
     }

@@ -356,7 +356,9 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             // Refresh every BitVoid node over the phone's existing Wi-Fi without asking Android to
             // switch networks. In Node Log mode, recover a missing mesh by automatically starting
-            // this phone's LAN gateway, then advertise it for every other app to discover.
+            // this phone's LAN gateway, then advertise it for every other app to discover. Keep
+            // scanning and listening while this phone hosts the gateway so newly joined peers link
+            // automatically without stopping gateway sharing.
             delay(1_500L)
             while (isActive) {
                 if (clientState.value.connectionStatus != ClientConnectionStatus.CONNECTING &&
@@ -368,7 +370,9 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
                 val now = System.currentTimeMillis()
-                if (_selectedMode.value == NodeMode.CLIENT &&
+                val shouldMonitorLocalLinks = _selectedMode.value == NodeMode.CLIENT ||
+                    hostState.value.isServerRunning
+                if (shouldMonitorLocalLinks &&
                     !clientState.value.isScanning &&
                     now - lastAutomaticWifiScanMs >= AUTOMATIC_WIFI_SCAN_INTERVAL_MS
                 ) {
