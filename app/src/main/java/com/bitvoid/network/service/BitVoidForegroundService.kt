@@ -976,7 +976,10 @@ class BitVoidForegroundService : Service() {
                 delay(1000L)
                 BitVoidNodeStateHolder.updateHostState { state ->
                     if (state.status == HotspotStatus.ACTIVE || state.status == HotspotStatus.SERVER_ONLY) {
-                        state.copy(uptimeSeconds = state.uptimeSeconds + 1L)
+                        state.copy(
+                            uptimeSeconds = state.uptimeSeconds + 1L,
+                            connectedNodesCount = localServer?.connectedNodeCount() ?: 0
+                        )
                     } else {
                         state
                     }
@@ -1051,6 +1054,7 @@ class BitVoidForegroundService : Service() {
                 boundEndpoints = emptyList(),
                 isSecureServerRunning = false,
                 activeSessionsCount = 0,
+                connectedNodesCount = 0,
                 uptimeSeconds = 0L
             )
         }

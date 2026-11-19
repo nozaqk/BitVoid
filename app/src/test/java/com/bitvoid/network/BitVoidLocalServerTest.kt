@@ -142,6 +142,25 @@ class BitVoidLocalServerTest {
     }
 
     @Test
+    fun `connected node telemetry deduplicates requests and expires inactive devices`() {
+        repeat(3) {
+            val conn = URL("http://127.0.0.1:$testPort/api/node")
+                .openConnection() as HttpURLConnection
+            assertEquals(200, conn.responseCode)
+            conn.inputStream.close()
+            conn.disconnect()
+        }
+
+        assertEquals(1, server.connectedNodeCount())
+        assertEquals(
+            0,
+            server.connectedNodeCount(
+                System.currentTimeMillis() + BitVoidLocalServer.NODE_ACTIVITY_TIMEOUT_MS + 1L
+            )
+        )
+    }
+
+    @Test
     fun `node identity endpoint supports lightweight same wifi discovery`() {
         BitVoidNodeStateHolder.updateHostState {
             HostState(

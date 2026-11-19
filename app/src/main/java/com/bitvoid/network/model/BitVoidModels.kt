@@ -82,6 +82,7 @@ data class HostState(
     val isSecureServerRunning: Boolean = false,
     val sharedFiles: List<BitVoidMediaItem> = emptyList(),
     val activeSessionsCount: Int = 0,
+    val connectedNodesCount: Int = 0,
     val bytesServed: Long = 0L,
     val anonymizedRequestsCount: Int = 0,
     val strippedHeadersTotal: Int = 0,

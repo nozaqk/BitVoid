@@ -60,6 +60,7 @@ import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.WifiFind
@@ -95,6 +96,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -139,6 +141,7 @@ import com.bitvoid.network.ui.theme.VoidTextPrimary
 import com.bitvoid.network.ui.theme.VoidTextSecondary
 import com.bitvoid.network.R
 import java.util.Locale
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -220,6 +223,7 @@ fun BitVoidDashboard(
     var showProtocolDialog by rememberSaveable { mutableStateOf(false) }
     var showQrDialog by rememberSaveable { mutableStateOf(false) }
     var showNodeAccessDialog by rememberSaveable { mutableStateOf(false) }
+    var showGatewayOverviewDialog by rememberSaveable { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
@@ -422,6 +426,7 @@ fun BitVoidDashboard(
                         onOpenProtocolDialog = { showProtocolDialog = true },
                         onOpenQrDialog = { showQrDialog = true },
                         onOpenNodeAccess = { showNodeAccessDialog = true },
+                        onOpenGatewayOverview = { showGatewayOverviewDialog = true },
                         onOpenWifiSettings = { viewModel.openSystemWifiSettings() },
                         onOpenHotspotSettings = { viewModel.openHotspotTetherSettings() },
                         onPickDocuments = onPickDocuments,
@@ -466,6 +471,7 @@ fun BitVoidDashboard(
                     onOpenProtocolDialog = { showProtocolDialog = true },
                     onOpenQrDialog = { showQrDialog = true },
                     onOpenNodeAccess = { showNodeAccessDialog = true },
+                    onOpenGatewayOverview = { showGatewayOverviewDialog = true },
                     onOpenWifiSettings = { viewModel.openSystemWifiSettings() },
                     onOpenHotspotSettings = { viewModel.openHotspotTetherSettings() },
                     onPickDocuments = onPickDocuments,
@@ -512,6 +518,14 @@ fun BitVoidDashboard(
             hostState = hostState,
             onCopy = ::copyToClipboard,
             onDismiss = { showNodeAccessDialog = false }
+        )
+    }
+
+    if (showGatewayOverviewDialog) {
+        GatewayOverviewDialog(
+            hostState = hostState,
+            channels = channels,
+            onDismiss = { showGatewayOverviewDialog = false }
         )
     }
 
@@ -603,6 +617,7 @@ private fun CompactDashboardContent(
     onOpenProtocolDialog: () -> Unit,
     onOpenQrDialog: () -> Unit,
     onOpenNodeAccess: () -> Unit,
+    onOpenGatewayOverview: () -> Unit,
     onOpenWifiSettings: () -> Unit,
     onOpenHotspotSettings: () -> Unit,
     onPickDocuments: () -> Unit,
@@ -649,6 +664,7 @@ private fun CompactDashboardContent(
                                 onOpenProtocolDialog = onOpenProtocolDialog,
                                 onOpenQrDialog = onOpenQrDialog,
                                 onOpenNodeAccess = onOpenNodeAccess,
+                                onOpenGatewayOverview = onOpenGatewayOverview,
                                 onOpenClientNode = { onSelectMode(NodeMode.CLIENT) }
                             )
                         }
@@ -722,6 +738,7 @@ private fun WideDashboardContent(
     onOpenProtocolDialog: () -> Unit,
     onOpenQrDialog: () -> Unit,
     onOpenNodeAccess: () -> Unit,
+    onOpenGatewayOverview: () -> Unit,
     onOpenWifiSettings: () -> Unit,
     onOpenHotspotSettings: () -> Unit,
     onPickDocuments: () -> Unit,
@@ -776,6 +793,7 @@ private fun WideDashboardContent(
                             onOpenProtocolDialog = onOpenProtocolDialog,
                             onOpenQrDialog = onOpenQrDialog,
                             onOpenNodeAccess = onOpenNodeAccess,
+                            onOpenGatewayOverview = onOpenGatewayOverview,
                             onOpenClientNode = onOpenClientNode
                         )
                     }
@@ -868,6 +886,7 @@ private fun HostPowerControlCard(
     onOpenProtocolDialog: () -> Unit,
     onOpenQrDialog: () -> Unit,
     onOpenNodeAccess: () -> Unit,
+    onOpenGatewayOverview: () -> Unit,
     onOpenClientNode: () -> Unit
 ) {
     val isActive = hostState.status == HotspotStatus.ACTIVE ||
@@ -968,6 +987,35 @@ private fun HostPowerControlCard(
                             onOpenNodeAccess()
                         },
                         modifier = Modifier.testTag("menu_node_access")
+                    )
+                    HorizontalDivider(color = VoidBorder)
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(
+                                    text = "Gateway Overview",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = VoidTextPrimary
+                                )
+                                Text(
+                                    text = "Live nodes, users, channels and speed",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = VoidCyan
+                                )
+                            }
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Filled.Speed,
+                                contentDescription = null,
+                                tint = VoidCyan
+                            )
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            onOpenGatewayOverview()
+                        },
+                        modifier = Modifier.testTag("menu_gateway_overview")
                     )
                     HorizontalDivider(color = VoidBorder)
                     DropdownMenuItem(
@@ -1184,6 +1232,232 @@ private fun HostPowerControlCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun GatewayOverviewDialog(
+    hostState: HostState,
+    channels: List<BitVoidChannel>,
+    onDismiss: () -> Unit
+) {
+    val isRunning = hostState.status == HotspotStatus.ACTIVE ||
+        hostState.status == HotspotStatus.SERVER_ONLY
+    val bytesPerSecond = rememberGatewayBytesPerSecond(
+        totalBytes = hostState.bytesServed,
+        isRunning = isRunning
+    )
+    val connectedUsers = countConnectedUsers(channels)
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .widthIn(max = 560.dp)
+                .testTag("gateway_overview_dialog"),
+            shape = RoundedCornerShape(18.dp),
+            color = VoidObsidian,
+            border = BorderStroke(1.dp, VoidCyan.copy(alpha = 0.65f))
+        ) {
+            Column(modifier = Modifier.padding(18.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "GATEWAY OVERVIEW",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = VoidCyan,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = if (isRunning) "LIVE LOCAL NETWORK TELEMETRY" else "GATEWAY STANDBY",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isRunning) VoidMint else VoidTextSecondary
+                        )
+                    }
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.testTag("close_gateway_overview")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Close gateway overview",
+                            tint = VoidTextPrimary
+                        )
+                    }
+                }
+
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 14.dp),
+                    color = VoidBorder
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    GatewayMetricTile(
+                        label = "CONNECTED NODES",
+                        value = hostState.connectedNodesCount.toString(),
+                        detail = "active app devices",
+                        accent = VoidMint,
+                        testTag = "gateway_nodes_count",
+                        modifier = Modifier.weight(1f)
+                    )
+                    GatewayMetricTile(
+                        label = "CONNECTED USERS",
+                        value = connectedUsers.toString(),
+                        detail = "unique active IDs",
+                        accent = VoidCyan,
+                        testTag = "gateway_users_count",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    GatewayMetricTile(
+                        label = "CHANNELS",
+                        value = channels.size.toString(),
+                        detail = "operating or created",
+                        accent = VoidAmber,
+                        testTag = "gateway_channels_count",
+                        modifier = Modifier.weight(1f)
+                    )
+                    GatewayMetricTile(
+                        label = "GATEWAY SPEED",
+                        value = formatGatewaySpeed(bytesPerSecond),
+                        detail = "live served traffic",
+                        accent = VoidCyan,
+                        testTag = "gateway_speed_value",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Text(
+                    text = "Nodes remain connected while they use this gateway. Users are counted once across all active channel sessions.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = VoidTextSecondary,
+                    modifier = Modifier.padding(top = 14.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GatewayMetricTile(
+    label: String,
+    value: String,
+    detail: String,
+    accent: Color,
+    testTag: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.testTag(testTag),
+        shape = RoundedCornerShape(12.dp),
+        color = VoidSurface,
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.42f))
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = accent,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.headlineSmall,
+                color = VoidTextPrimary,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = detail,
+                style = MaterialTheme.typography.labelSmall,
+                color = VoidTextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun rememberGatewayBytesPerSecond(totalBytes: Long, isRunning: Boolean): Long {
+    val latestTotalBytes by rememberUpdatedState(totalBytes)
+    var bytesPerSecond by remember { mutableStateOf(0L) }
+
+    LaunchedEffect(isRunning) {
+        if (!isRunning) {
+            bytesPerSecond = 0L
+            return@LaunchedEffect
+        }
+
+        var previousBytes = latestTotalBytes
+        var previousNanos = System.nanoTime()
+        while (true) {
+            delay(1_000L)
+            val currentBytes = latestTotalBytes
+            val currentNanos = System.nanoTime()
+            bytesPerSecond = calculateGatewayBytesPerSecond(
+                previousBytes = previousBytes,
+                currentBytes = currentBytes,
+                elapsedNanos = currentNanos - previousNanos
+            )
+            previousBytes = currentBytes
+            previousNanos = currentNanos
+        }
+    }
+    return bytesPerSecond
+}
+
+internal fun countConnectedUsers(channels: List<BitVoidChannel>): Int =
+    channels.asSequence()
+        .flatMap { it.activeParticipants.asSequence() }
+        .filter { it.isWebSocketConnected }
+        .map { it.callsign.trim().lowercase(Locale.ROOT) }
+        .filter { it.isNotEmpty() }
+        .distinct()
+        .count()
+
+internal fun calculateGatewayBytesPerSecond(
+    previousBytes: Long,
+    currentBytes: Long,
+    elapsedNanos: Long
+): Long {
+    if (elapsedNanos <= 0L || currentBytes <= previousBytes) return 0L
+    val elapsedSeconds = elapsedNanos.toDouble() / 1_000_000_000.0
+    return ((currentBytes - previousBytes).toDouble() / elapsedSeconds)
+        .toLong()
+        .coerceAtLeast(0L)
+}
+
+internal fun formatGatewaySpeed(bytesPerSecond: Long): String {
+    val bitsPerSecond = bytesPerSecond.coerceAtLeast(0L).toDouble() * 8.0
+    return when {
+        bitsPerSecond >= 1_000_000_000.0 ->
+            String.format(Locale.US, "%.1f Gb/s", bitsPerSecond / 1_000_000_000.0)
+        bitsPerSecond >= 1_000_000.0 ->
+            String.format(Locale.US, "%.1f Mb/s", bitsPerSecond / 1_000_000.0)
+        bitsPerSecond >= 1_000.0 ->
+            String.format(Locale.US, "%.1f Kb/s", bitsPerSecond / 1_000.0)
+        else -> "${bitsPerSecond.toLong()} b/s"
     }
 }
 
