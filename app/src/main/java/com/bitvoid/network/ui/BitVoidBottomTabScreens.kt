@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.WifiFind
 import androidx.compose.material.icons.filled.WifiTethering
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Home
@@ -319,6 +320,8 @@ fun SettingsAutonomousCard(
     onRequestPermissions: () -> Unit,
     onOpenProtocolDialog: () -> Unit,
     onOpenQrDialog: () -> Unit,
+    onOpenNodeAccess: () -> Unit,
+    onOpenClientNode: () -> Unit,
     onOpenWifiSettings: () -> Unit,
     onOpenHotspotSettings: () -> Unit
 ) {
@@ -682,6 +685,46 @@ fun SettingsAutonomousCard(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("QR CODE", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onOpenNodeAccess,
+                        border = BorderStroke(1.dp, VoidMint.copy(alpha = 0.65f)),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidMint),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("settings_node_access_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Lock,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("NODE ACCESS", style = MaterialTheme.typography.labelMedium)
+                    }
+                    OutlinedButton(
+                        onClick = onOpenClientNode,
+                        border = BorderStroke(1.dp, VoidCyan.copy(alpha = 0.65f)),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidCyan),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("settings_node_log_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.WifiFind,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("NODE LOG", style = MaterialTheme.typography.labelMedium)
                     }
                 }
             }
