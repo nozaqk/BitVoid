@@ -1072,133 +1072,68 @@ private fun GatewayOverviewCard(
             .fillMaxWidth()
             .testTag("gateway_overview_card"),
         colors = CardDefaults.cardColors(containerColor = VoidSurface),
-        border = BorderStroke(1.dp, VoidCyan.copy(alpha = 0.55f)),
-        shape = RoundedCornerShape(16.dp)
+        border = BorderStroke(1.dp, VoidBorder),
+        shape = RoundedCornerShape(14.dp)
     ) {
-        Column(modifier = Modifier.padding(18.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     imageVector = Icons.Filled.Speed,
                     contentDescription = null,
-                    tint = VoidCyan,
-                    modifier = Modifier.size(22.dp)
+                    tint = VoidMint,
+                    modifier = Modifier.size(18.dp)
                 )
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "GATEWAY CONNECTION STATUS",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = VoidCyan,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = if (isRunning) {
-                            "LIVE LOCAL NETWORK TELEMETRY"
-                        } else {
-                            "START THE HOST ENGINE TO ACCEPT CONNECTIONS"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (isRunning) VoidMint else VoidTextSecondary
-                    )
-                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "GATEWAY CONNECTION STATUS",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = VoidMint
+                )
             }
-
-            HorizontalDivider(
-                modifier = Modifier.padding(vertical = 14.dp),
-                color = VoidBorder
-            )
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                GatewayMetricTile(
+                TelemetryTile(
                     label = "APP NODES",
                     value = hostState.connectedNodesCount.toString(),
-                    detail = "connected devices",
-                    accent = VoidMint,
-                    testTag = "gateway_nodes_count",
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("gateway_nodes_count")
                 )
-                GatewayMetricTile(
+                TelemetryTile(
                     label = "USERS CONNECTED",
                     value = connectedUsers.toString(),
-                    detail = "unique active IDs",
-                    accent = VoidCyan,
-                    testTag = "gateway_users_count",
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("gateway_users_count")
                 )
             }
-            Spacer(modifier = Modifier.height(10.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                GatewayMetricTile(
+                TelemetryTile(
                     label = "CHANNELS",
                     value = channels.size.toString(),
-                    detail = "operating or created",
-                    accent = VoidAmber,
-                    testTag = "gateway_channels_count",
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("gateway_channels_count")
                 )
-                GatewayMetricTile(
+                TelemetryTile(
                     label = "GATEWAY SPEED",
                     value = formatGatewaySpeed(bytesPerSecond),
-                    detail = "live served traffic",
-                    accent = VoidCyan,
-                    testTag = "gateway_speed_value",
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("gateway_speed_value")
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun GatewayMetricTile(
-    label: String,
-    value: String,
-    detail: String,
-    accent: Color,
-    testTag: String,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        modifier = modifier.testTag(testTag),
-        shape = RoundedCornerShape(12.dp),
-        color = VoidSurface,
-        border = BorderStroke(1.dp, accent.copy(alpha = 0.42f))
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(3.dp)
-        ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = accent,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1
-            )
-            Text(
-                text = value,
-                style = MaterialTheme.typography.headlineSmall,
-                color = VoidTextPrimary,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = detail,
-                style = MaterialTheme.typography.labelSmall,
-                color = VoidTextSecondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
         }
     }
 }
