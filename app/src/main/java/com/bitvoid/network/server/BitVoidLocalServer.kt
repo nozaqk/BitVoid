@@ -29,6 +29,7 @@ import java.io.InputStream
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.security.SecureRandom
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -50,6 +51,7 @@ class BitVoidLocalServer(
         private const val CONSTANT_BLOCK_SIZE = 4096
         private const val STREAM_CHUNK_SIZE = 65536
         private const val HEADER_PAD_STEP = 64
+        internal const val NODE_ACTIVITY_TIMEOUT_MS = 120_000L
 
         private val CAPTIVE_PORTAL_PATHS = setOf(
             "/generate_204",
@@ -111,7 +113,10 @@ class BitVoidLocalServer(
     }
 
     private val secureRandom = SecureRandom()
-    private val activeSessions = ConcurrentHashMap<String, Long>()
+    private val nodeActivitySalt = ByteArray(16).also { secureRandom.nextBytes(it) }
+    // Volatile, in-memory activity keyed by a process-salted endpoint digest. This counts one app
+    // or browser device once across requests without retaining its local address or identity.
+    private val activeNodes = ConcurrentHashMap<String, Long>()
     private val requestCounter = AtomicInteger(0)
     private val totalBytesServed = AtomicLong(0L)
     private val timeFormatter = SimpleDateFormat("HH:mm:ss", Locale.US)
@@ -268,8 +273,8 @@ class BitVoidLocalServer(
     override fun serveHttp(session: IHTTPSession): Response {
         val ephemeralToken = generateEphemeralToken()
         val now = System.currentTimeMillis()
-        activeSessions[ephemeralToken] = now
-        pruneStaleSessions(now)
+        activeNodes[connectionActivityKey(session)] = now
+        pruneStaleNodes(now)
 
         // Strip all identifying HTTP headers before processing.
         val (sanitizedHeaders, strippedCount) = stripIdentifyingHeaders(session.headers)
@@ -5342,14 +5347,34 @@ class BitVoidLocalServer(
         return String(chars)
     }
 
-    private fun pruneStaleSessions(now: Long) {
-        val cutoff = now - 120_000L
-        val iterator = activeSessions.entries.iterator()
+    private fun connectionActivityKey(session: IHTTPSession): String {
+        val remote = session.remoteIpAddress
+            ?.trim()
+            ?.substringBefore('%')
+            ?.trim('[', ']')
+            ?.removePrefix("::ffff:")
+            ?.takeIf { it.isNotEmpty() }
+        if (remote == null) return "local-node"
+        val digest = MessageDigest.getInstance("SHA-256")
+        digest.update(nodeActivitySalt)
+        return digest.digest(remote.toByteArray(StandardCharsets.UTF_8))
+            .take(12)
+            .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
+    }
+
+    private fun pruneStaleNodes(now: Long) {
+        val cutoff = now - NODE_ACTIVITY_TIMEOUT_MS
+        val iterator = activeNodes.entries.iterator()
         while (iterator.hasNext()) {
             if (iterator.next().value < cutoff) {
                 iterator.remove()
             }
         }
+    }
+
+    fun connectedNodeCount(now: Long = System.currentTimeMillis()): Int {
+        pruneStaleNodes(now)
+        return activeNodes.size
     }
 
     private fun sanitizePathForAudit(uri: String): String {
@@ -5369,7 +5394,8 @@ class BitVoidLocalServer(
         val totalServed = totalBytesServed.get()
         BitVoidNodeStateHolder.updateHostState { state ->
             state.copy(
-                activeSessionsCount = activeSessions.size,
+                activeSessionsCount = activeNodes.size,
+                connectedNodesCount = activeNodes.size,
                 bytesServed = totalServed,
                 anonymizedRequestsCount = reqCount,
                 strippedHeadersTotal = state.strippedHeadersTotal + strippedHeaders,
