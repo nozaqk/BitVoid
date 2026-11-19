@@ -53,17 +53,14 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Public
-import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material.icons.filled.WifiFind
 import androidx.compose.material.icons.filled.WifiTethering
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -73,8 +70,6 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -223,7 +218,6 @@ fun BitVoidDashboard(
     var showProtocolDialog by rememberSaveable { mutableStateOf(false) }
     var showQrDialog by rememberSaveable { mutableStateOf(false) }
     var showNodeAccessDialog by rememberSaveable { mutableStateOf(false) }
-    var showGatewayOverviewDialog by rememberSaveable { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
@@ -426,7 +420,6 @@ fun BitVoidDashboard(
                         onOpenProtocolDialog = { showProtocolDialog = true },
                         onOpenQrDialog = { showQrDialog = true },
                         onOpenNodeAccess = { showNodeAccessDialog = true },
-                        onOpenGatewayOverview = { showGatewayOverviewDialog = true },
                         onOpenWifiSettings = { viewModel.openSystemWifiSettings() },
                         onOpenHotspotSettings = { viewModel.openHotspotTetherSettings() },
                         onPickDocuments = onPickDocuments,
@@ -444,7 +437,10 @@ fun BitVoidDashboard(
                         clientHubContent = clientHubContent,
                         hubScreenContent = hubScreenContent,
                         pChatScreenContent = pChatScreenContent,
-                        onOpenClientNode = { viewModel.selectMode(NodeMode.CLIENT) }
+                        onOpenClientNode = {
+                            viewModel.selectMode(NodeMode.CLIENT)
+                            viewModel.selectBottomTab(AppBottomTab.HOME)
+                        }
                     )
                 }
             } else {
@@ -466,12 +462,14 @@ fun BitVoidDashboard(
                         coroutineScope.launch { snackbarHostState.showSnackbar(msg) }
                     },
                     onRequestPermissions = onRequestPermissions,
-                    onSelectMode = { viewModel.selectMode(it) },
+                    onOpenClientNode = {
+                        viewModel.selectMode(NodeMode.CLIENT)
+                        viewModel.selectBottomTab(AppBottomTab.HOME)
+                    },
                     onToggleHost = { viewModel.toggleHostGateway() },
                     onOpenProtocolDialog = { showProtocolDialog = true },
                     onOpenQrDialog = { showQrDialog = true },
                     onOpenNodeAccess = { showNodeAccessDialog = true },
-                    onOpenGatewayOverview = { showGatewayOverviewDialog = true },
                     onOpenWifiSettings = { viewModel.openSystemWifiSettings() },
                     onOpenHotspotSettings = { viewModel.openHotspotTetherSettings() },
                     onPickDocuments = onPickDocuments,
@@ -518,14 +516,6 @@ fun BitVoidDashboard(
             hostState = hostState,
             onCopy = ::copyToClipboard,
             onDismiss = { showNodeAccessDialog = false }
-        )
-    }
-
-    if (showGatewayOverviewDialog) {
-        GatewayOverviewDialog(
-            hostState = hostState,
-            channels = channels,
-            onDismiss = { showGatewayOverviewDialog = false }
         )
     }
 
@@ -612,12 +602,11 @@ private fun CompactDashboardContent(
     onSaveBroadcastCredentials: (String, String) -> Result<Unit>,
     onBroadcastSaved: (String) -> Unit,
     onRequestPermissions: () -> Unit,
-    onSelectMode: (NodeMode) -> Unit,
+    onOpenClientNode: () -> Unit,
     onToggleHost: () -> Unit,
     onOpenProtocolDialog: () -> Unit,
     onOpenQrDialog: () -> Unit,
     onOpenNodeAccess: () -> Unit,
-    onOpenGatewayOverview: () -> Unit,
     onOpenWifiSettings: () -> Unit,
     onOpenHotspotSettings: () -> Unit,
     onPickDocuments: () -> Unit,
@@ -660,18 +649,21 @@ private fun CompactDashboardContent(
                         Box(modifier = Modifier.padding(horizontal = 16.dp)) {
                             HostPowerControlCard(
                                 hostState = hostState,
-                                onToggleHost = onToggleHost,
-                                onOpenProtocolDialog = onOpenProtocolDialog,
-                                onOpenQrDialog = onOpenQrDialog,
-                                onOpenNodeAccess = onOpenNodeAccess,
-                                onOpenGatewayOverview = onOpenGatewayOverview,
-                                onOpenClientNode = { onSelectMode(NodeMode.CLIENT) }
+                                onToggleHost = onToggleHost
                             )
                         }
                     }
                     item(key = "host_telemetry_card") {
                         Box(modifier = Modifier.padding(horizontal = 16.dp)) {
                             PrivacyTelemetryCard(hostState = hostState)
+                        }
+                    }
+                    item(key = "gateway_overview_card") {
+                        Box(modifier = Modifier.padding(horizontal = 16.dp)) {
+                            GatewayOverviewCard(
+                                hostState = hostState,
+                                channels = channels
+                            )
                         }
                     }
                 } else {
@@ -700,6 +692,8 @@ private fun CompactDashboardContent(
                             onRequestPermissions = onRequestPermissions,
                             onOpenProtocolDialog = onOpenProtocolDialog,
                             onOpenQrDialog = onOpenQrDialog,
+                            onOpenNodeAccess = onOpenNodeAccess,
+                            onOpenClientNode = onOpenClientNode,
                             onOpenWifiSettings = onOpenWifiSettings,
                             onOpenHotspotSettings = onOpenHotspotSettings
                         )
@@ -738,7 +732,6 @@ private fun WideDashboardContent(
     onOpenProtocolDialog: () -> Unit,
     onOpenQrDialog: () -> Unit,
     onOpenNodeAccess: () -> Unit,
-    onOpenGatewayOverview: () -> Unit,
     onOpenWifiSettings: () -> Unit,
     onOpenHotspotSettings: () -> Unit,
     onPickDocuments: () -> Unit,
@@ -789,12 +782,7 @@ private fun WideDashboardContent(
                     item {
                         HostPowerControlCard(
                             hostState = hostState,
-                            onToggleHost = onToggleHost,
-                            onOpenProtocolDialog = onOpenProtocolDialog,
-                            onOpenQrDialog = onOpenQrDialog,
-                            onOpenNodeAccess = onOpenNodeAccess,
-                            onOpenGatewayOverview = onOpenGatewayOverview,
-                            onOpenClientNode = onOpenClientNode
+                            onToggleHost = onToggleHost
                         )
                     }
                 }
@@ -807,6 +795,12 @@ private fun WideDashboardContent(
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     item { PrivacyTelemetryCard(hostState = hostState) }
+                    item {
+                        GatewayOverviewCard(
+                            hostState = hostState,
+                            channels = channels
+                        )
+                    }
                 }
             }
         }
@@ -862,6 +856,8 @@ private fun WideDashboardContent(
                         onRequestPermissions = onRequestPermissions,
                         onOpenProtocolDialog = onOpenProtocolDialog,
                         onOpenQrDialog = onOpenQrDialog,
+                        onOpenNodeAccess = onOpenNodeAccess,
+                        onOpenClientNode = onOpenClientNode,
                         onOpenWifiSettings = onOpenWifiSettings,
                         onOpenHotspotSettings = onOpenHotspotSettings
                     )
@@ -882,17 +878,11 @@ private fun WideDashboardContent(
 @Composable
 private fun HostPowerControlCard(
     hostState: HostState,
-    onToggleHost: () -> Unit,
-    onOpenProtocolDialog: () -> Unit,
-    onOpenQrDialog: () -> Unit,
-    onOpenNodeAccess: () -> Unit,
-    onOpenGatewayOverview: () -> Unit,
-    onOpenClientNode: () -> Unit
+    onToggleHost: () -> Unit
 ) {
     val isActive = hostState.status == HotspotStatus.ACTIVE ||
         hostState.status == HotspotStatus.SERVER_ONLY
     val isStarting = hostState.status == HotspotStatus.STARTING
-    var menuExpanded by remember { mutableStateOf(false) }
 
     val infiniteTransition = rememberInfiniteTransition(label = "nodePulse")
     val pulseProgress by infiniteTransition.animateFloat(
@@ -935,177 +925,6 @@ private fun HostPowerControlCard(
                         )
                     )
             )
-
-            // Three-dot menu anchored in the top-right corner of the Power Control Card
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 6.dp, end = 6.dp)
-            ) {
-                IconButton(
-                    onClick = { menuExpanded = true },
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("host_power_more_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.MoreVert,
-                        contentDescription = "Node access and host options",
-                        tint = VoidTextPrimary
-                    )
-                }
-
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false },
-                    containerColor = VoidSurfaceElevated
-                ) {
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text(
-                                    text = "Node Access & Join",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = VoidTextPrimary
-                                )
-                                Text(
-                                    text = "SSID, passphrase and portal links",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = VoidMint
-                                )
-                            }
-                        },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Filled.Lock,
-                                contentDescription = null,
-                                tint = VoidMint
-                            )
-                        },
-                        onClick = {
-                            menuExpanded = false
-                            onOpenNodeAccess()
-                        },
-                        modifier = Modifier.testTag("menu_node_access")
-                    )
-                    HorizontalDivider(color = VoidBorder)
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text(
-                                    text = "Gateway Overview",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = VoidTextPrimary
-                                )
-                                Text(
-                                    text = "Live nodes, users, channels and speed",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = VoidCyan
-                                )
-                            }
-                        },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Filled.Speed,
-                                contentDescription = null,
-                                tint = VoidCyan
-                            )
-                        },
-                        onClick = {
-                            menuExpanded = false
-                            onOpenGatewayOverview()
-                        },
-                        modifier = Modifier.testTag("menu_gateway_overview")
-                    )
-                    HorizontalDivider(color = VoidBorder)
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text(
-                                    text = "Network Protocol",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = VoidTextPrimary
-                                )
-                                Text(
-                                    text = "WPA2-PSK (VISIBLE) · HTTP/WS :${hostState.port}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = VoidCyan
-                                )
-                            }
-                        },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Filled.WifiTethering,
-                                contentDescription = null,
-                                tint = VoidCyan
-                            )
-                        },
-                        onClick = {
-                            menuExpanded = false
-                            onOpenProtocolDialog()
-                        },
-                        modifier = Modifier.testTag("menu_network_protocol")
-                    )
-                    HorizontalDivider(color = VoidBorder)
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text(
-                                    text = "Node Log",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = VoidTextPrimary
-                                )
-                                Text(
-                                    text = "Monitor automatic app, ESP32, and Pi mesh links",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = VoidMint
-                                )
-                            }
-                        },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Filled.WifiFind,
-                                contentDescription = null,
-                                tint = VoidMint
-                            )
-                        },
-                        onClick = {
-                            menuExpanded = false
-                            onOpenClientNode()
-                        },
-                        modifier = Modifier.testTag("menu_client_node")
-                    )
-                    HorizontalDivider(color = VoidBorder)
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text(
-                                    text = "QR Code",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = VoidTextPrimary
-                                )
-                                Text(
-                                    text = "Wi-Fi & Portal QR Share",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = VoidMint
-                                )
-                            }
-                        },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Filled.QrCode2,
-                                contentDescription = null,
-                                tint = VoidMint
-                            )
-                        },
-                        onClick = {
-                            menuExpanded = false
-                            onOpenQrDialog()
-                        },
-                        modifier = Modifier.testTag("menu_qr_code")
-                    )
-                }
-            }
 
             Column(
                 modifier = Modifier
@@ -1236,10 +1055,9 @@ private fun HostPowerControlCard(
 }
 
 @Composable
-private fun GatewayOverviewDialog(
+private fun GatewayOverviewCard(
     hostState: HostState,
-    channels: List<BitVoidChannel>,
-    onDismiss: () -> Unit
+    channels: List<BitVoidChannel>
 ) {
     val isRunning = hostState.status == HotspotStatus.ACTIVE ||
         hostState.status == HotspotStatus.SERVER_ONLY
@@ -1249,104 +1067,91 @@ private fun GatewayOverviewDialog(
     )
     val connectedUsers = countConnectedUsers(channels)
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("gateway_overview_card"),
+        colors = CardDefaults.cardColors(containerColor = VoidSurface),
+        border = BorderStroke(1.dp, VoidCyan.copy(alpha = 0.55f)),
+        shape = RoundedCornerShape(16.dp)
     ) {
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth(0.92f)
-                .widthIn(max = 560.dp)
-                .testTag("gateway_overview_dialog"),
-            shape = RoundedCornerShape(18.dp),
-            color = VoidObsidian,
-            border = BorderStroke(1.dp, VoidCyan.copy(alpha = 0.65f))
-        ) {
-            Column(modifier = Modifier.padding(18.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "GATEWAY OVERVIEW",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = VoidCyan,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = if (isRunning) "LIVE LOCAL NETWORK TELEMETRY" else "GATEWAY STANDBY",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (isRunning) VoidMint else VoidTextSecondary
-                        )
-                    }
-                    IconButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.testTag("close_gateway_overview")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Close,
-                            contentDescription = "Close gateway overview",
-                            tint = VoidTextPrimary
-                        )
-                    }
-                }
-
-                HorizontalDivider(
-                    modifier = Modifier.padding(vertical = 14.dp),
-                    color = VoidBorder
+        Column(modifier = Modifier.padding(18.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Speed,
+                    contentDescription = null,
+                    tint = VoidCyan,
+                    modifier = Modifier.size(22.dp)
                 )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    GatewayMetricTile(
-                        label = "CONNECTED NODES",
-                        value = hostState.connectedNodesCount.toString(),
-                        detail = "active app devices",
-                        accent = VoidMint,
-                        testTag = "gateway_nodes_count",
-                        modifier = Modifier.weight(1f)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "GATEWAY CONNECTION STATUS",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = VoidCyan,
+                        fontWeight = FontWeight.Bold
                     )
-                    GatewayMetricTile(
-                        label = "CONNECTED USERS",
-                        value = connectedUsers.toString(),
-                        detail = "unique active IDs",
-                        accent = VoidCyan,
-                        testTag = "gateway_users_count",
-                        modifier = Modifier.weight(1f)
+                    Text(
+                        text = if (isRunning) {
+                            "LIVE LOCAL NETWORK TELEMETRY"
+                        } else {
+                            "START THE HOST ENGINE TO ACCEPT CONNECTIONS"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isRunning) VoidMint else VoidTextSecondary
                     )
                 }
-                Spacer(modifier = Modifier.height(10.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    GatewayMetricTile(
-                        label = "CHANNELS",
-                        value = channels.size.toString(),
-                        detail = "operating or created",
-                        accent = VoidAmber,
-                        testTag = "gateway_channels_count",
-                        modifier = Modifier.weight(1f)
-                    )
-                    GatewayMetricTile(
-                        label = "GATEWAY SPEED",
-                        value = formatGatewaySpeed(bytesPerSecond),
-                        detail = "live served traffic",
-                        accent = VoidCyan,
-                        testTag = "gateway_speed_value",
-                        modifier = Modifier.weight(1f)
-                    )
-                }
+            }
 
-                Text(
-                    text = "Nodes remain connected while they use this gateway. Users are counted once across all active channel sessions.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = VoidTextSecondary,
-                    modifier = Modifier.padding(top = 14.dp)
+            HorizontalDivider(
+                modifier = Modifier.padding(vertical = 14.dp),
+                color = VoidBorder
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                GatewayMetricTile(
+                    label = "APP NODES",
+                    value = hostState.connectedNodesCount.toString(),
+                    detail = "connected devices",
+                    accent = VoidMint,
+                    testTag = "gateway_nodes_count",
+                    modifier = Modifier.weight(1f)
+                )
+                GatewayMetricTile(
+                    label = "USERS CONNECTED",
+                    value = connectedUsers.toString(),
+                    detail = "unique active IDs",
+                    accent = VoidCyan,
+                    testTag = "gateway_users_count",
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                GatewayMetricTile(
+                    label = "CHANNELS",
+                    value = channels.size.toString(),
+                    detail = "operating or created",
+                    accent = VoidAmber,
+                    testTag = "gateway_channels_count",
+                    modifier = Modifier.weight(1f)
+                )
+                GatewayMetricTile(
+                    label = "GATEWAY SPEED",
+                    value = formatGatewaySpeed(bytesPerSecond),
+                    detail = "live served traffic",
+                    accent = VoidCyan,
+                    testTag = "gateway_speed_value",
+                    modifier = Modifier.weight(1f)
                 )
             }
         }
