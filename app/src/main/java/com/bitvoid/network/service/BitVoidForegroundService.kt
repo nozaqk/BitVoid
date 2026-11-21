@@ -483,21 +483,166 @@ class BitVoidForegroundService : Service() {
             return
         }
 
+        // Android's legacy LocalOnlyHotspot API always chooses random credentials. Prefer the
+        // configured LocalOnlyHotspot overload where the platform exposes it, then Wi-Fi Direct.
+        // Never silently fall back to the randomized API: the network shown on another device
+        // must use the credentials the user saved in BitVoid.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            tryStartConfiguredLocalOnlyHotspot(prefsCfg)
+        ) {
+            return
+        }
+
+        tryStartConfiguredP2pBroadcast(
+            prefsCfg = prefsCfg,
+            priorHint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                "Configured Android hotspot API unavailable"
+            } else {
+                null
+            }
+        )
+    }
+
+    /**
+     * Android 16 publicly exposes startLocalOnlyHotspotWithConfiguration. Android 13-15 ship a
+     * compatible system overload on some devices, so this uses reflection as a best-effort bridge
+     * without claiming success until the reservation reports the exact requested credentials.
+     */
+    @Suppress("MissingPermission", "DEPRECATION")
+    private fun tryStartConfiguredLocalOnlyHotspot(prefsCfg: BitVoidNetworkConfig): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
+
+        val callback = object : WifiManager.LocalOnlyHotspotCallback() {
+            override fun onStarted(reservation: WifiManager.LocalOnlyHotspotReservation?) {
+                if (!ensureHttpServerRunning()) {
+                    reservation?.close()
+                    handleNodeStartupFailure()
+                    return
+                }
+
+                val softAp = reservation?.softApConfiguration
+                val activeSsid = softAp?.ssid.orEmpty()
+                val activePass = softAp?.passphrase.orEmpty()
+                if (reservation == null ||
+                    activeSsid != prefsCfg.ssid ||
+                    activePass != prefsCfg.passphrase
+                ) {
+                    try {
+                        reservation?.close()
+                    } catch (_: Exception) {
+                    }
+                    hotspotReservation = null
+                    tryStartConfiguredP2pBroadcast(
+                        prefsCfg,
+                        "Android replaced the requested hotspot credentials"
+                    )
+                    return
+                }
+
+                hotspotReservation = reservation
+                val detection = detectActiveApAndWlanEndpoints()
+                val primaryIp = detection.primaryBroadcastIp ?: "192.168.43.1"
+                val combinedIps = (detection.allEndpoints + primaryIp + "127.0.0.1").distinct()
+                publishBroadcastActiveState(
+                    prefsCfg = prefsCfg,
+                    activeSsid = activeSsid,
+                    activePassphrase = activePass,
+                    primaryIp = primaryIp,
+                    combinedIps = combinedIps,
+                    radioHint = null
+                )
+            }
+
+            override fun onFailed(reason: Int) {
+                hotspotReservation = null
+                tryStartConfiguredP2pBroadcast(
+                    prefsCfg,
+                    "Configured Android hotspot failed (code $reason)"
+                )
+            }
+        }
+
+        return try {
+            val config = buildConfiguredLocalOnlyHotspot(prefsCfg)
+            val methodName = if (Build.VERSION.SDK_INT >= 36) {
+                "startLocalOnlyHotspotWithConfiguration"
+            } else {
+                "startLocalOnlyHotspot"
+            }
+            val startMethod = WifiManager::class.java.getMethod(
+                methodName,
+                SoftApConfiguration::class.java,
+                java.util.concurrent.Executor::class.java,
+                WifiManager.LocalOnlyHotspotCallback::class.java
+            )
+            startMethod.invoke(wifiManager, config, mainExecutor, callback)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** Build a WPA2 SoftApConfiguration while remaining compatible with SDK extension revisions. */
+    private fun buildConfiguredLocalOnlyHotspot(
+        prefsCfg: BitVoidNetworkConfig
+    ): SoftApConfiguration {
+        val builderClass = Class.forName("android.net.wifi.SoftApConfiguration\$Builder")
+        val builder = builderClass.getDeclaredConstructor().newInstance()
+        val wifiSsidClass = Class.forName("android.net.wifi.WifiSsid")
+        val wifiSsid = wifiSsidClass
+            .getMethod("fromBytes", ByteArray::class.java)
+            .invoke(null, prefsCfg.ssid.toByteArray(Charsets.UTF_8))
+
+        val configuredSsid = try {
+            builderClass
+                .getMethod("setWifiSsid", wifiSsidClass)
+                .invoke(builder, wifiSsid)
+            true
+        } catch (_: Exception) {
+            try {
+                builderClass
+                    .getMethod("setSsid", String::class.java)
+                    .invoke(builder, prefsCfg.ssid)
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
+        check(configuredSsid) { "Custom hotspot SSID is unavailable" }
+
+        builderClass
+            .getMethod(
+                "setPassphrase",
+                String::class.java,
+                Int::class.javaPrimitiveType!!
+            )
+            .invoke(builder, prefsCfg.passphrase, SoftApConfiguration.SECURITY_TYPE_WPA2_PSK)
+
+        return builderClass.getMethod("build").invoke(builder) as SoftApConfiguration
+    }
+
+    @Suppress("MissingPermission")
+    private fun tryStartConfiguredP2pBroadcast(
+        prefsCfg: BitVoidNetworkConfig,
+        priorHint: String?
+    ) {
         val p2pMgr = wifiP2pManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
             p2pMgr != null &&
             wifiManager.isWifiEnabled
         ) {
             try {
-                val channel = wifiP2pChannel ?: p2pMgr.initialize(this, Looper.getMainLooper(), null).also {
-                    wifiP2pChannel = it
-                }
+                val channel = wifiP2pChannel ?: p2pMgr.initialize(
+                    this,
+                    Looper.getMainLooper(),
+                    null
+                ).also { wifiP2pChannel = it }
                 if (channel != null) {
-                    val customNetworkName = BitVoidNetworkConfig.formatWifiDirectNetworkName(prefsCfg.ssid)
-                    val customPassphrase = prefsCfg.passphrase
+                    val customNetworkName =
+                        BitVoidNetworkConfig.formatWifiDirectNetworkName(prefsCfg.ssid)
                     val config = WifiP2pConfig.Builder()
                         .setNetworkName(customNetworkName)
-                        .setPassphrase(customPassphrase)
+                        .setPassphrase(prefsCfg.passphrase)
                         .build()
 
                     val launchGroup = {
@@ -507,7 +652,9 @@ class BitVoidForegroundService : Service() {
                             config = config,
                             prefsCfg = prefsCfg,
                             expectedSsid = customNetworkName,
-                            expectedPassphrase = customPassphrase
+                            expectedPassphrase = prefsCfg.passphrase,
+                            priorHint = priorHint,
+                            attempt = 0
                         )
                     }
                     p2pMgr.removeGroup(channel, object : WifiP2pManager.ActionListener {
@@ -520,9 +667,16 @@ class BitVoidForegroundService : Service() {
             }
         }
 
-        tryStartLocalOnlyHotspot(
-            prefsCfg = prefsCfg,
-            priorHint = if (!wifiManager.isWifiEnabled) "Device Wi-Fi is OFF." else null
+        activateAutonomousFallback(
+            prefsCfg,
+            buildConfiguredBroadcastFailureHint(
+                priorHint,
+                if (!wifiManager.isWifiEnabled) {
+                    "Device Wi-Fi is off"
+                } else {
+                    "Configured Wi-Fi Direct is unsupported"
+                }
+            )
         )
     }
 
@@ -533,7 +687,9 @@ class BitVoidForegroundService : Service() {
         config: WifiP2pConfig,
         prefsCfg: BitVoidNetworkConfig,
         expectedSsid: String,
-        expectedPassphrase: String
+        expectedPassphrase: String,
+        priorHint: String?,
+        attempt: Int
     ) {
         try {
             p2pMgr.createGroup(channel, config, object : WifiP2pManager.ActionListener {
@@ -544,124 +700,132 @@ class BitVoidForegroundService : Service() {
                         handleNodeStartupFailure()
                         return
                     }
-
-                    p2pMgr.requestGroupInfo(channel) { group ->
-                        val activeSsid = group?.networkName?.takeIf { it.isNotBlank() } ?: expectedSsid
-                        val activePass = group?.passphrase?.takeIf { it.isNotBlank() } ?: expectedPassphrase
-                        if (activePass.isBlank()) {
-                            releaseHotspotOnly()
-                            activateAutonomousFallback(
-                                prefsCfg,
-                                "Android returned an unsecured Wi-Fi Direct group; BitVoid refused to publish it."
-                            )
-                            return@requestGroupInfo
-                        }
-                        val detection = detectActiveApAndWlanEndpoints()
-                        val primaryIp = detection.primaryBroadcastIp ?: "192.168.49.1"
-                        val combinedIps = (detection.allEndpoints + primaryIp + "127.0.0.1").distinct()
-                        publishBroadcastActiveState(
-                            prefsCfg = prefsCfg,
-                            activeSsid = activeSsid,
-                            activePassphrase = activePass,
-                            primaryIp = primaryIp,
-                            combinedIps = combinedIps,
-                            radioHint = null
-                        )
-                    }
+                    requestConfiguredP2pGroupInfo(
+                        p2pMgr = p2pMgr,
+                        channel = channel,
+                        prefsCfg = prefsCfg,
+                        expectedSsid = expectedSsid,
+                        expectedPassphrase = expectedPassphrase,
+                        priorHint = priorHint,
+                        readAttempt = 0
+                    )
                 }
 
                 override fun onFailure(reason: Int) {
                     isP2pGroupActive = false
-                    tryStartLocalOnlyHotspot(
-                        prefsCfg = prefsCfg,
-                        priorHint = "Wi-Fi Direct code $reason"
+                    if (reason == WifiP2pManager.BUSY && attempt < 2) {
+                        Handler(Looper.getMainLooper()).postDelayed(
+                            {
+                                p2pMgr.removeGroup(channel, object : WifiP2pManager.ActionListener {
+                                    override fun onSuccess() = retry()
+                                    override fun onFailure(removeReason: Int) = retry()
+
+                                    private fun retry() {
+                                        launchConfiguredP2pGroup(
+                                            p2pMgr = p2pMgr,
+                                            channel = channel,
+                                            config = config,
+                                            prefsCfg = prefsCfg,
+                                            expectedSsid = expectedSsid,
+                                            expectedPassphrase = expectedPassphrase,
+                                            priorHint = priorHint,
+                                            attempt = attempt + 1
+                                        )
+                                    }
+                                })
+                            },
+                            750L * (attempt + 1)
+                        )
+                        return
+                    }
+                    activateAutonomousFallback(
+                        prefsCfg,
+                        buildConfiguredBroadcastFailureHint(
+                            priorHint,
+                            "Wi-Fi Direct failed (code $reason)"
+                        )
                     )
                 }
             })
         } catch (_: SecurityException) {
             isP2pGroupActive = false
-            tryStartLocalOnlyHotspot(prefsCfg, "Permission denied")
+            activateAutonomousFallback(
+                prefsCfg,
+                buildConfiguredBroadcastFailureHint(priorHint, "Wi-Fi Direct permission denied")
+            )
         } catch (_: IllegalArgumentException) {
             isP2pGroupActive = false
-            tryStartLocalOnlyHotspot(prefsCfg, "Invalid P2P config")
+            activateAutonomousFallback(
+                prefsCfg,
+                buildConfiguredBroadcastFailureHint(priorHint, "Invalid Wi-Fi Direct configuration")
+            )
         }
     }
 
-    @Suppress("MissingPermission", "DEPRECATION")
-    private fun tryStartLocalOnlyHotspot(
+    @Suppress("MissingPermission")
+    private fun requestConfiguredP2pGroupInfo(
+        p2pMgr: WifiP2pManager,
+        channel: WifiP2pManager.Channel,
         prefsCfg: BitVoidNetworkConfig,
-        priorHint: String?
+        expectedSsid: String,
+        expectedPassphrase: String,
+        priorHint: String?,
+        readAttempt: Int
     ) {
-        if (!hasHotspotPermission()) {
-            activateAutonomousFallback(prefsCfg, priorHint)
-            return
-        }
-        try {
-            wifiManager.startLocalOnlyHotspot(
-                object : WifiManager.LocalOnlyHotspotCallback() {
-                    override fun onStarted(reservation: WifiManager.LocalOnlyHotspotReservation?) {
-                        hotspotReservation = reservation
-                        if (!ensureHttpServerRunning()) {
-                            releaseHotspotOnly()
-                            handleNodeStartupFailure()
-                            return
-                        }
-
-                        val activeSsid: String
-                        val activePass: String
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                            val softAp = reservation?.softApConfiguration
-                            activeSsid = softAp?.ssid.orEmpty()
-                            activePass = softAp?.passphrase.orEmpty()
-                        } else {
-                            val wifiCfg = reservation?.wifiConfiguration
-                            activeSsid = wifiCfg?.SSID?.removeSurrounding("\"").orEmpty()
-                            activePass = wifiCfg?.preSharedKey.orEmpty()
-                        }
-
-                        if (activePass.isBlank()) {
-                            releaseHotspotOnly()
-                            activateAutonomousFallback(
-                                prefsCfg,
-                                "Android returned an unsecured local hotspot; BitVoid refused to use it."
-                            )
-                            return
-                        }
-
-                        val resolvedSsid = activeSsid.ifBlank { prefsCfg.ssid.ifBlank { DEFAULT_SSID } }
-                        val detection = detectActiveApAndWlanEndpoints()
-                        val primaryIp = detection.primaryBroadcastIp ?: "192.168.43.1"
-                        val combinedIps = (detection.allEndpoints + primaryIp + "127.0.0.1").distinct()
-
-                        publishBroadcastActiveState(
-                            prefsCfg = prefsCfg,
-                            activeSsid = resolvedSsid,
-                            activePassphrase = activePass,
-                            primaryIp = primaryIp,
-                            combinedIps = combinedIps,
-                            radioHint = null
+        p2pMgr.requestGroupInfo(channel) { group ->
+            if (group == null && readAttempt < 3) {
+                Handler(Looper.getMainLooper()).postDelayed(
+                    {
+                        requestConfiguredP2pGroupInfo(
+                            p2pMgr,
+                            channel,
+                            prefsCfg,
+                            expectedSsid,
+                            expectedPassphrase,
+                            priorHint,
+                            readAttempt + 1
                         )
-                    }
+                    },
+                    500L
+                )
+                return@requestGroupInfo
+            }
 
-                    override fun onFailed(reason: Int) {
-                        activateAutonomousFallback(
-                            prefsCfg = prefsCfg,
-                            radioHint = "Enable device Wi-Fi or a WPA2 System Hotspot so nearby devices can connect (code $reason)."
-                        )
-                    }
-                },
-                Handler(Looper.getMainLooper())
-            )
-        } catch (e: Exception) {
-            activateAutonomousFallback(
+            val activeSsid = group?.networkName.orEmpty()
+            val activePass = group?.passphrase.orEmpty()
+            if (activeSsid != expectedSsid || activePass != expectedPassphrase) {
+                releaseHotspotOnly()
+                activateAutonomousFallback(
+                    prefsCfg,
+                    buildConfiguredBroadcastFailureHint(
+                        priorHint,
+                        "Android did not retain the requested Wi-Fi Direct credentials"
+                    )
+                )
+                return@requestGroupInfo
+            }
+
+            val detection = detectActiveApAndWlanEndpoints()
+            val primaryIp = detection.primaryBroadcastIp ?: "192.168.49.1"
+            val combinedIps = (detection.allEndpoints + primaryIp + "127.0.0.1").distinct()
+            publishBroadcastActiveState(
                 prefsCfg = prefsCfg,
-                radioHint = if (!wifiManager.isWifiEnabled) {
-                    "Device Wi-Fi is OFF — turn on Wi-Fi or a password-protected System Hotspot."
-                } else {
-                    "Secure hotspot radio unavailable (${e.localizedMessage ?: priorHint ?: "unsupported"}). Use the existing LAN gateway or a WPA2 System Hotspot."
-                }
+                activeSsid = activeSsid,
+                activePassphrase = activePass,
+                primaryIp = primaryIp,
+                combinedIps = combinedIps,
+                radioHint = null
             )
         }
+    }
+
+    private fun buildConfiguredBroadcastFailureHint(
+        priorHint: String?,
+        failure: String
+    ): String {
+        val detail = listOfNotNull(priorHint, failure).joinToString("; ")
+        return "$detail. BitVoid did not start Android's randomized hotspot. " +
+            "Use Android Hotspot settings with the saved credentials, or keep this phone on the shared Wi-Fi."
     }
 
     private fun activateAutonomousFallback(

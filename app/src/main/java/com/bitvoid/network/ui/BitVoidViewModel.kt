@@ -669,19 +669,21 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             return Result.failure(IllegalArgumentException("Wi-Fi broadcast name must be 32 bytes or fewer."))
         }
         val cleanPass = rawPassphrase.trim()
-        if (cleanPass.length < 8 || cleanPass.toByteArray(StandardCharsets.UTF_8).size > 63) {
-            return Result.failure(IllegalArgumentException("Wi-Fi password must be between 8 and 63 characters."))
+        if (!BitVoidNetworkConfig.isValidWpa2Passphrase(cleanPass)) {
+            return Result.failure(
+                IllegalArgumentException(
+                    "Wi-Fi password must contain 8 to 63 printable ASCII characters."
+                )
+            )
         }
 
         BitVoidNetworkPrefs.saveBroadcastCredentials(appContext, cleanSsid, cleanPass)
         BitVoidNodeStateHolder.updateHostState { current ->
-            val updateLiveAutonomousFields = current.status == HotspotStatus.SERVER_ONLY ||
-                (current.isServerRunning && current.status != HotspotStatus.ACTIVE)
+            // Saved credentials describe the next custom broadcast. Never overwrite the live
+            // radio credentials here: Android may still be serving an existing LAN/hotspot.
             current.copy(
                 configuredSsid = cleanSsid,
-                configuredPassphrase = cleanPass,
-                ssid = if (updateLiveAutonomousFields) cleanSsid else current.ssid,
-                passphrase = if (updateLiveAutonomousFields) cleanPass else current.passphrase
+                configuredPassphrase = cleanPass
             )
         }
         return Result.success(Unit)
