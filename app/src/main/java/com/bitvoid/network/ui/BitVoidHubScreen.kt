@@ -1064,61 +1064,6 @@ fun BitVoidHubScreen(
                         }
                     }
 
-                    Card(
-                        onClick = {
-                            showPlusChooserDialog = false
-                            callActions.onClearCallError()
-                            showJoinClassByIdDialog = true
-                        },
-                        colors = CardDefaults.cardColors(containerColor = VoidObsidian),
-                        border = BorderStroke(1.dp, VoidAmber.copy(alpha = 0.65f)),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("hub_plus_option_join_class")
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .clip(CircleShape)
-                                    .background(VoidAmber.copy(alpha = 0.14f))
-                                    .border(1.dp, VoidAmber, CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.VpnKey,
-                                    contentDescription = null,
-                                    tint = VoidAmber,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Join Live Class (Enter ID)",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = VoidTextPrimary,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = "Enter a Live Class ID (CLS-...) to watch & learn",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = VoidTextSecondary
-                                )
-                            }
-                            Icon(
-                                imageVector = Icons.Filled.ChevronRight,
-                                contentDescription = null,
-                                tint = VoidAmber
-                            )
-                        }
-                    }
                 }
             },
             confirmButton = {
