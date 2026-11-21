@@ -2257,6 +2257,92 @@ class BitVoidLocalServer(
               overflow: hidden;
             }
             .hidden { display: none !important; }
+            .portal-access-backdrop {
+              position: fixed;
+              inset: 0;
+              z-index: 2000;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              padding: 18px;
+              background: rgba(4, 8, 13, 0.88);
+              backdrop-filter: blur(8px);
+            }
+            .portal-access-dialog {
+              width: min(420px, 100%);
+              border-radius: 18px;
+              border: 1px solid rgba(0, 255, 156, 0.65);
+              background: var(--surface);
+              box-shadow: 0 24px 70px rgba(0, 0, 0, 0.58);
+              padding: 22px;
+              text-align: center;
+            }
+            .portal-access-mark {
+              width: 54px;
+              height: 54px;
+              margin: 0 auto 12px;
+              border-radius: 50%;
+              border: 1px solid var(--mint);
+              background: rgba(0, 255, 156, 0.12);
+              color: var(--mint);
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-size: 25px;
+              font-weight: 800;
+            }
+            .portal-access-title {
+              color: var(--mint);
+              font-size: 17px;
+              font-weight: 800;
+              letter-spacing: 0.05em;
+            }
+            .portal-access-copy {
+              margin: 8px 0 14px;
+              color: var(--muted);
+              font-size: 12px;
+            }
+            .portal-login-input {
+              width: 100%;
+              min-height: 44px;
+              margin-bottom: 12px;
+              border: 1px solid var(--border);
+              border-radius: 10px;
+              background: var(--bg);
+              color: var(--text);
+              padding: 9px 11px;
+              font: inherit;
+              outline: none;
+            }
+            .portal-login-input:focus { border-color: var(--cyan); }
+            .portal-access-error {
+              margin: -3px 0 10px;
+              color: var(--crimson);
+              font-size: 11px;
+              text-align: left;
+            }
+            .portal-access-actions {
+              display: grid;
+              grid-template-columns: 1fr 1fr;
+              gap: 9px;
+            }
+            .portal-access-actions button {
+              min-height: 46px;
+              border-radius: 10px;
+              font-family: inherit;
+              font-weight: 800;
+              cursor: pointer;
+            }
+            .portal-guest-btn {
+              border: 1px solid var(--cyan);
+              background: transparent;
+              color: var(--cyan);
+            }
+            .portal-login-btn {
+              border: 1px solid var(--mint);
+              background: var(--mint);
+              color: #07110C;
+            }
             .wa-app {
               position: relative;
               width: 100%;
@@ -3186,6 +3272,20 @@ class BitVoidLocalServer(
           </style>
         </head>
         <body>
+          <div id="portal-access-dialog" class="portal-access-backdrop" role="dialog" aria-modal="true" aria-labelledby="portal-access-title">
+            <div class="portal-access-dialog">
+              <div class="portal-access-mark">BV</div>
+              <div id="portal-access-title" class="portal-access-title">OPEN BITVOID GATEWAY</div>
+              <div class="portal-access-copy">Continue as a temporary guest, or log in with your BitVoid app User ID.</div>
+              <input id="portal-login-user-id" class="portal-login-input" type="text" placeholder="User ID (for example user-7724)" autocomplete="username">
+              <div id="portal-access-error" class="portal-access-error hidden"></div>
+              <div class="portal-access-actions">
+                <button id="portal-guest-btn" class="portal-guest-btn" type="button">GUEST</button>
+                <button id="portal-login-btn" class="portal-login-btn" type="button">LOGIN</button>
+              </div>
+            </div>
+          </div>
+
           <div id="wa-app" class="wa-app">
             <!-- Slide-out Drawer Backdrop & Sidebar -->
             <div id="sidebar-backdrop" class="sidebar-backdrop hidden"></div>
@@ -3376,6 +3476,11 @@ class BitVoidLocalServer(
               var backdrop = document.getElementById('sidebar-backdrop');
               var menuToggleBtn = document.getElementById('menu-toggle-btn');
               var closeSidebarBtn = document.getElementById('close-sidebar-btn');
+              var portalAccessDialog = document.getElementById('portal-access-dialog');
+              var portalLoginUserId = document.getElementById('portal-login-user-id');
+              var portalAccessError = document.getElementById('portal-access-error');
+              var portalGuestBtn = document.getElementById('portal-guest-btn');
+              var portalLoginBtn = document.getElementById('portal-login-btn');
 
               var generalChatEl = document.getElementById('general-chat-list');
               var publicChannelsEl = document.getElementById('public-channels-list');
@@ -3472,21 +3577,25 @@ class BitVoidLocalServer(
               var directCallConnecting = false;
               var directCallIncomingOpenPending = false;
               var directCallLastPhase = 'IDLE';
+              var suggestedLoginUsername = '';
+              var portalSessionStarted = false;
               try {
                 var queryUser = new URLSearchParams(location.search).get('username');
                 var storedUser = String(queryUser || localStorage.getItem('bv_username') || '')
                   .trim().replace(/^@/, '');
-                if (!/^[A-Za-z0-9._-]{2,24}$/.test(storedUser)) {
-                  storedUser = 'web-' + Math.floor(1000 + Math.random() * 9000);
+                if (/^[A-Za-z0-9._-]{2,24}$/.test(storedUser)) {
+                  suggestedLoginUsername = storedUser;
                 }
-                portalUsername = storedUser;
                 portalDiscoverable = localStorage.getItem('bv_pchat_discoverable') !== 'false';
-                localStorage.setItem('bv_username', portalUsername);
               } catch (e) {
-                portalUsername = 'web-' + Math.floor(1000 + Math.random() * 9000);
+                suggestedLoginUsername = '';
                 portalDiscoverable = true;
               }
-              pchatMyUsername.textContent = '@' + portalUsername;
+              portalLoginUserId.value = suggestedLoginUsername;
+              portalLoginBtn.textContent = suggestedLoginUsername
+                ? ('LOGIN @' + suggestedLoginUsername)
+                : 'LOGIN';
+              pchatMyUsername.textContent = '@choose-access';
 
               function openSidebar() {
                 sidebar.classList.add('open');
@@ -3501,6 +3610,33 @@ class BitVoidLocalServer(
               function esc(s) {
                 return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
                   .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+              }
+
+              function setPortalAccessError(message) {
+                portalAccessError.textContent = message || '';
+                portalAccessError.classList.toggle('hidden', !message);
+              }
+
+              function startPortalSession(username, asGuest) {
+                var clean = String(username || '').trim().replace(/^@/, '');
+                if (!/^[A-Za-z0-9._-]{2,24}$/.test(clean)) {
+                  setPortalAccessError('Enter a valid User ID using 2–24 letters, numbers, dots, underscores, or hyphens.');
+                  return;
+                }
+                if (portalSessionStarted) return;
+                portalSessionStarted = true;
+                portalUsername = clean;
+                portalDiscoverable = asGuest ? false : portalDiscoverable;
+                pchatMyUsername.textContent = '@' + portalUsername;
+                if (!asGuest) {
+                  try { localStorage.setItem('bv_username', portalUsername); } catch (e) {}
+                }
+                updatePchatDiscoverabilityUi();
+                portalAccessDialog.classList.add('hidden');
+                registerBrowserPresence();
+                pollChannelsAndFeed();
+                setInterval(pollChannelsAndFeed, 3000);
+                setInterval(registerBrowserPresence, 15000);
               }
 
               function fmtBytes(b) {
@@ -5056,11 +5192,27 @@ class BitVoidLocalServer(
                 if (ev.key === 'Enter') sendChat();
               });
 
+              portalLoginUserId.addEventListener('input', function () {
+                var clean = (portalLoginUserId.value || '').trim().replace(/^@/, '');
+                setPortalAccessError('');
+                portalLoginBtn.textContent = clean ? ('LOGIN @' + clean) : 'LOGIN';
+              });
+              portalLoginUserId.addEventListener('keydown', function (ev) {
+                if (ev.key === 'Enter') portalLoginBtn.click();
+              });
+              portalGuestBtn.addEventListener('click', function () {
+                startPortalSession('guest-' + Math.floor(1000 + Math.random() * 9000), true);
+              });
+              portalLoginBtn.addEventListener('click', function () {
+                startPortalSession(portalLoginUserId.value, false);
+              });
+
               bindSidebarClicks();
-              registerBrowserPresence();
-              pollChannelsAndFeed();
-              setInterval(pollChannelsAndFeed, 3000);
-              setInterval(registerBrowserPresence, 15000);
+              if (suggestedLoginUsername) {
+                setTimeout(function () { portalLoginBtn.focus(); }, 0);
+              } else {
+                setTimeout(function () { portalLoginUserId.focus(); }, 0);
+              }
             })();
           </script>
         </body>

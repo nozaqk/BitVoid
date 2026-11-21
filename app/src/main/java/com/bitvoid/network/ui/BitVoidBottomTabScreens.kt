@@ -18,6 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Home
@@ -53,6 +54,8 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -303,6 +306,80 @@ fun HostQrCodeDialog(
             }
         }
     )
+}
+
+@Composable
+fun SettingsUserIdentityCard(
+    username: String,
+    isDiscoverable: Boolean,
+    onSetDiscoverable: (Boolean) -> Unit,
+    onCopyUsername: (String, String) -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("settings_user_identity_card"),
+        colors = CardDefaults.cardColors(containerColor = VoidSurface),
+        border = BorderStroke(
+            1.dp,
+            if (isDiscoverable) VoidMint.copy(alpha = 0.65f) else VoidBorder
+        ),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "USER ID · @$username",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = VoidTextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.testTag("settings_username_value")
+                )
+                Text(
+                    text = if (isDiscoverable) {
+                        "Shown automatically to users on this node"
+                    } else {
+                        "Hidden from automatic user lists"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isDiscoverable) VoidMint else VoidTextSecondary,
+                    maxLines = 2
+                )
+            }
+            IconButton(
+                onClick = { onCopyUsername("User ID", username) },
+                modifier = Modifier
+                    .size(40.dp)
+                    .testTag("settings_copy_username_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.ContentCopy,
+                    contentDescription = "Copy User ID",
+                    tint = VoidCyan,
+                    modifier = Modifier.size(17.dp)
+                )
+            }
+            Switch(
+                checked = isDiscoverable,
+                onCheckedChange = onSetDiscoverable,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = VoidObsidian,
+                    checkedTrackColor = VoidMint,
+                    uncheckedThumbColor = VoidTextSecondary,
+                    uncheckedTrackColor = VoidBorder
+                ),
+                modifier = Modifier.testTag("settings_user_discoverability_switch")
+            )
+        }
+    }
 }
 
 @Composable
