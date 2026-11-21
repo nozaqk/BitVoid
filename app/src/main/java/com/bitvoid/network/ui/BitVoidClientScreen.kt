@@ -13,11 +13,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -48,6 +50,7 @@ import java.util.Locale
 fun BitVoidClientHubContent(
     connectionLogs: List<NodeConnectionLogEntry>,
     onClearConnectionLogs: () -> Unit,
+    onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -58,7 +61,8 @@ fun BitVoidClientHubContent(
     ) {
         NodeConnectionLogCard(
             logs = connectionLogs,
-            onClear = onClearConnectionLogs
+            onClear = onClearConnectionLogs,
+            onClose = onClose
         )
     }
 }
@@ -66,7 +70,8 @@ fun BitVoidClientHubContent(
 @Composable
 private fun NodeConnectionLogCard(
     logs: List<NodeConnectionLogEntry>,
-    onClear: () -> Unit
+    onClear: () -> Unit,
+    onClose: () -> Unit
 ) {
     val timeFormatter = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
     Card(
@@ -101,17 +106,35 @@ private fun NodeConnectionLogCard(
                         color = VoidTextSecondary
                     )
                 }
-                TextButton(
-                    onClick = onClear,
-                    modifier = Modifier.testTag("clear_node_connection_log")
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Filled.Delete,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(Modifier.width(5.dp))
-                    Text("CLEAR")
+                    TextButton(
+                        onClick = onClear,
+                        modifier = Modifier.testTag("clear_node_connection_log")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Delete,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(5.dp))
+                        Text("CLEAR")
+                    }
+                    IconButton(
+                        onClick = onClose,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .testTag("close_node_connection_log")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Close Node Log",
+                            tint = VoidCrimson,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                 }
             }
 

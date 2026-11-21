@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Public
@@ -240,16 +241,23 @@ fun BitVoidDashboard(
     val clientHubContent: @Composable () -> Unit = {
         BitVoidClientHubContent(
             connectionLogs = nodeConnectionLogs,
-            onClearConnectionLogs = { viewModel.clearNodeConnectionLogs() }
+            onClearConnectionLogs = { viewModel.clearNodeConnectionLogs() },
+            onClose = { viewModel.selectMode(NodeMode.HOST) }
+        )
+    }
+
+    val settingsIdentityContent: @Composable () -> Unit = {
+        SettingsUserIdentityCard(
+            username = myUsername,
+            isDiscoverable = isUserIdDiscoverable,
+            onSetDiscoverable = { viewModel.setUserIdDiscoverable(it) },
+            onCopyUsername = ::copyToClipboard
         )
     }
 
     val pChatScreenContent: @Composable () -> Unit = {
         BitVoidPrivateChatScreen(
             myUsername = myUsername,
-            isUserIdDiscoverable = isUserIdDiscoverable,
-            onSetUserIdDiscoverable = { viewModel.setUserIdDiscoverable(it) },
-            onCopyUsername = ::copyToClipboard,
             directConversations = directConversations,
             knownUsers = knownUsers,
             activeDirectSession = activeDirectSession,
@@ -408,6 +416,9 @@ fun BitVoidDashboard(
                         },
                         onRequestPermissions = onRequestPermissions,
                         onToggleHost = { viewModel.toggleHostGateway() },
+                        onOpenGateway = {
+                            viewModel.openSandboxedBrowser(hostState.effectivePortalUrl)
+                        },
                         onOpenProtocolDialog = { showProtocolDialog = true },
                         onOpenQrDialog = { showQrDialog = true },
                         onOpenNodeAccess = { showNodeAccessDialog = true },
@@ -426,6 +437,7 @@ fun BitVoidDashboard(
                         clientHubContent = clientHubContent,
                         hubScreenContent = hubScreenContent,
                         pChatScreenContent = pChatScreenContent,
+                        settingsIdentityContent = settingsIdentityContent,
                         onOpenClientNode = {
                             viewModel.selectMode(NodeMode.CLIENT)
                             viewModel.selectBottomTab(AppBottomTab.HOME)
@@ -454,6 +466,9 @@ fun BitVoidDashboard(
                         viewModel.selectBottomTab(AppBottomTab.HOME)
                     },
                     onToggleHost = { viewModel.toggleHostGateway() },
+                    onOpenGateway = {
+                        viewModel.openSandboxedBrowser(hostState.effectivePortalUrl)
+                    },
                     onOpenProtocolDialog = { showProtocolDialog = true },
                     onOpenQrDialog = { showQrDialog = true },
                     onOpenNodeAccess = { showNodeAccessDialog = true },
@@ -472,6 +487,7 @@ fun BitVoidDashboard(
                     clientHubContent = clientHubContent,
                     hubScreenContent = hubScreenContent,
                     pChatScreenContent = pChatScreenContent,
+                    settingsIdentityContent = settingsIdentityContent,
                     modifier = Modifier
                         .fillMaxSize()
                         .widthIn(max = 1120.dp)
@@ -587,6 +603,7 @@ private fun CompactDashboardContent(
     onRequestPermissions: () -> Unit,
     onOpenClientNode: () -> Unit,
     onToggleHost: () -> Unit,
+    onOpenGateway: () -> Unit,
     onOpenProtocolDialog: () -> Unit,
     onOpenQrDialog: () -> Unit,
     onOpenNodeAccess: () -> Unit,
@@ -601,6 +618,7 @@ private fun CompactDashboardContent(
     clientHubContent: @Composable () -> Unit,
     hubScreenContent: @Composable () -> Unit,
     pChatScreenContent: @Composable () -> Unit,
+    settingsIdentityContent: @Composable () -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (selectedBottomTab == AppBottomTab.HUB) {
@@ -643,7 +661,8 @@ private fun CompactDashboardContent(
                         Box(modifier = Modifier.padding(horizontal = 16.dp)) {
                             GatewayOverviewCard(
                                 hostState = hostState,
-                                channels = channels
+                                channels = channels,
+                                onOpenGateway = onOpenGateway
                             )
                         }
                     }
@@ -659,6 +678,11 @@ private fun CompactDashboardContent(
             AppBottomTab.PCHAT -> Unit
 
             AppBottomTab.SETTINGS -> {
+                item(key = "settings_user_identity") {
+                    Box(modifier = Modifier.padding(horizontal = 16.dp)) {
+                        settingsIdentityContent()
+                    }
+                }
                 item(key = "settings_cards") {
                     Box(modifier = Modifier.padding(horizontal = 16.dp)) {
                         SettingsAutonomousCard(
@@ -704,6 +728,7 @@ private fun WideDashboardContent(
     onBroadcastSaved: (String) -> Unit,
     onRequestPermissions: () -> Unit,
     onToggleHost: () -> Unit,
+    onOpenGateway: () -> Unit,
     onOpenProtocolDialog: () -> Unit,
     onOpenQrDialog: () -> Unit,
     onOpenNodeAccess: () -> Unit,
@@ -718,7 +743,8 @@ private fun WideDashboardContent(
     onOpenClientNode: () -> Unit,
     clientHubContent: @Composable () -> Unit,
     hubScreenContent: @Composable () -> Unit,
-    pChatScreenContent: @Composable () -> Unit
+    pChatScreenContent: @Composable () -> Unit,
+    settingsIdentityContent: @Composable () -> Unit
 ) {
     var showAuditLogs by rememberSaveable { mutableStateOf(true) }
 
@@ -771,7 +797,8 @@ private fun WideDashboardContent(
                     item {
                         GatewayOverviewCard(
                             hostState = hostState,
-                            channels = channels
+                            channels = channels,
+                            onOpenGateway = onOpenGateway
                         )
                     }
                 }
@@ -816,6 +843,9 @@ private fun WideDashboardContent(
                 contentPadding = PaddingValues(bottom = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
+                item {
+                    settingsIdentityContent()
+                }
                 item {
                     SettingsAutonomousCard(
                         hostState = hostState,
@@ -1026,7 +1056,8 @@ private fun HostPowerControlCard(
 @Composable
 private fun GatewayOverviewCard(
     hostState: HostState,
-    channels: List<BitVoidChannel>
+    channels: List<BitVoidChannel>,
+    onOpenGateway: () -> Unit
 ) {
     val isRunning = hostState.status == HotspotStatus.ACTIVE ||
         hostState.status == HotspotStatus.SERVER_ONLY
@@ -1050,19 +1081,42 @@ private fun GatewayOverviewCard(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Filled.Speed,
-                    contentDescription = null,
-                    tint = VoidMint,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "GATEWAY CONNECTION STATUS",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = VoidMint
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Speed,
+                        contentDescription = null,
+                        tint = VoidMint,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "GATEWAY CONNECTION STATUS",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = VoidMint
+                    )
+                }
+                IconButton(
+                    onClick = onOpenGateway,
+                    enabled = hostState.hasClientGatewayAddress,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .testTag("open_gateway_portal_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.OpenInBrowser,
+                        contentDescription = "Open gateway portal",
+                        tint = if (hostState.hasClientGatewayAddress) VoidCyan else VoidTextSecondary,
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
             }
 
             Row(
