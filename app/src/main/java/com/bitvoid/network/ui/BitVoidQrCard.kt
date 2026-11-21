@@ -46,7 +46,6 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.bitvoid.network.model.BitVoidNetworkConfig
@@ -195,34 +194,25 @@ fun HostWifiQrSection(
                 VoidAmber.copy(alpha = 0.5f),
                 RoundedCornerShape(12.dp)
             )
-            .padding(14.dp),
+            .padding(10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Filled.QrCode2,
-                    contentDescription = null,
-                    tint = VoidMint,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "INSTANT SCAN & JOIN",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = VoidMint
-                )
-            }
+            Icon(
+                imageVector = Icons.Filled.QrCode2,
+                contentDescription = null,
+                tint = VoidMint,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
             Text(
-                text = ssid,
-                style = MaterialTheme.typography.labelMedium,
-                color = VoidCyan,
-                fontWeight = FontWeight.Bold
+                text = "INSTANT SCAN & JOIN",
+                style = MaterialTheme.typography.labelLarge,
+                color = VoidMint
             )
         }
 
@@ -232,7 +222,7 @@ fun HostWifiQrSection(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             QrModePill(
-                label = "WIFI PASSWORD QR",
+                label = "WI-FI QR",
                 selected = qrMode == QrPayloadMode.WIFI_NETWORK,
                 modifier = Modifier
                     .weight(1f)
@@ -240,7 +230,7 @@ fun HostWifiQrSection(
                 onClick = { qrMode = QrPayloadMode.WIFI_NETWORK }
             )
             QrModePill(
-                label = "PORTAL URL QR",
+                label = "PORTAL QR",
                 selected = qrMode == QrPayloadMode.PORTAL_URL,
                 modifier = Modifier
                     .weight(1f)
@@ -251,7 +241,7 @@ fun HostWifiQrSection(
 
         if (qrBitmap != null) {
             Surface(
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(10.dp),
                 color = Color.White,
                 border = BorderStroke(2.dp, VoidMint.copy(alpha = 0.75f)),
                 modifier = Modifier.testTag("wifi_qr_image")
@@ -265,17 +255,17 @@ fun HostWifiQrSection(
                     },
                     filterQuality = FilterQuality.None,
                     modifier = Modifier
-                        .size(204.dp)
-                        .padding(10.dp)
+                        .size(156.dp)
+                        .padding(7.dp)
                 )
             }
         }
 
         Text(
             text = if (qrMode == QrPayloadMode.WIFI_NETWORK) {
-                "Scan with Camera to join password-protected '$ssid', then open the BitVoid portal."
+                "Scan to join '$ssid', then open BitVoid."
             } else {
-                "Scan to launch $portalUrl directly in browser or BitVoid Client."
+                "Scan to open $portalUrl."
             },
             style = MaterialTheme.typography.labelSmall,
             color = VoidTextSecondary,
@@ -294,7 +284,7 @@ fun HostWifiQrSection(
                 ),
                 modifier = Modifier
                     .weight(1f)
-                    .height(48.dp)
+                    .height(42.dp)
                     .testTag("share_wifi_button")
             ) {
                 Icon(
@@ -304,7 +294,7 @@ fun HostWifiQrSection(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "SHARE WIFI INFO",
+                    text = "SHARE WI-FI",
                     style = MaterialTheme.typography.labelLarge
                 )
             }
@@ -314,7 +304,7 @@ fun HostWifiQrSection(
                 border = BorderStroke(1.dp, VoidCyan),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidCyan),
                 modifier = Modifier
-                    .height(48.dp)
+                    .height(42.dp)
                     .testTag("copy_wifi_ssid_button")
             ) {
                 Icon(
@@ -341,7 +331,7 @@ private fun QrModePill(
         shape = RoundedCornerShape(8.dp),
         color = if (selected) VoidMintContainer else Color.Transparent,
         border = BorderStroke(1.dp, if (selected) VoidMint else VoidBorder),
-        modifier = modifier.height(48.dp)
+        modifier = modifier.height(42.dp)
     ) {
         Box(contentAlignment = Alignment.Center) {
             Row(
@@ -349,7 +339,7 @@ private fun QrModePill(
                 horizontalArrangement = Arrangement.Center
             ) {
                 Icon(
-                    imageVector = if (label.contains("WIFI")) Icons.Filled.Wifi else Icons.Filled.QrCode2,
+                    imageVector = if (label.contains("WI-FI")) Icons.Filled.Wifi else Icons.Filled.QrCode2,
                     contentDescription = null,
                     tint = if (selected) VoidMint else VoidTextSecondary,
                     modifier = Modifier.size(15.dp)

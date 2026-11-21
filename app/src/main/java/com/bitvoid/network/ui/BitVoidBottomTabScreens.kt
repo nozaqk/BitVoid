@@ -18,7 +18,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Home
@@ -54,8 +53,6 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -72,6 +69,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bitvoid.network.model.AppBottomTab
@@ -272,11 +270,11 @@ fun HostQrCodeDialog(
                     imageVector = Icons.Filled.QrCode2,
                     contentDescription = null,
                     tint = VoidMint,
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(18.dp)
                 )
                 Text(
-                    text = "NETWORK & PORTAL QR CODE",
-                    style = MaterialTheme.typography.titleMedium
+                    text = "NETWORK & PORTAL QR",
+                    style = MaterialTheme.typography.labelLarge
                 )
             }
         },
@@ -295,7 +293,7 @@ fun HostQrCodeDialog(
         confirmButton = {
             TextButton(
                 onClick = onDismiss,
-                modifier = Modifier.height(48.dp)
+                modifier = Modifier.height(42.dp)
             ) {
                 Text(
                     text = "CLOSE",
@@ -310,11 +308,7 @@ fun HostQrCodeDialog(
 @Composable
 fun SettingsAutonomousCard(
     hostState: HostState,
-    myUsername: String,
-    isUserIdDiscoverable: Boolean,
     missingPermissionsCount: Int,
-    onCopyUsername: (String, String) -> Unit,
-    onSetUserIdDiscoverable: (Boolean) -> Unit,
     onSaveBroadcastCredentials: (String, String) -> Result<Unit>,
     onBroadcastSaved: (String) -> Unit,
     onRequestPermissions: () -> Unit,
@@ -345,120 +339,6 @@ fun SettingsAutonomousCard(
     )
 
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        // User Identity (Username ID) Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = VoidSurface),
-            border = BorderStroke(1.dp, VoidMint.copy(alpha = 0.55f)),
-            shape = RoundedCornerShape(14.dp)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Person,
-                        contentDescription = null,
-                        tint = VoidMint,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Text(
-                        text = "MY USERNAME (USER ID)",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = VoidMint
-                    )
-                }
-                Text(
-                    text = "Your fixed User ID is used for private chat and calls in P.Chat. Choose whether it appears automatically to other users on this node.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = VoidTextSecondary
-                )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(VoidObsidian)
-                        .border(1.dp, VoidBorder, RoundedCornerShape(10.dp))
-                        .padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "FIXED USERNAME ID (LOCKED)",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = VoidCyan
-                        )
-                        Text(
-                            text = "@$myUsername",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = VoidTextPrimary,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.testTag("settings_username_value")
-                        )
-                    }
-                    IconButton(
-                        onClick = { onCopyUsername("Username ID", myUsername) },
-                        modifier = Modifier
-                            .size(48.dp)
-                            .testTag("settings_copy_username_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.ContentCopy,
-                            contentDescription = "Copy Username ID",
-                            tint = VoidMint,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(VoidObsidian)
-                        .border(1.dp, VoidBorder, RoundedCornerShape(10.dp))
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "SHOW MY USER ID IN P.CHAT",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = if (isUserIdDiscoverable) VoidMint else VoidTextPrimary
-                        )
-                        Text(
-                            text = if (isUserIdDiscoverable) {
-                                "Other users on this node see @$myUsername automatically."
-                            } else {
-                                "Hidden from the automatic list; users can still add your exact ID with +."
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = VoidTextSecondary
-                        )
-                    }
-                    Switch(
-                        checked = isUserIdDiscoverable,
-                        onCheckedChange = onSetUserIdDiscoverable,
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = VoidObsidian,
-                            checkedTrackColor = VoidMint,
-                            uncheckedThumbColor = VoidTextSecondary,
-                            uncheckedTrackColor = VoidSurface
-                        ),
-                        modifier = Modifier.testTag("settings_user_discoverability_switch")
-                    )
-                }
-            }
-        }
-
         // Wi-Fi Broadcast Name (SSID) & Password Card
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -469,8 +349,8 @@ fun SettingsAutonomousCard(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -480,7 +360,7 @@ fun SettingsAutonomousCard(
                         imageVector = Icons.Filled.WifiTethering,
                         contentDescription = null,
                         tint = VoidCyan,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(16.dp)
                     )
                     Text(
                         text = "WI-FI BROADCAST NAME & PASSWORD",
@@ -489,8 +369,8 @@ fun SettingsAutonomousCard(
                     )
                 }
                 Text(
-                    text = "Customize your BitVoid wireless broadcast SSID and WPA2 password. SSID broadcast remains visible (never hidden).",
-                    style = MaterialTheme.typography.bodyMedium,
+                    text = "Set the visible SSID and WPA2 password used by the BitVoid hotspot.",
+                    style = MaterialTheme.typography.labelSmall,
                     color = VoidTextSecondary
                 )
 
@@ -502,6 +382,7 @@ fun SettingsAutonomousCard(
                     },
                     label = { Text("Wi-Fi Broadcast Name (SSID)") },
                     singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyMedium,
                     colors = fieldColors,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -516,6 +397,7 @@ fun SettingsAutonomousCard(
                     },
                     label = { Text("Wi-Fi Password (WPA2, min 8 chars)") },
                     singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyMedium,
                     visualTransformation = if (showPassword) {
                         VisualTransformation.None
                     } else {
@@ -524,7 +406,7 @@ fun SettingsAutonomousCard(
                     trailingIcon = {
                         IconButton(
                             onClick = { showPassword = !showPassword },
-                            modifier = Modifier.size(48.dp)
+                            modifier = Modifier.size(40.dp)
                         ) {
                             Icon(
                                 imageVector = if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
@@ -541,7 +423,7 @@ fun SettingsAutonomousCard(
 
                 if (hostState.status == HotspotStatus.ACTIVE) {
                     Text(
-                        text = "Hardware hotspot is currently active; restart Host Engine on Home to apply new radio credentials.",
+                        text = "Hotspot active — restart Host Engine to apply changes.",
                         style = MaterialTheme.typography.labelSmall,
                         color = VoidAmber
                     )
@@ -571,7 +453,7 @@ fun SettingsAutonomousCard(
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(48.dp)
+                        .height(44.dp)
                         .testTag("settings_save_broadcast_button")
                 ) {
                     Icon(
@@ -595,8 +477,8 @@ fun SettingsAutonomousCard(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -606,7 +488,7 @@ fun SettingsAutonomousCard(
                         imageVector = Icons.Filled.Dns,
                         contentDescription = null,
                         tint = VoidMint,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(16.dp)
                     )
                     Text(
                         text = "LOCAL GATEWAY & RADIO STATUS",
@@ -615,8 +497,8 @@ fun SettingsAutonomousCard(
                     )
                 }
                 Text(
-                    text = "The vault can run locally without a radio broadcast, but nearby devices can connect only through the phone's existing Wi-Fi, a real Android hotspot, or a Wi-Fi Direct group. BitVoid never labels a server-only state as broadcasting.",
-                    style = MaterialTheme.typography.bodyMedium,
+                    text = "Gateway availability on the phone's connected Wi-Fi or Android hotspot.",
+                    style = MaterialTheme.typography.labelSmall,
                     color = VoidTextSecondary
                 )
                 Column(
@@ -625,19 +507,19 @@ fun SettingsAutonomousCard(
                         .clip(RoundedCornerShape(8.dp))
                         .background(VoidObsidian)
                         .border(1.dp, VoidBorder, RoundedCornerShape(8.dp))
-                        .padding(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
                     ProtocolDetailRow(
                         "Engine State",
                         when {
                             !hostState.isServerRunning -> "STANDBY"
-                            hostState.hasClientGatewayAddress -> "RUNNING (${hostState.networkPortalUrl})"
-                            else -> "RUNNING LOCALLY · GATEWAY IPv4 PENDING"
+                            hostState.hasClientGatewayAddress -> "RUNNING · ${hostState.networkPortalUrl}"
+                            else -> "LOCAL · IPv4 PENDING"
                         }
                     )
                     ProtocolDetailRow("Configured SSID", hostState.configuredSsid)
-                    ProtocolDetailRow("Required Security", "WPA2/WPA3 password protected")
+                    ProtocolDetailRow("Security", "WPA2/WPA3")
                     ProtocolDetailRow(
                         "Actual Broadcast",
                         if (hostState.status == HotspotStatus.ACTIVE) {
@@ -658,7 +540,7 @@ fun SettingsAutonomousCard(
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidCyan),
                         modifier = Modifier
                             .weight(1f)
-                            .height(48.dp)
+                            .height(44.dp)
                             .testTag("settings_network_protocol_button")
                     ) {
                         Icon(
@@ -675,7 +557,7 @@ fun SettingsAutonomousCard(
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidMint),
                         modifier = Modifier
                             .weight(1f)
-                            .height(48.dp)
+                            .height(44.dp)
                             .testTag("settings_qr_code_button")
                     ) {
                         Icon(
@@ -698,7 +580,7 @@ fun SettingsAutonomousCard(
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidMint),
                         modifier = Modifier
                             .weight(1f)
-                            .height(48.dp)
+                            .height(44.dp)
                             .testTag("settings_node_access_button")
                     ) {
                         Icon(
@@ -715,7 +597,7 @@ fun SettingsAutonomousCard(
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidCyan),
                         modifier = Modifier
                             .weight(1f)
-                            .height(48.dp)
+                            .height(44.dp)
                             .testTag("settings_node_log_button")
                     ) {
                         Icon(
@@ -879,14 +761,18 @@ private fun ProtocolDetailRow(label: String, value: String) {
             text = label,
             style = MaterialTheme.typography.labelSmall,
             color = VoidTextSecondary,
-            modifier = Modifier.padding(end = 8.dp)
+            modifier = Modifier
+                .weight(0.38f)
+                .padding(end = 6.dp)
         )
         Text(
             text = value,
             style = MaterialTheme.typography.labelSmall,
             color = VoidTextPrimary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+            textAlign = TextAlign.End,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(0.62f)
         )
     }
 }

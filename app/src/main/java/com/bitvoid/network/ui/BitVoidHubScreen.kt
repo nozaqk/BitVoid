@@ -68,6 +68,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -132,6 +134,8 @@ private data class HubChannelDisplayItem(
 fun BitVoidPrivateChatScreen(
     myUsername: String,
     isUserIdDiscoverable: Boolean,
+    onSetUserIdDiscoverable: (Boolean) -> Unit,
+    onCopyUsername: (String, String) -> Unit,
     directConversations: List<DirectConversationSummary>,
     knownUsers: List<String>,
     activeDirectSession: ClientDirectSession?,
@@ -260,20 +264,59 @@ fun BitVoidPrivateChatScreen(
             item(key = "pchat_identity") {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = VoidSurface),
-                    border = BorderStroke(1.dp, if (isUserIdDiscoverable) VoidMint.copy(alpha = 0.65f) else VoidBorder),
-                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(
+                        1.dp,
+                        if (isUserIdDiscoverable) VoidMint.copy(alpha = 0.65f) else VoidBorder
+                    ),
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Text("YOU · @$myUsername", color = VoidTextPrimary, fontWeight = FontWeight.Bold)
-                        Text(
-                            if (isUserIdDiscoverable) {
-                                "Visible automatically to users on this node"
-                            } else {
-                                "Hidden from automatic lists · exact User ID still works"
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (isUserIdDiscoverable) VoidMint else VoidTextSecondary
+                    Row(
+                        modifier = Modifier.padding(start = 12.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "YOU · @$myUsername",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = VoidTextPrimary,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.testTag("pchat_username_value")
+                            )
+                            Text(
+                                text = if (isUserIdDiscoverable) {
+                                    "User ID shown to this node"
+                                } else {
+                                    "User ID hidden from automatic lists"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (isUserIdDiscoverable) VoidMint else VoidTextSecondary
+                            )
+                        }
+                        IconButton(
+                            onClick = { onCopyUsername("Username ID", myUsername) },
+                            modifier = Modifier
+                                .size(40.dp)
+                                .testTag("pchat_copy_username_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.ContentCopy,
+                                contentDescription = "Copy Username ID",
+                                tint = VoidCyan,
+                                modifier = Modifier.size(17.dp)
+                            )
+                        }
+                        Switch(
+                            checked = isUserIdDiscoverable,
+                            onCheckedChange = onSetUserIdDiscoverable,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = VoidObsidian,
+                                checkedTrackColor = VoidMint,
+                                uncheckedThumbColor = VoidTextSecondary,
+                                uncheckedTrackColor = VoidSurfaceElevated
+                            ),
+                            modifier = Modifier.testTag("pchat_user_discoverability_switch")
                         )
                     }
                 }
