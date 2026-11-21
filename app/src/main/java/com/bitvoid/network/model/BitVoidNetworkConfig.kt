@@ -15,8 +15,8 @@ data class BitVoidNetworkConfig(
         require(!isHiddenSsid) {
             "BitVoid forbids hidden SSIDs; isHiddenSsid must always be false."
         }
-        require(passphrase.length in 8..63) {
-            "BitVoid Wi-Fi passphrase must be between 8 and 63 characters."
+        require(isValidWpa2Passphrase(passphrase)) {
+            "BitVoid Wi-Fi passphrase must contain 8 to 63 printable ASCII characters."
         }
     }
 
@@ -28,6 +28,9 @@ data class BitVoidNetworkConfig(
         const val LOCAL_GATEWAY_HOSTNAME = "bitvoid.local"
 
         private val DIRECT_PREFIX_REGEX = Regex("^DIRECT-[0-9A-Za-z]{2}.*")
+
+        fun isValidWpa2Passphrase(value: String): Boolean =
+            value.length in 8..63 && value.all { it.code in 32..126 }
 
         /**
          * Formats a user-configured SSID for Android's WifiP2pConfig.Builder.setNetworkName(),
@@ -70,7 +73,7 @@ object BitVoidNetworkPrefs {
         val rawSsid = prefs.getString(KEY_SSID, null)?.trim()
         val rawPass = prefs.getString(KEY_PASSPHRASE, null)?.trim()
         val passphrase = rawPass
-            ?.takeIf { it.length in 8..63 }
+            ?.takeIf { BitVoidNetworkConfig.isValidWpa2Passphrase(it) }
             ?: BitVoidNetworkConfig.DEFAULT_WPA2_PASSPHRASE
         // Remove the legacy dual-mode preference so obsolete security choices cannot return.
         if (prefs.contains(LEGACY_KEY_SECURITY_MODE)) {
@@ -86,8 +89,8 @@ object BitVoidNetworkPrefs {
     fun saveBroadcastCredentials(context: Context, ssid: String, passphrase: String) {
         val cleanSsid = ssid.trim().ifEmpty { BitVoidNetworkConfig.DEFAULT_VISIBLE_SSID }
         val cleanPass = passphrase.trim().ifEmpty { BitVoidNetworkConfig.DEFAULT_WPA2_PASSPHRASE }
-        require(cleanPass.length in 8..63) {
-            "BitVoid Wi-Fi passphrase must be between 8 and 63 characters."
+        require(BitVoidNetworkConfig.isValidWpa2Passphrase(cleanPass)) {
+            "BitVoid Wi-Fi passphrase must contain 8 to 63 printable ASCII characters."
         }
         context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()

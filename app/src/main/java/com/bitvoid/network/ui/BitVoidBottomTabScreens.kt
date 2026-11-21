@@ -369,7 +369,7 @@ fun SettingsAutonomousCard(
                     )
                 }
                 Text(
-                    text = "Set the visible SSID and WPA2 password used by the BitVoid hotspot.",
+                    text = "Saved credentials apply on the next Host Engine start. Older Android may add a DIRECT-BV- prefix, but BitVoid will not substitute random credentials.",
                     style = MaterialTheme.typography.labelSmall,
                     color = VoidTextSecondary
                 )
@@ -395,7 +395,7 @@ fun SettingsAutonomousCard(
                         passphraseDraft = it
                         credentialError = null
                     },
-                    label = { Text("Wi-Fi Password (WPA2, min 8 chars)") },
+                    label = { Text("Password (8–63 ASCII)") },
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodyMedium,
                     visualTransformation = if (showPassword) {
@@ -421,9 +421,9 @@ fun SettingsAutonomousCard(
                         .testTag("settings_passphrase_input")
                 )
 
-                if (hostState.status == HotspotStatus.ACTIVE) {
+                if (hostState.isEngineLocked) {
                     Text(
-                        text = "Hotspot active — restart Host Engine to apply changes.",
+                        text = "Host Engine is running — stop and start it to apply saved credentials.",
                         style = MaterialTheme.typography.labelSmall,
                         color = VoidAmber
                     )

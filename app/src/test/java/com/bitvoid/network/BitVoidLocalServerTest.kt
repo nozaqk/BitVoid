@@ -581,6 +581,20 @@ class BitVoidLocalServerTest {
         }
         assertTrue("Password-free and short-password configurations must be rejected", shortPasswordThrew)
 
+        var nonAsciiPasswordThrew = false
+        try {
+            com.bitvoid.network.model.BitVoidNetworkConfig(passphrase = "pässword1")
+        } catch (_: IllegalArgumentException) {
+            nonAsciiPasswordThrew = true
+        }
+        assertTrue(
+            "Wi-Fi APIs require a printable ASCII WPA2 passphrase",
+            nonAsciiPasswordThrew
+        )
+        assertTrue(
+            com.bitvoid.network.model.BitVoidNetworkConfig.isValidWpa2Passphrase("CustomPass123")
+        )
+
         val idleHost = com.bitvoid.network.model.HostState()
         assertFalse(idleHost.isEngineLocked)
         val runningHost = idleHost.copy(status = com.bitvoid.network.model.HotspotStatus.ACTIVE)
