@@ -1706,9 +1706,23 @@ private fun WhatsAppDirectChatSpace(
     var pendingCallAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     val callPermLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) {
-        pendingCallAction?.invoke()
+    ) { permissions ->
+        val granted = permissions[Manifest.permission.RECORD_AUDIO] == true ||
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+        val action = pendingCallAction
         pendingCallAction = null
+        if (granted) {
+            action?.invoke()
+        } else {
+            android.widget.Toast.makeText(
+                context,
+                "Microphone access is required for BitVoid audio calls. Allow it in Android app permissions, then try again.",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     fun launchDirectVoiceCallWithPermission(accepting: Boolean = false) {
