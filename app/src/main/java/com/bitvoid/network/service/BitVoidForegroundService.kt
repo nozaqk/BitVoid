@@ -74,8 +74,9 @@ class BitVoidForegroundService : Service() {
 
         /** Tracks whether a conversation is actually on screen, not merely connected. */
         fun setAppInForeground(isForeground: Boolean) {
+            // Keep the last visible conversation across background/foreground transitions.
+            // The foreground flag alone decides whether notifications are suppressed.
             appInForeground = isForeground
-            if (!isForeground) visibleConversationId = null
         }
 
         fun setVisibleConversation(conversationId: String?) {
