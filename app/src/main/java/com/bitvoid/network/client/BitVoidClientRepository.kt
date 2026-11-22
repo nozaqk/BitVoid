@@ -1476,7 +1476,10 @@ class BitVoidClientRepository {
 
     private fun connectChatWebSocket(baseUrl: String, session: ClientChannelSession) {
         val existing = channelSubscriptions[session.channelId]
-        if (existing?.first?.token == session.token) return
+        if (existing?.first?.token == session.token) {
+            if (_activeChannelSession.value?.channelId == session.channelId) activeWebSocket = existing.second
+            return
+        }
         existing?.second?.close(1000, "Replacing channel authorization")
         if (_activeChannelSession.value?.channelId == session.channelId) _wsStatus.value = ClientWsStatus.CONNECTING
 
@@ -1499,7 +1502,7 @@ class BitVoidClientRepository {
             request,
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                    _wsStatus.value = ClientWsStatus.LIVE
+                    if (_activeChannelSession.value?.channelId == session.channelId) _wsStatus.value = ClientWsStatus.LIVE
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
@@ -1508,15 +1511,16 @@ class BitVoidClientRepository {
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                     webSocket.close(1000, null)
-                    _wsStatus.value = ClientWsStatus.DISCONNECTED
+                    if (_activeChannelSession.value?.channelId == session.channelId) _wsStatus.value = ClientWsStatus.DISCONNECTED
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    _wsStatus.value = ClientWsStatus.DISCONNECTED
+                    if (_activeChannelSession.value?.channelId == session.channelId) _wsStatus.value = ClientWsStatus.DISCONNECTED
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    _wsStatus.value = ClientWsStatus.ERROR
+                    if (_activeChannelSession.value?.channelId == session.channelId) _wsStatus.value = ClientWsStatus.ERROR
+                    if (channelSubscriptions[session.channelId]?.second === webSocket) channelSubscriptions.remove(session.channelId)
                     scheduleChannelReconnect(baseUrl, session)
                 }
             }
@@ -1527,11 +1531,9 @@ class BitVoidClientRepository {
     }
 
     private fun scheduleChannelReconnect(baseUrl: String, session: ClientChannelSession) {
-        channelReconnectJob?.cancel()
         channelReconnectJob = scope.launch {
             delay(1800)
-            val current = channelSubscriptions[session.channelId]?.first ?: return@launch
-            if (current.token == session.token) connectChatWebSocket(baseUrl, current)
+            if (_hasNotificationSubscriptions.value) connectChatWebSocket(baseUrl, session)
         }
     }
 
@@ -1542,7 +1544,7 @@ class BitVoidClientRepository {
                 "history" -> {
                     val arr = json.optJSONArray("messages") ?: return
                     val parsed = parseMessagesArray(arr)
-                    parsed.forEach { appendMessageIfNew(it) }
+                    if (_activeChannelSession.value?.channelId == session.channelId) parsed.forEach { appendMessageIfNew(it) }
                 }
                 "chat" -> {
                     val msgObj = json.optJSONObject("message") ?: return
@@ -1579,7 +1581,10 @@ class BitVoidClientRepository {
 
     private fun connectDirectWebSocket(baseUrl: String, session: ClientDirectSession) {
         val existing = directSubscriptions[session.dmId]
-        if (existing?.first?.token == session.token) return
+        if (existing?.first?.token == session.token) {
+            if (_activeDirectSession.value?.dmId == session.dmId) activeDirectWebSocket = existing.second
+            return
+        }
         existing?.second?.close(1000, "Replacing direct-chat authorization")
         if (_activeDirectSession.value?.dmId == session.dmId) _directWsStatus.value = ClientWsStatus.CONNECTING
 
@@ -1602,7 +1607,7 @@ class BitVoidClientRepository {
             request,
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                    _directWsStatus.value = ClientWsStatus.LIVE
+                    if (_activeDirectSession.value?.dmId == session.dmId) _directWsStatus.value = ClientWsStatus.LIVE
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
@@ -1611,15 +1616,16 @@ class BitVoidClientRepository {
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                     webSocket.close(1000, null)
-                    _directWsStatus.value = ClientWsStatus.DISCONNECTED
+                    if (_activeDirectSession.value?.dmId == session.dmId) _directWsStatus.value = ClientWsStatus.DISCONNECTED
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    _directWsStatus.value = ClientWsStatus.DISCONNECTED
+                    if (_activeDirectSession.value?.dmId == session.dmId) _directWsStatus.value = ClientWsStatus.DISCONNECTED
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    _directWsStatus.value = ClientWsStatus.ERROR
+                    if (_activeDirectSession.value?.dmId == session.dmId) _directWsStatus.value = ClientWsStatus.ERROR
+                    if (directSubscriptions[session.dmId]?.second === webSocket) directSubscriptions.remove(session.dmId)
                     scheduleDirectReconnect(baseUrl, session)
                 }
             }
@@ -1630,11 +1636,9 @@ class BitVoidClientRepository {
     }
 
     private fun scheduleDirectReconnect(baseUrl: String, session: ClientDirectSession) {
-        directReconnectJob?.cancel()
         directReconnectJob = scope.launch {
             delay(1800)
-            val current = directSubscriptions[session.dmId]?.first ?: return@launch
-            if (current.token == session.token) connectDirectWebSocket(baseUrl, current)
+            if (_hasNotificationSubscriptions.value) connectDirectWebSocket(baseUrl, session)
         }
     }
 
@@ -1644,7 +1648,7 @@ class BitVoidClientRepository {
             when (json.optString("type")) {
                 "history" -> {
                     val arr = json.optJSONArray("messages") ?: return
-                    parseMessagesArray(arr).forEach { appendDirectMessageIfNew(it) }
+                    if (_activeDirectSession.value?.dmId == session.dmId) parseMessagesArray(arr).forEach { appendDirectMessageIfNew(it) }
                 }
                 "chat" -> {
                     val msgObj = json.optJSONObject("message") ?: return
