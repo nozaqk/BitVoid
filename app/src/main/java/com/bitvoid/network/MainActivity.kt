@@ -29,6 +29,16 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: BitVoidViewModel by viewModels()
 
+    override fun onStart() {
+        super.onStart()
+        BitVoidForegroundService.setAppInForeground(true)
+    }
+
+    override fun onStop() {
+        BitVoidForegroundService.setAppInForeground(false)
+        super.onStop()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge(
