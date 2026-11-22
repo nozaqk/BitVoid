@@ -65,6 +65,24 @@ controllers/
 └── pi/          # Python Raspberry Pi/Linux coordinator service
 ```
 
+## Universal hardware gateway API
+
+The hardware portability contract is documented in [`docs/gateway-api-v1.md`](docs/gateway-api-v1.md).
+The first ESP-12E/ESP8266 target is in `controllers/esp12e/`; it creates a WPA2 access point and
+implements Gateway API v1 discovery, health, services, and device-list endpoints. Android's
+`BitVoidNodeClient.getGatewayInfo()` negotiates the protocol and returns hardware-neutral
+capabilities. App features must check capabilities, not board model names.
+
+**Current rollout status:** ESP-12E discovery firmware and Android capability parsing are added.
+The existing ESP32 and Pi controllers still implement the older mesh protocol and are explicitly
+not yet API-v1 drop-in replacements. Secure device pairing/authentication is specified but not
+implemented on the ESP-12E; it returns HTTP 501 for pairing. This firmware is therefore a
+connectivity/discovery test, not a trusted production BitVoid server. ESP-12E cannot host the full
+media/WebRTC workload; use a Pi-class board for that workload.
+
+Android's Wi-Fi connection request is subject to Android OS approval. A first-time user must
+approve the system connection prompt; the app cannot silently join arbitrary protected Wi-Fi.
+
 ## Same-LAN app, ESP32, and Raspberry Pi mesh
 
 Every component answers the public BitVoid `local-identity-v1` protocol. This deliberately avoids
