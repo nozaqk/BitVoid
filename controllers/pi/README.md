@@ -1,5 +1,10 @@
 # BitVoid Raspberry Pi coordinator
 
+> **Compatibility status:** this existing service currently implements the legacy mesh identity
+> protocol, not the complete Universal Gateway API v1. It is not yet a drop-in replacement for the
+> ESP-12E gateway. Implement every required route in `../../docs/gateway-api-v1.md` before marking
+> this target API-v1 compatible. The Android app must not branch on this board's model.
+
 This service joins the Pi's **existing Wi-Fi/LAN** and coordinates BitVoid apps on the same `/24`
 network. It does not provide internet NAT, switch Wi-Fi networks, or store a universal hidden key.
 Identity is the public `local-identity-v1` protocol selected for this deployment.
