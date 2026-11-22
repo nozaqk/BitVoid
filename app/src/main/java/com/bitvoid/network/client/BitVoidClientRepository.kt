@@ -205,6 +205,8 @@ class BitVoidClientRepository {
     // Retain authorized sockets for conversations already opened in this app session.
     private val channelSubscriptions = ConcurrentHashMap<String, Pair<ClientChannelSession, WebSocket>>()
     private val directSubscriptions = ConcurrentHashMap<String, Pair<ClientDirectSession, WebSocket>>()
+    private val channelSubscriptionSessions = ConcurrentHashMap<String, ClientChannelSession>()
+    private val directSubscriptionSessions = ConcurrentHashMap<String, ClientDirectSession>()
     private val _hasNotificationSubscriptions = MutableStateFlow(false)
     val hasNotificationSubscriptions: StateFlow<Boolean> = _hasNotificationSubscriptions.asStateFlow()
     private var channelReconnectJob: Job? = null
@@ -1475,6 +1477,7 @@ class BitVoidClientRepository {
     }
 
     private fun connectChatWebSocket(baseUrl: String, session: ClientChannelSession) {
+        channelSubscriptionSessions[session.channelId] = session
         val existing = channelSubscriptions[session.channelId]
         if (existing?.first?.token == session.token) {
             if (_activeChannelSession.value?.channelId == session.channelId) activeWebSocket = existing.second
@@ -1533,7 +1536,8 @@ class BitVoidClientRepository {
     private fun scheduleChannelReconnect(baseUrl: String, session: ClientChannelSession) {
         channelReconnectJob = scope.launch {
             delay(1800)
-            if (_hasNotificationSubscriptions.value) connectChatWebSocket(baseUrl, session)
+            val desired = channelSubscriptionSessions[session.channelId] ?: return@launch
+            if (desired.token == session.token) connectChatWebSocket(baseUrl, desired)
         }
     }
 
@@ -1580,6 +1584,7 @@ class BitVoidClientRepository {
     }
 
     private fun connectDirectWebSocket(baseUrl: String, session: ClientDirectSession) {
+        directSubscriptionSessions[session.dmId] = session
         val existing = directSubscriptions[session.dmId]
         if (existing?.first?.token == session.token) {
             if (_activeDirectSession.value?.dmId == session.dmId) activeDirectWebSocket = existing.second
@@ -1638,7 +1643,8 @@ class BitVoidClientRepository {
     private fun scheduleDirectReconnect(baseUrl: String, session: ClientDirectSession) {
         directReconnectJob = scope.launch {
             delay(1800)
-            if (_hasNotificationSubscriptions.value) connectDirectWebSocket(baseUrl, session)
+            val desired = directSubscriptionSessions[session.dmId] ?: return@launch
+            if (desired.token == session.token) connectDirectWebSocket(baseUrl, desired)
         }
     }
 
@@ -1682,8 +1688,9 @@ class BitVoidClientRepository {
         channelReconnectJob = null
         channelSubscriptions.values.forEach { (_, socket) -> runCatching { socket.close(1000, "Repository released") } }
         channelSubscriptions.clear()
+        channelSubscriptionSessions.clear()
         activeWebSocket = null
-        _hasNotificationSubscriptions.value = directSubscriptions.isNotEmpty()
+        _hasNotificationSubscriptions.value = directSubscriptionSessions.isNotEmpty()
     }
 
     private fun closeDirectSocketOnly() {
@@ -1691,8 +1698,9 @@ class BitVoidClientRepository {
         directReconnectJob = null
         directSubscriptions.values.forEach { (_, socket) -> runCatching { socket.close(1000, "Repository released") } }
         directSubscriptions.clear()
+        directSubscriptionSessions.clear()
         activeDirectWebSocket = null
-        _hasNotificationSubscriptions.value = channelSubscriptions.isNotEmpty()
+        _hasNotificationSubscriptions.value = channelSubscriptionSessions.isNotEmpty()
     }
 
     private fun parseStringArray(arr: JSONArray): List<String> {
