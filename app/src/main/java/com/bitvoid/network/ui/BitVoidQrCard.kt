@@ -128,7 +128,9 @@ fun generateQrImageBitmap(payload: String, sizePx: Int = 512): ImageBitmap? {
 
 fun shareWifiNetworkDetails(context: Context, hostState: HostState) {
     val ssid = hostState.effectiveSsid
-    val portalUrl = if (hostState.hasClientGatewayAddress) {
+    // A numeric gateway URL is the most reliable choice for PCs and laptops; .local names are
+    // shared only as an optional secondary address because some Windows/browser setups skip mDNS.
+    val portalUrl = if (hostState.gatewayIp.isNotBlank()) {
         hostState.networkPortalUrl
     } else {
         hostState.effectivePortalUrl
@@ -146,7 +148,7 @@ fun shareWifiNetworkDetails(context: Context, hostState: HostState) {
         if (hostState.gatewayHostname.isNotBlank() && hostState.effectivePortalUrl != portalUrl) {
             appendLine("Friendly portal: ${hostState.effectivePortalUrl}")
         }
-        append("Connect to the protected Wi-Fi network, then open the BitVoid Channels portal.")
+        append("Connect to the protected Wi-Fi network, then open the full HTTP address exactly as shown (including :${hostState.port}).")
     }
     val sendIntent = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
@@ -169,7 +171,9 @@ fun HostWifiQrSection(
     var qrMode by rememberSaveable { mutableStateOf(QrPayloadMode.WIFI_NETWORK) }
 
     val ssid = hostState.effectiveSsid
-    val portalUrl = if (hostState.hasClientGatewayAddress) {
+    // A numeric gateway URL is the most reliable choice for PCs and laptops; .local names are
+    // shared only as an optional secondary address because some Windows/browser setups skip mDNS.
+    val portalUrl = if (hostState.gatewayIp.isNotBlank()) {
         hostState.networkPortalUrl
     } else {
         hostState.effectivePortalUrl

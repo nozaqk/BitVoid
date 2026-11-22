@@ -417,7 +417,7 @@ fun BitVoidDashboard(
                         onRequestPermissions = onRequestPermissions,
                         onToggleHost = { viewModel.toggleHostGateway() },
                         onOpenGateway = {
-                            viewModel.openSandboxedBrowser(hostState.effectivePortalUrl)
+                            viewModel.openSandboxedBrowser(hostState.networkPortalUrl)
                         },
                         onOpenProtocolDialog = { showProtocolDialog = true },
                         onOpenQrDialog = { showQrDialog = true },
@@ -467,7 +467,7 @@ fun BitVoidDashboard(
                     },
                     onToggleHost = { viewModel.toggleHostGateway() },
                     onOpenGateway = {
-                        viewModel.openSandboxedBrowser(hostState.effectivePortalUrl)
+                        viewModel.openSandboxedBrowser(hostState.networkPortalUrl)
                     },
                     onOpenProtocolDialog = { showProtocolDialog = true },
                     onOpenQrDialog = { showQrDialog = true },
