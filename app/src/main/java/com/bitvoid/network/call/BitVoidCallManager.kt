@@ -177,10 +177,23 @@ class BitVoidCallManager(context: Context) {
             Manifest.permission.RECORD_AUDIO
         ) == PackageManager.PERMISSION_GRANTED
 
-        if (micPermissionGranted) {
-            createLocalAudioTrack(startMuted = role == ParticipantRole.STUDENT_VIEWER)
-        } else {
+        if (!micPermissionGranted) {
+            _callState.value = BitVoidCallState.ERROR
+            _callError.value = "Microphone permission is required to join an audio call. Allow microphone access and try again."
             _isMicMuted.value = true
+            _activeRoomId.value = null
+            _myPeerId.value = ""
+            return
+        }
+
+        try {
+            createLocalAudioTrack(startMuted = role == ParticipantRole.STUDENT_VIEWER)
+        } catch (e: SecurityException) {
+            _callState.value = BitVoidCallState.ERROR
+            _callError.value = "Android blocked microphone access: ${e.localizedMessage ?: "permission denied"}"
+            _activeRoomId.value = null
+            _myPeerId.value = ""
+            return
         }
 
         applySpeakerphoneRouting(enabled = true)
@@ -373,7 +386,8 @@ class BitVoidCallManager(context: Context) {
             reqBuilder.build(),
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                    _callState.value = BitVoidCallState.ACTIVE
+                    // A WebSocket only confirms signaling transport, not working audio media.
+                    _callState.value = BitVoidCallState.JOINING
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
@@ -408,7 +422,8 @@ class BitVoidCallManager(context: Context) {
         val type = obj.optString("type")
         when (type) {
             "welcome" -> {
-                _callState.value = BitVoidCallState.ACTIVE
+                // Room membership is not proof that peer-to-peer audio is flowing.
+                _callState.value = BitVoidCallState.JOINING
                 _liveClassCode.value = obj.optString("classCode").takeIf { it.isNotBlank() }
                 val peers = parsePeers(obj.optJSONArray("peers"))
                 _participants.value = peers
@@ -508,8 +523,38 @@ class BitVoidCallManager(context: Context) {
 
         val observer = object : PeerConnection.Observer {
             override fun onSignalingChange(state: PeerConnection.SignalingState?) {}
-            override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {}
-            override fun onIceConnectionReceivingChange(receiving: Boolean) {}
+
+            override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {
+                when (state) {
+                    PeerConnection.IceConnectionState.CONNECTED,
+                    PeerConnection.IceConnectionState.COMPLETED -> {
+                        _callError.value = null
+                        _callState.value = BitVoidCallState.ACTIVE
+                    }
+                    PeerConnection.IceConnectionState.FAILED -> {
+                        _callState.value = BitVoidCallState.ERROR
+                        _callError.value =
+                            "Audio connection failed. Check that both devices are on the same local network and Wi-Fi client isolation is disabled."
+                    }
+                    PeerConnection.IceConnectionState.DISCONNECTED -> {
+                        _callError.value = "Audio connection interrupted. Waiting for the local network connection to recover…"
+                    }
+                    PeerConnection.IceConnectionState.CLOSED -> {
+                        if (_callState.value != BitVoidCallState.IDLE &&
+                            _callState.value != BitVoidCallState.ENDED
+                        ) {
+                            _callError.value = "Audio connection closed."
+                        }
+                    }
+                    else -> Unit
+                }
+            }
+
+            override fun onIceConnectionReceivingChange(receiving: Boolean) {
+                if (!receiving && _callState.value == BitVoidCallState.ACTIVE) {
+                    _callError.value = "No incoming audio packets are being received."
+                }
+            }
             override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {}
             override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) {}
             override fun onRemoveStream(stream: MediaStream?) {}
@@ -534,7 +579,11 @@ class BitVoidCallManager(context: Context) {
             }
 
             override fun onAddStream(stream: MediaStream?) {}
-            override fun onTrack(transceiver: RtpTransceiver?) {}
+
+            override fun onTrack(transceiver: RtpTransceiver?) {
+                // Explicitly enable received audio; this call engine does not negotiate video.
+                transceiver?.receiver?.track()?.setEnabled(true)
+            }
         }
 
         val pc = factory.createPeerConnection(rtcConfig, observer) ?: return null
