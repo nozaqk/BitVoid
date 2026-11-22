@@ -1559,12 +1559,16 @@ class BitVoidClientRepository {
                     }
                 }
                 "presence" -> {
-                    val count = json.optInt("activeCount", 1).coerceAtLeast(1)
-                    _channelPeersCount.value = count
+                    if (_activeChannelSession.value?.channelId == session.channelId) {
+                        val count = json.optInt("activeCount", 1).coerceAtLeast(1)
+                        _channelPeersCount.value = count
+                    }
                 }
                 "notice" -> {
                     val noticeText = json.optString("text", "")
-                    if (noticeText.isNotBlank()) {
+                    if (noticeText.isNotBlank() &&
+                        _activeChannelSession.value?.channelId == session.channelId
+                    ) {
                         appendMessageIfNew(
                             ClientChatMessage(
                                 id = "notice_${System.nanoTime()}",
