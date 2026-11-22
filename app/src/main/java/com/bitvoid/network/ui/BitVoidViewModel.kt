@@ -267,13 +267,8 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         loadSavedNetworkPreferences()
         viewModelScope.launch {
             var wasMonitoringMessages = false
-            combine(
-                clientRepository.activeChannelSession,
-                clientRepository.activeDirectSession
-            ) { channelSession, directSession ->
-                (channelSession != null && !channelSession.isLiveClassRoom) || directSession != null
-            }.collect { hasActiveConversation ->
-                if (hasActiveConversation) {
+            clientRepository.hasNotificationSubscriptions.collect { hasSubscriptions ->
+                if (hasSubscriptions) {
                     BitVoidForegroundService.startMessageMonitoring(appContext)
                     wasMonitoringMessages = true
                 } else if (wasMonitoringMessages) {
