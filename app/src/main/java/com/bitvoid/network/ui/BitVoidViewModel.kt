@@ -284,8 +284,8 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                 clientRepository.activeDirectSession
             ) { tab, channelSession, directSession ->
                 when (tab) {
-                    AppBottomTab.HUB -> directSession?.dmId
-                        ?: channelSession?.takeUnless { it.isLiveClassRoom }?.channelId
+                    // HUB displays channel chat; direct chat is shown only on the PCHAT tab.
+                    AppBottomTab.HUB -> channelSession?.takeUnless { it.isLiveClassRoom }?.channelId
                     AppBottomTab.PCHAT -> directSession?.dmId
                     else -> null
                 }
