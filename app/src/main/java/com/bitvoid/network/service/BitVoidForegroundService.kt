@@ -130,6 +130,7 @@ class BitVoidForegroundService : Service() {
     private var wifiP2pManager: WifiP2pManager? = null
     private var wifiP2pChannel: WifiP2pManager.Channel? = null
     private var isP2pGroupActive: Boolean = false
+    private var activeP2pGatewayIp: String? = null
     private lateinit var wifiManager: WifiManager
     private lateinit var notificationManager: NotificationManager
 
@@ -540,16 +541,11 @@ class BitVoidForegroundService : Service() {
                 }
 
                 hotspotReservation = reservation
-                val detection = detectActiveApAndWlanEndpoints()
-                val primaryIp = detection.primaryBroadcastIp ?: "192.168.43.1"
-                val combinedIps = (detection.allEndpoints + primaryIp + "127.0.0.1").distinct()
-                publishBroadcastActiveState(
+                publishBroadcastAfterAddressAssignment(
                     prefsCfg = prefsCfg,
                     activeSsid = activeSsid,
                     activePassphrase = activePass,
-                    primaryIp = primaryIp,
-                    combinedIps = combinedIps,
-                    radioHint = null
+                    fallbackGatewayIp = "192.168.43.1"
                 )
             }
 
@@ -713,6 +709,7 @@ class BitVoidForegroundService : Service() {
 
                 override fun onFailure(reason: Int) {
                     isP2pGroupActive = false
+                    activeP2pGatewayIp = null
                     if (reason == WifiP2pManager.BUSY && attempt < 2) {
                         Handler(Looper.getMainLooper()).postDelayed(
                             {
@@ -749,12 +746,14 @@ class BitVoidForegroundService : Service() {
             })
         } catch (_: SecurityException) {
             isP2pGroupActive = false
+            activeP2pGatewayIp = null
             activateAutonomousFallback(
                 prefsCfg,
                 buildConfiguredBroadcastFailureHint(priorHint, "Wi-Fi Direct permission denied")
             )
         } catch (_: IllegalArgumentException) {
             isP2pGroupActive = false
+            activeP2pGatewayIp = null
             activateAutonomousFallback(
                 prefsCfg,
                 buildConfiguredBroadcastFailureHint(priorHint, "Invalid Wi-Fi Direct configuration")
@@ -805,16 +804,68 @@ class BitVoidForegroundService : Service() {
                 return@requestGroupInfo
             }
 
-            val detection = detectActiveApAndWlanEndpoints()
-            val primaryIp = detection.primaryBroadcastIp ?: "192.168.49.1"
+            p2pMgr.requestConnectionInfo(channel) { info ->
+                val groupOwnerIp = info?.groupOwnerAddress?.hostAddress
+                    ?.takeIf { it.isNotBlank() }
+                    ?: "192.168.49.1"
+                activeP2pGatewayIp = groupOwnerIp
+                publishBroadcastAfterAddressAssignment(
+                    prefsCfg = prefsCfg,
+                    activeSsid = activeSsid,
+                    activePassphrase = activePass,
+                    fallbackGatewayIp = groupOwnerIp,
+                    fallbackGatewayIsAuthoritative = true
+                )
+            }
+        }
+    }
+
+    private fun publishBroadcastAfterAddressAssignment(
+        prefsCfg: BitVoidNetworkConfig,
+        activeSsid: String,
+        activePassphrase: String,
+        fallbackGatewayIp: String,
+        fallbackGatewayIsAuthoritative: Boolean = false
+    ) {
+        serviceScope.launch {
+            var detection = detectActiveApAndWlanEndpoints()
+            var attempts = 0
+            while (isNodeForegroundActive && attempts < 24) {
+                val knownGatewayAssigned = detection.allEndpoints.contains(fallbackGatewayIp)
+                val interfaceReady = detection.primaryBroadcastIp != null
+                // Give Android at least two seconds to expose its AP/P2P interface. This avoids
+                // publishing the phone's unrelated wlan0 client address on concurrent Wi-Fi.
+                val addressReady = when {
+                    fallbackGatewayIsAuthoritative -> knownGatewayAssigned
+                    fallbackGatewayIp == "192.168.49.1" ->
+                        knownGatewayAssigned || (attempts >= 16 && interfaceReady)
+                    else -> interfaceReady
+                }
+                if (attempts >= 8 && addressReady) break
+                delay(250L)
+                detection = detectActiveApAndWlanEndpoints()
+                attempts++
+            }
+            if (!isNodeForegroundActive) return@launch
+
+            val primaryIp = when {
+                fallbackGatewayIsAuthoritative -> fallbackGatewayIp
+                detection.allEndpoints.contains(fallbackGatewayIp) -> fallbackGatewayIp
+                else -> detection.primaryBroadcastIp ?: fallbackGatewayIp
+            }
             val combinedIps = (detection.allEndpoints + primaryIp + "127.0.0.1").distinct()
             publishBroadcastActiveState(
                 prefsCfg = prefsCfg,
                 activeSsid = activeSsid,
-                activePassphrase = activePass,
+                activePassphrase = activePassphrase,
                 primaryIp = primaryIp,
                 combinedIps = combinedIps,
-                radioHint = null
+                radioHint = if (detection.primaryBroadcastIp == null) {
+                    "Gateway interface is still being assigned. On a computer, open " +
+                        "http://$fallbackGatewayIp:${BitVoidLocalServer.DEFAULT_PORT} exactly."
+                } else {
+                    null
+                }
             )
         }
     }
@@ -951,6 +1002,7 @@ class BitVoidForegroundService : Service() {
     private fun detectActiveApAndWlanEndpoints(): DetectedApNetwork {
         val candidates = mutableListOf<Triple<Int, String, Boolean>>()
         val apEnabledByWifi = isSystemWifiApEnabled()
+        val hasStationWifiConnection = resolveConnectedWifiSsid() != null
         try {
             val interfaces = NetworkInterface.getNetworkInterfaces()
             while (interfaces != null && interfaces.hasMoreElements()) {
@@ -966,41 +1018,50 @@ class BitVoidForegroundService : Service() {
                     name.startsWith("ppp") ||
                     name.startsWith("wg")
                 if (isCellularOrTunnel) continue
-                val isP2pIface = name.startsWith("p2p")
+                val isP2pIface = name.startsWith("p2p") || name.contains("-p2p")
+                val wlanIndex = name.removePrefix("wlan").toIntOrNull()
+                val isWlanIface = name.startsWith("wlan") || name.startsWith("wifi")
+                val isSecondaryWlan = wlanIndex != null && wlanIndex > 0
+                val isBridgeIface = name.startsWith("br") || name.contains("bridge")
                 val isApIface = name.startsWith("ap") ||
                     name.startsWith("swlan") ||
                     name.startsWith("softap") ||
-                    name.contains("tether")
-                val isWlanIface = name.startsWith("wlan")
+                    name.startsWith("sap") ||
+                    name.contains("tether") ||
+                    isSecondaryWlan ||
+                    isBridgeIface
+                val broadcastRadioExpected = isP2pGroupActive ||
+                    hotspotReservation != null ||
+                    apEnabledByWifi
+                val canTreatPrimaryWlanAsBroadcast = broadcastRadioExpected &&
+                    !hasStationWifiConnection
                 val addresses = iface.inetAddresses
                 while (addresses.hasMoreElements()) {
                     val addr = addresses.nextElement()
                     if (addr is Inet4Address && !addr.isLoopbackAddress) {
                         val ip = addr.hostAddress ?: continue
-                        val isGateway192 = ip == "192.168.43.1" ||
+                        val isLikelyGatewayAddress = addr.isSiteLocalAddress && ip.endsWith(".1")
+                        val isKnownAndroidGateway = ip == "192.168.43.1" ||
                             ip == "192.168.49.1" ||
-                            (ip.startsWith("192.168.") && ip.endsWith(".1"))
+                            ip == activeP2pGatewayIp
+                        val isStrongBroadcastInterface = isP2pIface || isApIface
                         val priority = when {
-                            ip == "192.168.43.1" -> 0
-                            ip == "192.168.49.1" || isP2pIface -> 1
-                            ip.startsWith("192.168.43.") -> 2
-                            isApIface && isGateway192 -> 2
-                            isApIface -> 3
-                            ip.startsWith("192.168.49.") -> 3
-                            isWlanIface && isGateway192 -> 4
-                            isWlanIface -> 5
-                            addr.isSiteLocalAddress -> 6
-                            else -> 7
+                            isP2pIface && ip == "192.168.49.1" -> 0
+                            isStrongBroadcastInterface && isLikelyGatewayAddress -> 1
+                            isStrongBroadcastInterface -> 2
+                            isKnownAndroidGateway -> 3
+                            canTreatPrimaryWlanAsBroadcast && isWlanIface && isLikelyGatewayAddress -> 4
+                            canTreatPrimaryWlanAsBroadcast && isWlanIface -> 5
+                            isWlanIface -> 6
+                            addr.isSiteLocalAddress -> 7
+                            else -> 8
                         }
-                        // A concurrently connected wlan0 address is usually not reachable by
-                        // clients on the phone's hotspot. Prefer an address assigned to the
-                        // broadcast/P2P interface; use the platform gateway fallback only until
-                        // Android exposes that interface.
-                        val isBroadcastEndpoint = isApIface ||
-                            isP2pIface ||
-                            ip == "192.168.43.1" ||
-                            ip == "192.168.49.1" ||
-                            (isWlanIface && isGateway192)
+                        // Vendor hotspot interfaces use many names (ap0, swlan0, softap0,
+                        // wlan1, bridge0). When a broadcast is active, also accept its wlan
+                        // address even when the phone does not use the traditional .1 gateway.
+                        val isBroadcastEndpoint = isStrongBroadcastInterface ||
+                            isKnownAndroidGateway ||
+                            (canTreatPrimaryWlanAsBroadcast && isWlanIface)
                         candidates.add(Triple(priority, ip, isBroadcastEndpoint))
                     }
                 }
@@ -1064,7 +1125,9 @@ class BitVoidForegroundService : Service() {
     private fun probeAssignedGatewayIp() {
         ipProbeJob?.cancel()
         ipProbeJob = serviceScope.launch {
-            repeat(20) {
+            // Some vendors expose the AP/P2P interface several seconds after reporting success.
+            // Keep resolving for one minute so the URL updates to the address a laptop can reach.
+            repeat(80) {
                 delay(750L)
                 val detection = detectActiveApAndWlanEndpoints()
                 val current = BitVoidNodeStateHolder.hostState.value
@@ -1169,6 +1232,7 @@ class BitVoidForegroundService : Service() {
         hotspotReservation = null
         if (isP2pGroupActive) {
             isP2pGroupActive = false
+            activeP2pGatewayIp = null
             val p2pMgr = wifiP2pManager
             val ch = wifiP2pChannel
             if (p2pMgr != null && ch != null) {
