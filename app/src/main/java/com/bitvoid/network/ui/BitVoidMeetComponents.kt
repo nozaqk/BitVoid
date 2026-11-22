@@ -446,9 +446,23 @@ fun DirectCallStagePanel(
     var pendingPermissionAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     val permLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) {
-        pendingPermissionAction?.invoke()
+    ) { permissions ->
+        val granted = permissions[Manifest.permission.RECORD_AUDIO] == true ||
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+        val action = pendingPermissionAction
         pendingPermissionAction = null
+        if (granted) {
+            action?.invoke()
+        } else {
+            android.widget.Toast.makeText(
+                context,
+                "Microphone access is required for audio calls. Allow it in Android app permissions, then try again.",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     fun runWithAudioPermission(action: () -> Unit) {
