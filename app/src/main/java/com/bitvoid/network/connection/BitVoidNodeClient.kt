@@ -194,6 +194,22 @@ class BitVoidNodeClient(
         return execute(builder.build())
     }
 
+    /**
+     * Negotiates the board-independent Gateway API before a feature uses optional services.
+     * A conforming ESP8266, ESP32, or Pi gateway returns the same schema.
+     */
+    suspend fun getGatewayInfo(): BitVoidGatewayInfo {
+        val response = get("/api/v1/gateway/info")
+        if (!response.isSuccessful) {
+            throw IOException("Gateway capability negotiation failed with HTTP ${response.code}")
+        }
+        return try {
+            BitVoidGatewayInfo.parse(JSONObject(response.body))
+        } catch (error: Exception) {
+            throw IOException("Gateway returned invalid or incompatible API metadata.", error)
+        }
+    }
+
     /** Common synchronization endpoint used by both the native UI and the web dashboard. */
     suspend fun synchronizeChannels(username: String? = null): BitVoidApiResponse {
         val query = username?.trim()?.takeIf { it.isNotEmpty() }?.let {
