@@ -283,6 +283,22 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             }
         }
         viewModelScope.launch {
+            combine(
+                selectedBottomTab,
+                clientRepository.activeChannelSession,
+                clientRepository.activeDirectSession
+            ) { tab, channelSession, directSession ->
+                when (tab) {
+                    AppBottomTab.HUB -> directSession?.dmId
+                        ?: channelSession?.takeUnless { it.isLiveClassRoom }?.channelId
+                    AppBottomTab.PCHAT -> directSession?.dmId
+                    else -> null
+                }
+            }.collect { visibleConversationId ->
+                BitVoidForegroundService.setVisibleConversation(visibleConversationId)
+            }
+        }
+        viewModelScope.launch {
             BitVoidMediaManager.mediaItems.collect { items ->
                 BitVoidChannelManager.syncMediaCatalog(items)
                 BitVoidNodeStateHolder.updateHostState { it.copy(sharedFiles = items) }
