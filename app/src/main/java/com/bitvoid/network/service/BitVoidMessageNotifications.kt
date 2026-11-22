@@ -73,6 +73,17 @@ internal object BitVoidMessageNotifications {
         }
     }
 
+    /** Suppress delivery only while this exact conversation is visible in the foreground. */
+    fun shouldSuppress(
+        spec: MessageNotificationSpec,
+        isAppInForeground: Boolean,
+        visibleConversationId: String?
+    ): Boolean {
+        return isAppInForeground &&
+            !visibleConversationId.isNullOrBlank() &&
+            spec.conversationId.equals(visibleConversationId, ignoreCase = true)
+    }
+
     fun stableId(destination: MessageNotificationDestination, conversationId: String): Int {
         val base = when (destination) {
             MessageNotificationDestination.CHANNEL -> CHANNEL_ID_BASE
