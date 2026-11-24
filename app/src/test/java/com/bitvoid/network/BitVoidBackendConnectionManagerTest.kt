@@ -1,8 +1,13 @@
 package com.bitvoid.network
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import com.bitvoid.network.backend.BitVoidBackendConnectionManager
 import com.bitvoid.network.backend.BitVoidBackendPrefs
 import com.bitvoid.network.backend.BitVoidBackendType
+import com.bitvoid.network.client.BitVoidMessageStore
+import com.bitvoid.network.client.ClientChatMessage
+import com.bitvoid.network.client.MessageDeliveryState
 import com.bitvoid.network.direct.BitVoidDirectChatManager
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -90,6 +95,26 @@ class BitVoidBackendConnectionManagerTest {
                 cloudHealthy = false
             )
         )
+    }
+
+    @Test
+    fun `pending message outbox survives a store recreation`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val conversationId = "dm__alice__bob_test"
+        val queued = ClientChatMessage(
+            id = "client-persisted-1234",
+            channelId = conversationId,
+            sender = "alice",
+            text = "send after reconnect",
+            time = "12:00",
+            timestampMs = 1_700_000_000_000L,
+            deliveryState = MessageDeliveryState.PENDING
+        )
+
+        BitVoidMessageStore(context).save(conversationId, direct = true, listOf(queued))
+        val restored = BitVoidMessageStore(context).load(conversationId, direct = true)
+
+        assertEquals(listOf(queued), restored)
     }
 
     @Test
