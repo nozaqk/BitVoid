@@ -7,9 +7,12 @@ import com.bitvoid.network.call.SignalingPeer
 import com.bitvoid.network.call.SignalingSessionMode
 import com.bitvoid.network.channel.BitVoidChannel
 import com.bitvoid.network.channel.BitVoidChannelManager
+import com.bitvoid.network.channel.BitVoidSpaceKind
+import com.bitvoid.network.channel.BitVoidSpaceRole
 import com.bitvoid.network.channel.ChannelSession
 import com.bitvoid.network.client.BitVoidClientManager
 import com.bitvoid.network.direct.BitVoidDirectChatManager
+import com.bitvoid.network.direct.BitVoidUserPrefs
 import com.bitvoid.network.direct.DirectSession
 import com.bitvoid.network.media.BitVoidMediaItem
 import com.bitvoid.network.media.BitVoidMediaManager
@@ -52,6 +55,7 @@ class BitVoidLocalServer(
         private const val STREAM_CHUNK_SIZE = 65536
         private const val HEADER_PAD_STEP = 64
         internal const val NODE_ACTIVITY_TIMEOUT_MS = 120_000L
+        private const val IDENTITY_SESSION_LIFETIME_MS = 24L * 60L * 60L * 1_000L
 
         private val CAPTIVE_PORTAL_PATHS = setOf(
             "/generate_204",
@@ -116,10 +120,21 @@ class BitVoidLocalServer(
     private val nodeActivitySalt = ByteArray(16).also { secureRandom.nextBytes(it) }
     // Volatile, in-memory activity keyed by a process-salted endpoint digest. This counts one app
     // or browser device once across requests without retaining its local address or identity.
+    private data class IdentitySession(
+        val username: String,
+        val issuedAtMs: Long,
+        val expiresAtMs: Long
+    )
+
     private val activeNodes = ConcurrentHashMap<String, Long>()
+    private val identitySessions = ConcurrentHashMap<String, IdentitySession>()
     private val requestCounter = AtomicInteger(0)
     private val totalBytesServed = AtomicLong(0L)
     private val timeFormatter = SimpleDateFormat("HH:mm:ss", Locale.US)
+
+    init {
+        BitVoidChannelManager.initializePersistence(context)
+    }
 
     val sharedDirectory: File
         get() = BitVoidMediaManager.resolveSharedDirectory(context)
@@ -310,6 +325,44 @@ class BitVoidLocalServer(
                     handleChannelChatPost(channelId, session, authToken, ephemeralToken)
                 }
 
+                // Telegram-style Group and Broadcast Channel endpoints. These extend the existing
+                // channel transport rather than introducing a second messaging system.
+                method == Method.POST && rawUri == "/api/spaces/groups" ->
+                    handleCreateGroup(session, ephemeralToken)
+
+                method == Method.POST && rawUri == "/api/spaces/channels" ->
+                    handleCreateBroadcastChannel(session, ephemeralToken)
+
+                method == Method.POST && rawUri == "/api/spaces/invitations/join" ->
+                    handleJoinSpaceInvitation(session, ephemeralToken)
+
+                method == Method.POST && rawUri.startsWith("/api/spaces/") && rawUri.endsWith("/subscribe") ->
+                    handleSubscribeToSpace(extractSpaceIdFromPath(rawUri, "/subscribe"), session, ephemeralToken)
+
+                method == Method.POST && rawUri.startsWith("/api/spaces/") && rawUri.endsWith("/unsubscribe") ->
+                    handleUnsubscribeFromSpace(extractSpaceIdFromPath(rawUri, "/unsubscribe"), authToken, ephemeralToken)
+
+                method == Method.POST && rawUri.startsWith("/api/spaces/") && rawUri.endsWith("/members/add") ->
+                    handleSpaceMemberAction(extractSpaceIdFromPath(rawUri, "/members/add"), session, authToken, ephemeralToken, "add")
+
+                method == Method.POST && rawUri.startsWith("/api/spaces/") && rawUri.endsWith("/members/remove") ->
+                    handleSpaceMemberAction(extractSpaceIdFromPath(rawUri, "/members/remove"), session, authToken, ephemeralToken, "remove")
+
+                method == Method.POST && rawUri.startsWith("/api/spaces/") && rawUri.endsWith("/members/role") ->
+                    handleSpaceMemberAction(extractSpaceIdFromPath(rawUri, "/members/role"), session, authToken, ephemeralToken, "role")
+
+                method == Method.POST && rawUri.startsWith("/api/spaces/") && rawUri.endsWith("/settings") ->
+                    handleUpdateSpace(extractSpaceIdFromPath(rawUri, "/settings"), session, authToken, ephemeralToken)
+
+                method == Method.POST && rawUri.startsWith("/api/spaces/") && rawUri.endsWith("/invitations") ->
+                    handleCreateSpaceInvitation(extractSpaceIdFromPath(rawUri, "/invitations"), session, authToken, ephemeralToken)
+
+                method == Method.POST && rawUri.startsWith("/api/spaces/") && rawUri.endsWith("/leave") ->
+                    handleLeaveSpace(extractSpaceIdFromPath(rawUri, "/leave"), authToken, ephemeralToken)
+
+                method == Method.POST && rawUri.startsWith("/api/spaces/") && rawUri.endsWith("/delete") ->
+                    handleDeleteSpace(extractSpaceIdFromPath(rawUri, "/delete"), authToken, ephemeralToken)
+
                 // Direct User Chat POST endpoints
                 method == Method.POST && rawUri == "/api/users/register" -> {
                     handleRegisterUser(session, ephemeralToken)
@@ -412,12 +465,28 @@ class BitVoidLocalServer(
                     servePortalPage(ephemeralToken, isHead = (method == Method.HEAD))
                 }
 
+                // Group/channel discovery and authenticated information.
+                rawUri == "/api/spaces/discover" -> {
+                    @Suppress("DEPRECATION")
+                    val query = session.parms["q"].orEmpty()
+                    serveDiscoveredChannels(query, ephemeralToken, isHead = method == Method.HEAD)
+                }
+
+                rawUri.startsWith("/api/spaces/") && rawUri.count { it == '/' } == 3 -> {
+                    val spaceId = URLDecoder.decode(
+                        rawUri.removePrefix("/api/spaces/"),
+                        StandardCharsets.UTF_8.name()
+                    )
+                    serveSpaceDetails(spaceId, authToken, ephemeralToken, isHead = method == Method.HEAD)
+                }
+
                 // Channel GET endpoints
                 rawUri == "/api/channels" -> {
                     @Suppress("DEPRECATION")
                     val username = session.parms["username"]
                     serveChannelsListJson(
                         username = username,
+                        requestSession = session,
                         ephemeralToken = ephemeralToken,
                         isHead = (method == Method.HEAD)
                     )
@@ -652,6 +721,11 @@ class BitVoidLocalServer(
         return URLDecoder.decode(inner, StandardCharsets.UTF_8.name())
     }
 
+    private fun extractSpaceIdFromPath(rawUri: String, suffix: String): String {
+        val inner = rawUri.removePrefix("/api/spaces/").removeSuffix(suffix)
+        return URLDecoder.decode(inner, StandardCharsets.UTF_8.name())
+    }
+
     private fun extractAuthToken(session: IHTTPSession): String? {
         val fromDmHeader = session.headers["x-dm-token"]
         if (!fromDmHeader.isNullOrBlank()) return fromDmHeader.trim()
@@ -667,6 +741,50 @@ class BitVoidLocalServer(
         @Suppress("DEPRECATION")
         val fromParams = session.parms["token"]
         return fromParams?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    @Synchronized
+    private fun issueIdentityToken(username: String): String {
+        val chars = CharArray(64) {
+            PAD_ALPHABET[secureRandom.nextInt(PAD_ALPHABET.size)]
+        }
+        val token = "BVU.${String(chars)}"
+        val now = System.currentTimeMillis()
+        identitySessions.entries.removeIf { it.value.expiresAtMs < now }
+        val oldestForUser = identitySessions.entries
+            .filter { it.value.username.equals(username, ignoreCase = true) }
+            .sortedBy { it.value.issuedAtMs }
+        oldestForUser.take((oldestForUser.size - 7).coerceAtLeast(0)).forEach {
+            identitySessions.remove(it.key)
+        }
+        identitySessions[token] = IdentitySession(
+            username = username,
+            issuedAtMs = now,
+            expiresAtMs = now + IDENTITY_SESSION_LIFETIME_MS
+        )
+        return token
+    }
+
+    private fun requireIdentity(session: IHTTPSession, rawUsername: String): String {
+        val username = BitVoidUserPrefs.normalizeUsernameOrNull(rawUsername)
+            ?: throw SecurityException("A valid authenticated username is required.")
+        val token = session.headers["x-bitvoid-identity-token"]
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: throw SecurityException("Register this user with the gateway before changing spaces.")
+        val identity = identitySessions[token]
+            ?: throw SecurityException("Your identity session expired. Register with the gateway again.")
+        if (identity.expiresAtMs < System.currentTimeMillis()) {
+            identitySessions.remove(token)
+            throw SecurityException("Your identity session expired. Register with the gateway again.")
+        }
+        if (!identity.username.equals(username, ignoreCase = true)) {
+            throw SecurityException("The identity session does not match this username.")
+        }
+        if (!BitVoidDirectChatManager.isUserAvailable(username)) {
+            throw SecurityException("This user is no longer active on the gateway.")
+        }
+        return username
     }
 
     private fun readPostBody(session: IHTTPSession): String {
@@ -852,22 +970,43 @@ class BitVoidLocalServer(
 
     private fun serveChannelsListJson(
         username: String?,
+        requestSession: IHTTPSession,
         ephemeralToken: String,
         isHead: Boolean
     ): Response {
         val diskItems = BitVoidMediaManager.refreshFromDisk(context)
         BitVoidChannelManager.syncMediaCatalog(diskItems)
 
-        // Hidden channels stay invisible to everyone except their creator. The creator receives
-        // the ID and can enter directly without retyping the private ID/key.
-        val listedChannels = BitVoidChannelManager.getChannelSnapshotsForUser(username)
+        // Typed private spaces and role metadata are only listed for the authenticated identity.
+        // Legacy private media spaces retain their previous username-list compatibility.
+        val cleanRequestedUsername = username?.trim()?.removePrefix("@").orEmpty()
+        val authenticatedUsername = if (cleanRequestedUsername.isNotEmpty()) {
+            runCatching { requireIdentity(requestSession, cleanRequestedUsername) }.getOrNull()
+        } else {
+            null
+        }
+        val listedChannels = BitVoidChannelManager.getChannelSnapshotsForUser(
+            authenticatedUsername ?: cleanRequestedUsername
+        ).filter { channel ->
+            channel.spaceKind == BitVoidSpaceKind.LEGACY_CHAT ||
+                channel.isPublic || authenticatedUsername != null
+        }
         val publicList = listedChannels.filter { it.isPublic }
         val privateList = listedChannels.filter { !it.isPublic }
 
         fun summary(channel: BitVoidChannel): String {
-            val isOwner = !username.isNullOrBlank() &&
-                channel.creatorUsername.equals(username.trim().removePrefix("@"), ignoreCase = true)
-            return channelSummaryJson(channel, revealId = channel.isPublic || isOwner, isOwner = isOwner)
+            val viewer = if (channel.spaceKind == BitVoidSpaceKind.LEGACY_CHAT) {
+                cleanRequestedUsername
+            } else {
+                authenticatedUsername.orEmpty()
+            }
+            val viewerRole = channel.members.firstOrNull {
+                it.username.equals(viewer, ignoreCase = true)
+            }?.role
+            val isOwner = viewerRole == BitVoidSpaceRole.OWNER ||
+                (viewerRole == null && channel.creatorUsername.equals(viewer, ignoreCase = true))
+            val revealId = channel.isPublic || isOwner || viewerRole != null
+            return channelSummaryJson(channel, revealId, isOwner, viewerRole)
         }
 
         val publicJson = publicList.joinToString(",") { summary(it) }
@@ -889,7 +1028,8 @@ class BitVoidLocalServer(
     private fun channelSummaryJson(
         ch: BitVoidChannel,
         revealId: Boolean,
-        isOwner: Boolean = false
+        isOwner: Boolean = false,
+        viewerRole: BitVoidSpaceRole? = null
     ): String {
         val livePeers = ch.activeParticipants.count { it.isWebSocketConnected }
         return JSONObject().apply {
@@ -906,7 +1046,347 @@ class BitVoidLocalServer(
             put("messageCount", ch.messageCount)
             put("lastMessagePreview", ch.lastMessagePreview ?: JSONObject.NULL)
             put("lastTimestampMs", ch.lastTimestampMs)
+            put("spaceKind", ch.spaceKind.name)
+            put("description", ch.description)
+            put("avatarDataUrl", ch.avatarDataUrl ?: JSONObject.NULL)
+            put("memberCount", ch.members.size)
+            put("subscriberCount", ch.subscriberCount)
+            put("myRole", viewerRole?.name ?: JSONObject.NULL)
+            put("isSubscribed", viewerRole != null)
         }.toString()
+    }
+
+    private fun handleCreateGroup(session: IHTTPSession, ephemeralToken: String): Response {
+        val json = parseJsonBody(session) ?: return invalidJsonResponse(ephemeralToken)
+        val owner = runCatching { requireIdentity(session, json.optString("username")) }
+            .getOrElse { return spaceFailureResponse(it, ephemeralToken) }
+        val membersArray = json.optJSONArray("members") ?: JSONArray()
+        val members = buildList {
+            for (index in 0 until membersArray.length()) {
+                membersArray.optString(index).takeIf { it.isNotBlank() }?.let(::add)
+            }
+        }
+        val result = BitVoidChannelManager.createGroup(
+            rawName = json.optString("name"),
+            rawDescription = json.optString("description"),
+            ownerUsername = owner,
+            initialMembers = members,
+            avatarDataUrl = json.optString("avatarDataUrl").takeIf { it.isNotBlank() }
+        )
+        return result.fold(
+            onSuccess = { channel -> spaceMutationResponse(channel, owner, ephemeralToken) },
+            onFailure = { error -> spaceFailureResponse(error, ephemeralToken) }
+        )
+    }
+
+    private fun handleCreateBroadcastChannel(session: IHTTPSession, ephemeralToken: String): Response {
+        val json = parseJsonBody(session) ?: return invalidJsonResponse(ephemeralToken)
+        val owner = runCatching { requireIdentity(session, json.optString("username")) }
+            .getOrElse { return spaceFailureResponse(it, ephemeralToken) }
+        val result = BitVoidChannelManager.createBroadcastChannel(
+            rawName = json.optString("name"),
+            rawDescription = json.optString("description"),
+            ownerUsername = owner,
+            isPublic = json.optBoolean("isPublic", true),
+            avatarDataUrl = json.optString("avatarDataUrl").takeIf { it.isNotBlank() }
+        )
+        return result.fold(
+            onSuccess = { channel -> spaceMutationResponse(channel, owner, ephemeralToken) },
+            onFailure = { error -> spaceFailureResponse(error, ephemeralToken) }
+        )
+    }
+
+    private fun handleSubscribeToSpace(
+        spaceId: String,
+        session: IHTTPSession,
+        ephemeralToken: String
+    ): Response {
+        val json = parseJsonBody(session) ?: return invalidJsonResponse(ephemeralToken)
+        val username = runCatching { requireIdentity(session, json.optString("username")) }
+            .getOrElse { return spaceFailureResponse(it, ephemeralToken) }
+        return BitVoidChannelManager.subscribeToChannel(spaceId, username).fold(
+            onSuccess = { joined ->
+                val channel = BitVoidChannelManager.getChannel(spaceId)
+                    ?: return@fold spaceFailureResponse(IllegalArgumentException("Channel not found."), ephemeralToken)
+                JSONObject().apply {
+                    put("ok", true)
+                    put("channelId", joined.channelId)
+                    put("token", joined.token)
+                    put("space", JSONObject(spaceDetailsJson(channel, joined.role)))
+                }.let {
+                    buildPaddedTextResponse(Response.Status.OK, "application/json; charset=utf-8", it.toString(), ephemeralToken)
+                }
+            },
+            onFailure = { spaceFailureResponse(it, ephemeralToken) }
+        )
+    }
+
+    private fun handleUnsubscribeFromSpace(
+        spaceId: String,
+        authToken: String?,
+        ephemeralToken: String
+    ): Response = BitVoidChannelManager.unsubscribeFromChannel(spaceId, authToken.orEmpty()).fold(
+        onSuccess = { okResponse(ephemeralToken) },
+        onFailure = { spaceFailureResponse(it, ephemeralToken) }
+    )
+
+    private fun handleJoinSpaceInvitation(session: IHTTPSession, ephemeralToken: String): Response {
+        val json = parseJsonBody(session) ?: return invalidJsonResponse(ephemeralToken)
+        val username = runCatching { requireIdentity(session, json.optString("username")) }
+            .getOrElse { return spaceFailureResponse(it, ephemeralToken) }
+        return BitVoidChannelManager.joinChannelByInvitation(
+            json.optString("invitation"),
+            username
+        ).fold(
+            onSuccess = { joined ->
+                val channel = BitVoidChannelManager.getChannel(joined.channelId)
+                    ?: return@fold spaceFailureResponse(IllegalArgumentException("Channel not found."), ephemeralToken)
+                JSONObject().apply {
+                    put("ok", true)
+                    put("token", joined.token)
+                    put("channelId", joined.channelId)
+                    put("space", JSONObject(spaceDetailsJson(channel, joined.role)))
+                }.let {
+                    buildPaddedTextResponse(Response.Status.OK, "application/json; charset=utf-8", it.toString(), ephemeralToken)
+                }
+            },
+            onFailure = { spaceFailureResponse(it, ephemeralToken) }
+        )
+    }
+
+    private fun handleSpaceMemberAction(
+        spaceId: String,
+        session: IHTTPSession,
+        authToken: String?,
+        ephemeralToken: String,
+        action: String
+    ): Response {
+        val json = parseJsonBody(session) ?: return invalidJsonResponse(ephemeralToken)
+        val username = json.optString("username")
+        val result = when (action) {
+            "add" -> BitVoidChannelManager.addGroupMember(spaceId, authToken.orEmpty(), username)
+            "remove" -> BitVoidChannelManager.removeSpaceMember(spaceId, authToken.orEmpty(), username)
+            "role" -> {
+                val role = runCatching {
+                    BitVoidSpaceRole.valueOf(json.optString("role").uppercase(Locale.US))
+                }.getOrElse {
+                    return spaceFailureResponse(IllegalArgumentException("Invalid role."), ephemeralToken)
+                }
+                BitVoidChannelManager.setSpaceMemberRole(spaceId, authToken.orEmpty(), username, role)
+            }
+            else -> Result.failure(IllegalArgumentException("Unsupported member action."))
+        }
+        return result.fold(
+            onSuccess = { spaceMutationResponse(it, null, ephemeralToken, authToken) },
+            onFailure = { spaceFailureResponse(it, ephemeralToken) }
+        )
+    }
+
+    private fun handleUpdateSpace(
+        spaceId: String,
+        session: IHTTPSession,
+        authToken: String?,
+        ephemeralToken: String
+    ): Response {
+        val json = parseJsonBody(session) ?: return invalidJsonResponse(ephemeralToken)
+        val current = BitVoidChannelManager.getChannel(spaceId)
+            ?: return spaceFailureResponse(IllegalArgumentException("Space not found."), ephemeralToken)
+        return BitVoidChannelManager.updateSpaceSettings(
+            channelId = spaceId,
+            sessionToken = authToken.orEmpty(),
+            rawName = json.optString("name", current.name),
+            rawDescription = json.optString("description", current.description),
+            avatarDataUrl = if (json.has("avatarDataUrl")) json.optString("avatarDataUrl") else current.avatarDataUrl,
+            isPublic = if (json.has("isPublic")) json.optBoolean("isPublic") else null
+        ).fold(
+            onSuccess = { spaceMutationResponse(it, null, ephemeralToken, authToken) },
+            onFailure = { spaceFailureResponse(it, ephemeralToken) }
+        )
+    }
+
+    private fun handleCreateSpaceInvitation(
+        spaceId: String,
+        session: IHTTPSession,
+        authToken: String?,
+        ephemeralToken: String
+    ): Response {
+        val json = parseJsonBody(session) ?: JSONObject()
+        return BitVoidChannelManager.createInvitation(
+            spaceId,
+            authToken.orEmpty(),
+            json.optInt("maxUses", 50)
+        ).fold(
+            onSuccess = { invitation ->
+                val payload = JSONObject().apply {
+                    put("code", invitation.code)
+                    put("inviteLink", "bitvoid://channel/invite/${invitation.code}")
+                    put("expiresAtMs", invitation.expiresAtMs)
+                    put("remainingUses", invitation.remainingUses)
+                }
+                buildPaddedTextResponse(Response.Status.OK, "application/json; charset=utf-8", payload.toString(), ephemeralToken)
+            },
+            onFailure = { spaceFailureResponse(it, ephemeralToken) }
+        )
+    }
+
+    private fun handleLeaveSpace(
+        spaceId: String,
+        authToken: String?,
+        ephemeralToken: String
+    ): Response {
+        val channel = BitVoidChannelManager.getChannel(spaceId)
+            ?: return spaceFailureResponse(IllegalArgumentException("Space not found."), ephemeralToken)
+        val result = if (channel.spaceKind == BitVoidSpaceKind.GROUP) {
+            BitVoidChannelManager.leaveGroup(spaceId, authToken.orEmpty())
+        } else {
+            BitVoidChannelManager.unsubscribeFromChannel(spaceId, authToken.orEmpty())
+        }
+        return result.fold(
+            onSuccess = { okResponse(ephemeralToken) },
+            onFailure = { spaceFailureResponse(it, ephemeralToken) }
+        )
+    }
+
+    private fun handleDeleteSpace(
+        spaceId: String,
+        authToken: String?,
+        ephemeralToken: String
+    ): Response = BitVoidChannelManager.deleteSpace(spaceId, authToken.orEmpty()).fold(
+        onSuccess = { okResponse(ephemeralToken) },
+        onFailure = { spaceFailureResponse(it, ephemeralToken) }
+    )
+
+    private fun serveSpaceDetails(
+        spaceId: String,
+        authToken: String?,
+        ephemeralToken: String,
+        isHead: Boolean
+    ): Response = BitVoidChannelManager.getSpaceDetails(spaceId, authToken.orEmpty()).fold(
+        onSuccess = { channel ->
+            val role = channel.members.firstOrNull { member ->
+                BitVoidChannelManager.validateToken(authToken, spaceId)?.callsign
+                    ?.equals(member.username, ignoreCase = true) == true
+            }?.role
+            buildPaddedTextResponse(
+                Response.Status.OK,
+                "application/json; charset=utf-8",
+                spaceDetailsJson(channel, role),
+                ephemeralToken,
+                isHead = isHead
+            )
+        },
+        onFailure = { spaceFailureResponse(it, ephemeralToken) }
+    )
+
+    private fun serveDiscoveredChannels(
+        query: String,
+        ephemeralToken: String,
+        isHead: Boolean
+    ): Response {
+        val channels = BitVoidChannelManager.discoverPublicBroadcastChannels(query)
+        val payload = JSONObject().apply {
+            put("channels", JSONArray().apply {
+                channels.forEach { put(JSONObject(channelSummaryJson(it, revealId = true))) }
+            })
+        }
+        return buildPaddedTextResponse(
+            Response.Status.OK,
+            "application/json; charset=utf-8",
+            payload.toString(),
+            ephemeralToken,
+            isHead = isHead
+        )
+    }
+
+    private fun spaceMutationResponse(
+        channel: BitVoidChannel,
+        username: String?,
+        ephemeralToken: String,
+        existingToken: String? = null
+    ): Response {
+        val joined = existingToken?.let { BitVoidChannelManager.validateToken(it, channel.channelId) }
+            ?: username?.let { BitVoidChannelManager.joinChannel(channel.channelId, rawUsername = it) }
+        val role = joined?.role ?: channel.members.firstOrNull {
+            it.username.equals(username, ignoreCase = true)
+        }?.role
+        val payload = JSONObject().apply {
+            put("ok", true)
+            put("channelId", channel.channelId)
+            put("token", joined?.token ?: JSONObject.NULL)
+            put("space", JSONObject(spaceDetailsJson(channel, role)))
+        }
+        return buildPaddedTextResponse(
+            Response.Status.OK,
+            "application/json; charset=utf-8",
+            payload.toString(),
+            ephemeralToken
+        )
+    }
+
+    private fun spaceDetailsJson(channel: BitVoidChannel, viewerRole: BitVoidSpaceRole?): String {
+        val visibleMembers = if (channel.spaceKind == BitVoidSpaceKind.BROADCAST_CHANNEL &&
+            viewerRole !in setOf(BitVoidSpaceRole.OWNER, BitVoidSpaceRole.ADMINISTRATOR)
+        ) {
+            channel.members.filter { it.role in setOf(BitVoidSpaceRole.OWNER, BitVoidSpaceRole.ADMINISTRATOR) }
+        } else {
+            channel.members
+        }
+        return JSONObject().apply {
+            put("channelId", channel.channelId)
+            put("name", channel.name)
+            put("description", channel.description)
+            put("avatarDataUrl", channel.avatarDataUrl ?: JSONObject.NULL)
+            put("spaceKind", channel.spaceKind.name)
+            put("isPublic", channel.isPublic)
+            put("isHidden", channel.isHidden)
+            put("myRole", viewerRole?.name ?: JSONObject.NULL)
+            put("memberCount", channel.members.size)
+            put("subscriberCount", channel.subscriberCount)
+            put("messageCount", channel.messageCount)
+            put("members", JSONArray().apply {
+                visibleMembers.forEach { member ->
+                    put(JSONObject().apply {
+                        put("username", member.username)
+                        put("role", member.role.name)
+                        put("joinedTimestampMs", member.joinedTimestampMs)
+                    })
+                }
+            })
+        }.toString()
+    }
+
+    private fun parseJsonBody(session: IHTTPSession): JSONObject? =
+        runCatching { JSONObject(readPostBody(session)) }.getOrNull()
+
+    private fun invalidJsonResponse(ephemeralToken: String): Response = buildPaddedTextResponse(
+        Response.Status.BAD_REQUEST,
+        "application/json; charset=utf-8",
+        """{"error":"invalid_json"}""",
+        ephemeralToken
+    )
+
+    private fun okResponse(ephemeralToken: String): Response = buildPaddedTextResponse(
+        Response.Status.OK,
+        "application/json; charset=utf-8",
+        """{"ok":true}""",
+        ephemeralToken
+    )
+
+    private fun spaceFailureResponse(error: Throwable, ephemeralToken: String): Response {
+        val status = if (error is SecurityException || error is IllegalAccessException) {
+            Response.Status.FORBIDDEN
+        } else {
+            Response.Status.BAD_REQUEST
+        }
+        return buildPaddedTextResponse(
+            status,
+            "application/json; charset=utf-8",
+            JSONObject().apply {
+                put("error", if (status == Response.Status.FORBIDDEN) "forbidden" else "invalid_request")
+                put("detail", error.message ?: "Unable to complete the request.")
+            }.toString(),
+            ephemeralToken
+        )
     }
 
     private fun handleChannelJoin(session: IHTTPSession, ephemeralToken: String): Response {
@@ -925,7 +1405,16 @@ class BitVoidLocalServer(
         val channelId = json.optString("channelId", json.optString("roomId", "")).trim()
         val privateKey = json.optString("privateKey", json.optString("passkey", ""))
         val username = json.optString("username", "").trim().takeIf { it.isNotEmpty() }
-        val joined = BitVoidChannelManager.joinChannel(channelId, privateKey, username)
+        val targetChannel = BitVoidChannelManager.getChannel(channelId)
+        val authenticatedUsername = if (targetChannel?.spaceKind != null &&
+            targetChannel.spaceKind != BitVoidSpaceKind.LEGACY_CHAT
+        ) {
+            runCatching { requireIdentity(session, username.orEmpty()) }
+                .getOrElse { return spaceFailureResponse(it, ephemeralToken) }
+        } else {
+            username
+        }
+        val joined = BitVoidChannelManager.joinChannel(channelId, privateKey, authenticatedUsername)
             ?: return buildPaddedTextResponse(
                 status = Response.Status.UNAUTHORIZED,
                 mimeType = "application/json; charset=utf-8",
@@ -940,8 +1429,23 @@ class BitVoidLocalServer(
         val historyJson = BitVoidChannelManager.getChatHistory(joined.channelId)
             .joinToString(",") { BitVoidChannelManager.messageToJson(it) }
 
-        val payload =
-            """{"token":"${jsonEscape(joined.token)}","channelId":"${jsonEscape(joined.channelId)}","name":"${jsonEscape(channel?.name ?: joined.channelId)}","isPublic":${joined.isPublic},"callsign":"${jsonEscape(joined.callsign)}","media":[$mediaJson],"videos":[$mediaJson],"messages":[$historyJson]}"""
+        val payload = JSONObject().apply {
+            put("token", joined.token)
+            put("channelId", joined.channelId)
+            put("name", channel?.name ?: joined.channelId)
+            put("isPublic", joined.isPublic)
+            put("callsign", joined.callsign)
+            put("spaceKind", joined.spaceKind.name)
+            put("role", joined.role?.name ?: JSONObject.NULL)
+            put("description", channel?.description.orEmpty())
+            put("avatarDataUrl", channel?.avatarDataUrl ?: JSONObject.NULL)
+            put("memberCount", channel?.members?.size ?: 0)
+            put("subscriberCount", channel?.subscriberCount ?: 0)
+            put("canPublish", BitVoidChannelManager.canPublish(joined))
+            put("media", JSONArray("[$mediaJson]"))
+            put("videos", JSONArray("[$mediaJson]"))
+            put("messages", JSONArray("[$historyJson]"))
+        }.toString()
 
         return buildPaddedTextResponse(
             status = Response.Status.OK,
@@ -1351,7 +1855,10 @@ class BitVoidLocalServer(
             )
 
         val validated = BitVoidChannelManager.validateToken(authToken, requiredChannelId = channelId)
-        if (!channel.isPublic && validated == null) {
+        if ((!channel.isPublic && validated == null) ||
+            (channel.spaceKind != BitVoidSpaceKind.LEGACY_CHAT &&
+                (validated == null || !BitVoidChannelManager.canPublish(validated)))
+        ) {
             return unauthorizedResponse(ephemeralToken)
         }
 
@@ -1370,7 +1877,8 @@ class BitVoidLocalServer(
             callsign = callsign,
             rawText = text,
             stableMessageId = stableMessageId,
-            clientTimestampMs = clientTimestampMs
+            clientTimestampMs = clientTimestampMs,
+            sessionToken = authToken
         ) ?: return buildPaddedTextResponse(
             status = Response.Status.BAD_REQUEST,
             mimeType = "application/json; charset=utf-8",
@@ -1401,7 +1909,10 @@ class BitVoidLocalServer(
             )
 
         val validated = BitVoidChannelManager.validateToken(authToken, requiredChannelId = channelId)
-        if (!channel.isPublic && validated == null) {
+        if ((!channel.isPublic && validated == null) ||
+            (channel.spaceKind != BitVoidSpaceKind.LEGACY_CHAT &&
+                (validated == null || !BitVoidChannelManager.canPublish(validated)))
+        ) {
             return unauthorizedResponse(ephemeralToken)
         }
 
@@ -1418,7 +1929,8 @@ class BitVoidLocalServer(
             channelId = channelId,
             callsign = callsign,
             rawText = caption,
-            attachment = importedItem
+            attachment = importedItem,
+            sessionToken = authToken
         ) ?: return buildPaddedTextResponse(
             status = Response.Status.BAD_REQUEST,
             mimeType = "application/json; charset=utf-8",
@@ -1510,12 +2022,28 @@ class BitVoidLocalServer(
             )
         }
         val clean = res.getOrThrow()
-        val usersJson = BitVoidDirectChatManager.getKnownUsers()
-            .joinToString(",") { """"${jsonEscape(it)}"""" }
+        val suppliedIdentityToken = session.headers["x-bitvoid-identity-token"]?.trim().orEmpty()
+        val existingIdentity = identitySessions[suppliedIdentityToken]
+        val identityToken = if (existingIdentity != null &&
+            existingIdentity.expiresAtMs >= System.currentTimeMillis() &&
+            existingIdentity.username.equals(clean, ignoreCase = true)
+        ) {
+            suppliedIdentityToken
+        } else {
+            issueIdentityToken(clean)
+        }
+        val users = BitVoidDirectChatManager.getKnownUsers()
+        val payload = JSONObject().apply {
+            put("ok", true)
+            put("username", clean)
+            put("identityToken", identityToken)
+            put("identityExpiresAtMs", System.currentTimeMillis() + IDENTITY_SESSION_LIFETIME_MS)
+            put("users", JSONArray(users))
+        }
         return buildPaddedTextResponse(
             status = Response.Status.OK,
             mimeType = "application/json; charset=utf-8",
-            body = """{"ok":true,"username":"${jsonEscape(clean)}","users":[$usersJson]}""",
+            body = payload.toString(),
             token = ephemeralToken
         )
     }
@@ -3321,6 +3849,15 @@ class BitVoidLocalServer(
                 <div>SESSION: <strong>${htmlEscape(token)}</strong> · SYNC: <strong id="sync-status">LIVE</strong></div>
               </div>
 
+              <div class="unlock-box" id="spaces-toolbox">
+                <div class="section-title" style="margin:0;color:var(--mint);">GROUPS &amp; CHANNELS</div>
+                <button id="create-group-btn" class="btn-primary" type="button">CREATE GROUP</button>
+                <button id="create-broadcast-channel-btn" class="btn-cyan" type="button">CREATE CHANNEL</button>
+                <button id="discover-channels-btn" class="btn-ghost" type="button">DISCOVER CHANNELS</button>
+                <button id="join-channel-invite-btn" class="btn-ghost" type="button">JOIN PRIVATE INVITATION</button>
+                <div id="spaces-action-error" class="err hidden"></div>
+              </div>
+
               <div class="section-title">GENERAL CHAT</div>
               <div id="general-chat-list" class="sidebar-list">
                 $initialGeneralHtml
@@ -3407,6 +3944,7 @@ class BitVoidLocalServer(
                   </div>
                 </div>
                 <div class="top-actions">
+                  <button id="space-info-btn" class="btn-ghost hidden" type="button">INFO</button>
                   <button id="live-class-btn" class="btn-ghost hidden" type="button">LIVE CLASS / CALL</button>
                   <button id="voice-call-btn" class="call-icon-btn hidden" type="button" title="Start voice call" aria-label="Start voice call">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.2 3.5 9.7 7.9 7.9 10c1.3 2.8 3.4 4.9 6.2 6.2l2.1-1.8 4.4 2.5-.7 3.1c-.2.8-.9 1.4-1.8 1.4C9.6 20.9 3.1 14.4 2.6 5.9c0-.9.6-1.6 1.4-1.8l3.2-.6Z"/></svg>
@@ -3511,6 +4049,11 @@ class BitVoidLocalServer(
               var privateKeyInput = document.getElementById('private-channel-key');
               var unlockBtn = document.getElementById('unlock-channel-btn');
               var channelErr = document.getElementById('channel-error');
+              var createGroupBtn = document.getElementById('create-group-btn');
+              var createBroadcastChannelBtn = document.getElementById('create-broadcast-channel-btn');
+              var discoverChannelsBtn = document.getElementById('discover-channels-btn');
+              var joinChannelInviteBtn = document.getElementById('join-channel-invite-btn');
+              var spacesActionError = document.getElementById('spaces-action-error');
               var pchatMyUsername = document.getElementById('pchat-my-username');
               var pchatDiscoveryNote = document.getElementById('pchat-discovery-note');
               var pchatDiscoverableToggle = document.getElementById('pchat-discoverable-toggle');
@@ -3523,6 +4066,7 @@ class BitVoidLocalServer(
               var pchatDialogCancel = document.getElementById('pchat-dialog-cancel');
               var pchatDialogOpen = document.getElementById('pchat-dialog-open');
               var portalUsername = '';
+              var portalIdentityToken = '';
               var portalDiscoverable = true;
 
               var activeAvatar = document.getElementById('active-channel-avatar');
@@ -3532,6 +4076,7 @@ class BitVoidLocalServer(
               var wsStatusEl = document.getElementById('ws-status');
               var peersEl = document.getElementById('channel-peers');
               var exitChannelBtn = document.getElementById('exit-channel-btn');
+              var spaceInfoBtn = document.getElementById('space-info-btn');
               var liveClassBtn = document.getElementById('live-class-btn');
               var voiceCallBtn = document.getElementById('voice-call-btn');
               var mainPane = document.getElementById('wa-main-pane');
@@ -3631,6 +4176,182 @@ class BitVoidLocalServer(
               function esc(s) {
                 return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
                   .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+              }
+
+              function showSpacesError(message) {
+                spacesActionError.textContent = message || '';
+                spacesActionError.classList.toggle('hidden', !message);
+              }
+
+              function spaceRequest(path, body, token) {
+                var headers = { 'Content-Type': 'application/json' };
+                if (token) headers['X-Channel-Token'] = token;
+                if (portalIdentityToken) headers['X-BitVoid-Identity-Token'] = portalIdentityToken;
+                return fetch(path, {
+                  method: 'POST',
+                  headers: headers,
+                  body: JSON.stringify(body || {}),
+                  cache: 'no-store'
+                }).then(function (response) {
+                  return response.text().then(function (text) {
+                    var data = {};
+                    try { data = text ? JSON.parse(text) : {}; } catch (e) {}
+                    if (!response.ok) throw new Error(data.detail || ('Request failed (HTTP ' + response.status + ')'));
+                    return data;
+                  });
+                });
+              }
+
+              function createGroupFromPortal() {
+                showSpacesError('');
+                var name = window.prompt('Group name');
+                if (!name) return;
+                var description = window.prompt('Group description (optional)', '') || '';
+                var membersRaw = window.prompt('Member usernames separated by commas', '') || '';
+                var members = membersRaw.split(/[\s,]+/).map(function (v) { return v.trim().replace(/^@/, ''); }).filter(Boolean);
+                spaceRequest('/api/spaces/groups', {
+                  name: name,
+                  description: description,
+                  username: portalUsername,
+                  members: members
+                }).then(function (data) {
+                  pollChannelsAndFeed();
+                  if (data.channelId) joinChannel(data.channelId, '');
+                }).catch(function (error) { showSpacesError(error.message); });
+              }
+
+              function createBroadcastChannelFromPortal() {
+                showSpacesError('');
+                var name = window.prompt('Channel name');
+                if (!name) return;
+                var description = window.prompt('Channel description (optional)', '') || '';
+                var isPublic = window.confirm('Make this channel public and discoverable? Select Cancel for a private invitation-only channel.');
+                spaceRequest('/api/spaces/channels', {
+                  name: name,
+                  description: description,
+                  username: portalUsername,
+                  isPublic: isPublic
+                }).then(function (data) {
+                  pollChannelsAndFeed();
+                  if (data.channelId) joinChannel(data.channelId, '');
+                }).catch(function (error) { showSpacesError(error.message); });
+              }
+
+              function subscribeAndOpen(channelId) {
+                return spaceRequest('/api/spaces/' + encodeURIComponent(channelId) + '/subscribe', {
+                  username: portalUsername
+                }).then(function () {
+                  pollChannelsAndFeed();
+                  joinChannel(channelId, '');
+                });
+              }
+
+              function discoverChannelsFromPortal() {
+                showSpacesError('');
+                var query = window.prompt('Search public channels', '') || '';
+                fetch('/api/spaces/discover?q=' + encodeURIComponent(query), { cache: 'no-store' })
+                  .then(function (response) {
+                    if (!response.ok) throw new Error('Channel discovery failed.');
+                    return response.json();
+                  }).then(function (data) {
+                    var channels = data.channels || [];
+                    if (!channels.length) {
+                      window.alert('No public channels match that search.');
+                      return;
+                    }
+                    var choices = channels.map(function (channel) {
+                      return channel.channelId + ' — ' + channel.name + ' (' + (channel.subscriberCount || 0) + ' subscribers)';
+                    }).join('\n');
+                    var selected = window.prompt('Enter a Channel ID to subscribe:\n\n' + choices, channels[0].channelId);
+                    if (selected) subscribeAndOpen(selected.trim()).catch(function (error) { showSpacesError(error.message); });
+                  }).catch(function (error) { showSpacesError(error.message); });
+              }
+
+              function joinChannelInvitationFromPortal() {
+                showSpacesError('');
+                var invitation = window.prompt('Paste a private channel invitation code or link');
+                if (!invitation) return;
+                spaceRequest('/api/spaces/invitations/join', {
+                  invitation: invitation,
+                  username: portalUsername
+                }).then(function (data) {
+                  pollChannelsAndFeed();
+                  if (data.channelId) joinChannel(data.channelId, '');
+                }).catch(function (error) { showSpacesError(error.message); });
+              }
+
+              function openActiveSpaceInfo() {
+                if (!activeChannel || !activeChannel.token || activeChannel.spaceKind === 'LEGACY_CHAT') return;
+                fetch('/api/spaces/' + encodeURIComponent(activeChannel.channelId), {
+                  headers: { 'X-Channel-Token': activeChannel.token },
+                  cache: 'no-store'
+                }).then(function (response) {
+                  if (!response.ok) throw new Error('Unable to load space information.');
+                  return response.json();
+                }).then(function (space) {
+                  var members = (space.members || []).map(function (member) {
+                    return '@' + member.username + ' — ' + member.role.replace('_', ' ');
+                  }).join('\n');
+                  var summary = space.name + '\n' + (space.description || 'No description') + '\n\n' +
+                    (space.spaceKind === 'GROUP' ? (space.memberCount + ' members') : (space.subscriberCount + ' subscribers')) +
+                    '\nYour role: ' + (space.myRole || 'PARTICIPANT') + '\n\n' + members;
+                  var role = space.myRole || '';
+                  if (role !== 'OWNER' && role !== 'ADMINISTRATOR') {
+                    var leave = window.confirm(summary + '\n\nLeave or unsubscribe from this space?');
+                    if (leave) {
+                      spaceRequest('/api/spaces/' + encodeURIComponent(space.channelId) + '/leave', {}, activeChannel.token)
+                        .then(exitPrivateChannel).catch(function (error) { showSpacesError(error.message); });
+                    }
+                    return;
+                  }
+                  var action = window.prompt(
+                    summary + '\n\nManagement action: add, remove, role, edit, invite, leave, or delete',
+                    space.spaceKind === 'GROUP' ? 'add' : 'invite'
+                  );
+                  if (!action) return;
+                  action = action.trim().toLowerCase();
+                  var path = '';
+                  var body = {};
+                  if (action === 'add') {
+                    var addUser = window.prompt('Username to add'); if (!addUser) return;
+                    path = '/members/add'; body.username = addUser;
+                  } else if (action === 'remove') {
+                    var removeUser = window.prompt('Username to remove'); if (!removeUser) return;
+                    path = '/members/remove'; body.username = removeUser;
+                  } else if (action === 'role') {
+                    var roleUser = window.prompt('Username to promote or demote'); if (!roleUser) return;
+                    var nextRole = window.prompt('Role: ADMINISTRATOR, ' + (space.spaceKind === 'GROUP' ? 'MEMBER' : 'SUBSCRIBER'), 'ADMINISTRATOR');
+                    if (!nextRole) return;
+                    path = '/members/role'; body = { username: roleUser, role: nextRole.toUpperCase() };
+                  } else if (action === 'edit') {
+                    path = '/settings';
+                    body = {
+                      name: window.prompt('Name', space.name) || space.name,
+                      description: window.prompt('Description', space.description || '') || '',
+                      avatarDataUrl: space.avatarDataUrl || ''
+                    };
+                    if (space.spaceKind === 'BROADCAST_CHANNEL' && role === 'OWNER') {
+                      body.isPublic = window.confirm('Make this channel public?');
+                    }
+                  } else if (action === 'invite') {
+                    path = '/invitations'; body.maxUses = 50;
+                  } else if (action === 'leave') {
+                    path = '/leave';
+                  } else if (action === 'delete') {
+                    if (!window.confirm('Delete this space for everyone? This cannot be undone.')) return;
+                    path = '/delete';
+                  } else {
+                    return;
+                  }
+                  spaceRequest('/api/spaces/' + encodeURIComponent(space.channelId) + path, body, activeChannel.token)
+                    .then(function (data) {
+                      if (data.inviteLink || data.code) {
+                        window.prompt('Share this private invitation', data.inviteLink || data.code);
+                      }
+                      if (action === 'leave' || action === 'delete') exitPrivateChannel();
+                      else pollChannelsAndFeed();
+                    }).catch(function (error) { showSpacesError(error.message); });
+                }).catch(function (error) { showSpacesError(error.message); });
               }
 
               function setPortalAccessError(message) {
@@ -3798,9 +4519,11 @@ class BitVoidLocalServer(
 
               function registerBrowserPresence() {
                 if (!portalUsername) return Promise.resolve();
+                var registrationHeaders = { 'Content-Type': 'application/json' };
+                if (portalIdentityToken) registrationHeaders['X-BitVoid-Identity-Token'] = portalIdentityToken;
                 return fetch('/api/users/register', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
+                  headers: registrationHeaders,
                   body: JSON.stringify({
                     username: portalUsername,
                     discoverable: portalDiscoverable
@@ -3810,6 +4533,7 @@ class BitVoidLocalServer(
                   if (!response.ok) throw new Error('Unable to register P.Chat identity');
                   return response.json();
                 }).then(function (data) {
+                  if (data.identityToken) portalIdentityToken = data.identityToken;
                   renderPchatUsers(data.users || []);
                   if (activeDm) return refreshPeerPresence(activeDm.peerUsername);
                 }).catch(function () {});
@@ -4009,6 +4733,15 @@ class BitVoidLocalServer(
                 liveClassBtn.textContent = 'LIVE CLASS / CALL';
                 liveClassBtn.classList.remove('active');
                 var isGeneralChannel = data.channelId === '${BitVoidChannelManager.DEFAULT_PUBLIC_CHANNEL_ID}';
+                var isManagedSpace = data.spaceKind === 'GROUP' || data.spaceKind === 'BROADCAST_CHANNEL';
+                spaceInfoBtn.classList.toggle('hidden', !isManagedSpace);
+                var canPublish = data.canPublish !== false;
+                chatInput.disabled = !canPublish;
+                chatAttachBtn.disabled = !canPublish;
+                chatSendBtn.disabled = !canPublish;
+                chatInput.placeholder = canPublish
+                  ? ('Message ' + label + '...')
+                  : 'Only channel administrators can publish';
                 liveClassBtn.classList.toggle('hidden', isGeneralChannel);
                 voiceCallBtn.classList.add('hidden');
                 rtcStartCallBtn.classList.toggle('hidden', isGeneralChannel);
@@ -4017,7 +4750,19 @@ class BitVoidLocalServer(
                   setMeetingStageActive(false);
                 }
                 updateRtcControlsUi();
-                if (data.isPublic) {
+                if (data.spaceKind === 'GROUP') {
+                  activeAvatar.textContent = 'GR';
+                  activeAvatar.className = 'wa-top-avatar';
+                  activeBadge.textContent = (data.role || 'MEMBER').replace('_', ' ');
+                  activeBadge.className = 'pill';
+                  exitChannelBtn.classList.remove('hidden');
+                } else if (data.spaceKind === 'BROADCAST_CHANNEL') {
+                  activeAvatar.textContent = 'CH';
+                  activeAvatar.className = data.isPublic ? 'wa-top-avatar' : 'wa-top-avatar private-mode';
+                  activeBadge.textContent = (data.isPublic ? 'PUBLIC · ' : 'PRIVATE · ') + (data.role || 'SUBSCRIBER').replace('_', ' ');
+                  activeBadge.className = data.isPublic ? 'pill' : 'pill pill-amber';
+                  exitChannelBtn.classList.remove('hidden');
+                } else if (data.isPublic) {
                   activeAvatar.textContent = '#';
                   activeAvatar.className = 'wa-top-avatar';
                   activeBadge.textContent = 'PUBLIC';
@@ -4059,9 +4804,11 @@ class BitVoidLocalServer(
               function joinChannel(channelId, privateKey) {
                 channelErr.classList.add('hidden');
                 var myU = portalUsername;
+                var joinHeaders = { 'Content-Type': 'application/json' };
+                if (portalIdentityToken) joinHeaders['X-BitVoid-Identity-Token'] = portalIdentityToken;
                 fetch('/api/channels/join', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
+                  headers: joinHeaders,
                   body: JSON.stringify({ channelId: channelId, privateKey: privateKey || '', username: myU })
                 })
                   .then(function (r) {
@@ -4150,6 +4897,10 @@ class BitVoidLocalServer(
                   .then(function (data) {
                     activeChannel = null;
                     activeDm = data;
+                    spaceInfoBtn.classList.add('hidden');
+                    chatInput.disabled = false;
+                    chatAttachBtn.disabled = false;
+                    chatSendBtn.disabled = false;
                     directCallPromptOpen = false;
                     directCallConnecting = false;
                     directCallLastPhase = 'IDLE';
@@ -4363,7 +5114,12 @@ class BitVoidLocalServer(
               function bindSidebarClicks() {
                 Array.prototype.forEach.call(document.querySelectorAll('.wa-chan-row[data-channel-id]'), function (btn) {
                   btn.onclick = function () {
-                    joinChannel(btn.getAttribute('data-channel-id'), '');
+                    var channelId = btn.getAttribute('data-channel-id');
+                    if (btn.getAttribute('data-needs-subscribe') === 'true') {
+                      subscribeAndOpen(channelId).catch(function (error) { showSpacesError(error.message); });
+                    } else {
+                      joinChannel(channelId, '');
+                    }
                   };
                 });
                 Array.prototype.forEach.call(document.querySelectorAll('.wa-chan-row[data-locked-name]'), function (btn) {
@@ -4430,11 +5186,17 @@ class BitVoidLocalServer(
                 } else {
                   publicChannelsEl.innerHTML = others.map(function (c) {
                     var activeCls = (activeChannel && activeChannel.channelId === c.channelId) ? ' active' : '';
-                    return '<button type="button" class="wa-chan-row' + activeCls + '" data-channel-id="' + esc(c.channelId) + '">' +
-                      '<div class="wa-avatar">#</div>' +
+                    var managed = c.spaceKind === 'BROADCAST_CHANNEL';
+                    var subscribeAttr = managed && !c.isSubscribed ? ' data-needs-subscribe="true"' : '';
+                    var icon = managed ? 'CH' : '#';
+                    var sub = managed
+                      ? ((c.isSubscribed ? (c.myRole || 'SUBSCRIBER').replace('_', ' ') : 'Tap to subscribe') + ' · ' + c.subscriberCount + ' subscribers')
+                      : (c.mediaCount + ' media · ' + c.activePeers + ' live · ' + c.messageCount + ' msgs');
+                    return '<button type="button" class="wa-chan-row' + activeCls + '" data-channel-id="' + esc(c.channelId) + '"' + subscribeAttr + '>' +
+                      '<div class="wa-avatar">' + icon + '</div>' +
                       '<div class="wa-chan-info">' +
                         '<div class="wa-chan-title">' + esc(c.name) + '</div>' +
-                        '<div class="wa-chan-sub">' + c.mediaCount + ' media · ' + c.activePeers + ' live · ' + c.messageCount + ' msgs</div>' +
+                        '<div class="wa-chan-sub">' + esc(sub) + '</div>' +
                       '</div></button>';
                   }).join('');
                 }
@@ -4443,19 +5205,24 @@ class BitVoidLocalServer(
                   privateChannelsEl.innerHTML = '<div class="muted-note">No private channels active.</div>';
                 } else {
                   privateChannelsEl.innerHTML = prvChannels.map(function (c) {
-                    var owned = !!c.isOwner && !!c.channelId;
-                    var attrs = owned
+                    var accessible = !!c.channelId && (!!c.isSubscribed || !!c.isOwner);
+                    var attrs = accessible
                       ? (' data-channel-id="' + esc(c.channelId) + '"')
                       : (' data-locked-name="' + esc(c.name) + '"');
-                    var cls = 'wa-chan-row' + (owned ? '' : ' wa-chan-locked');
-                    var sub = owned
-                      ? ((c.isHidden ? 'Your hidden channel' : 'Your private channel') + ' · Tap to open (' + c.mediaCount + ' media)')
-                      : ('Private · Tap &amp; enter ID (' + c.mediaCount + ' media)');
+                    var cls = 'wa-chan-row' + (accessible ? '' : ' wa-chan-locked');
+                    var managed = c.spaceKind === 'GROUP' || c.spaceKind === 'BROADCAST_CHANNEL';
+                    var icon = c.spaceKind === 'GROUP' ? 'GR' : (c.spaceKind === 'BROADCAST_CHANNEL' ? 'CH' : 'ID');
+                    var sub = managed && accessible
+                      ? ((c.myRole || 'MEMBER').replace('_', ' ') + ' · ' +
+                          (c.spaceKind === 'GROUP' ? (c.memberCount + ' members') : (c.subscriberCount + ' subscribers')))
+                      : (accessible
+                          ? ((c.isHidden ? 'Your hidden channel' : 'Your private channel') + ' · Tap to open (' + c.mediaCount + ' media)')
+                          : ('Private · invitation or exact ID required'));
                     return '<button type="button" class="' + cls + '"' + attrs + '>' +
-                      '<div class="wa-avatar wa-avatar-lock">ID</div>' +
+                      '<div class="wa-avatar wa-avatar-lock">' + icon + '</div>' +
                       '<div class="wa-chan-info">' +
                         '<div class="wa-chan-title">' + esc(c.name) + '</div>' +
-                        '<div class="wa-chan-sub">' + sub + '</div>' +
+                        '<div class="wa-chan-sub">' + esc(sub) + '</div>' +
                       '</div></button>';
                   }).join('');
                 }
@@ -4480,7 +5247,9 @@ class BitVoidLocalServer(
 
                 var channelUsername = portalUsername;
                 var channelListUrl = '/api/channels' + (channelUsername ? ('?username=' + encodeURIComponent(channelUsername)) : '');
-                fetch(channelListUrl, { cache: 'no-store' })
+                var channelListHeaders = {};
+                if (portalIdentityToken) channelListHeaders['X-BitVoid-Identity-Token'] = portalIdentityToken;
+                fetch(channelListUrl, { headers: channelListHeaders, cache: 'no-store' })
                   .then(function (r) { return r.json(); })
                   .then(function (data) {
                     var pub = data.publicChannels || [];
@@ -5200,6 +5969,11 @@ class BitVoidLocalServer(
                 updatePchatDiscoverabilityUi();
                 registerBrowserPresence();
               });
+              createGroupBtn.addEventListener('click', createGroupFromPortal);
+              createBroadcastChannelBtn.addEventListener('click', createBroadcastChannelFromPortal);
+              discoverChannelsBtn.addEventListener('click', discoverChannelsFromPortal);
+              joinChannelInviteBtn.addEventListener('click', joinChannelInvitationFromPortal);
+              spaceInfoBtn.addEventListener('click', openActiveSpaceInfo);
               exitChannelBtn.addEventListener('click', function () {
                 leaveRtcSession();
                 exitPrivateChannel();
@@ -5696,7 +6470,8 @@ class BitVoidLocalServer(
                 callsign = channelSession.callsign,
                 rawText = text,
                 stableMessageId = json?.optString("clientMessageId")?.takeIf { it.isNotBlank() },
-                clientTimestampMs = json?.optLong("timestampMs", 0L)?.takeIf { it > 0L }
+                clientTimestampMs = json?.optLong("timestampMs", 0L)?.takeIf { it > 0L },
+                sessionToken = channelSession.token
             )
         }
 

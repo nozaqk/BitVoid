@@ -8,6 +8,8 @@ import com.bitvoid.network.call.DirectCallPhase
 import com.bitvoid.network.call.ParticipantRole
 import com.bitvoid.network.call.SignalingPeer
 import com.bitvoid.network.call.SignalingSessionMode
+import com.bitvoid.network.channel.BitVoidSpaceKind
+import com.bitvoid.network.channel.BitVoidSpaceRole
 import com.bitvoid.network.model.BitVoidNetworkConfig
 import com.bitvoid.network.model.MediaCategory
 import java.io.File
@@ -67,7 +69,14 @@ data class RemoteChannelSummary(
     val activePeers: Int,
     val messageCount: Int,
     val lastMessagePreview: String? = null,
-    val lastTimestampMs: Long = 0L
+    val lastTimestampMs: Long = 0L,
+    val spaceKind: BitVoidSpaceKind = BitVoidSpaceKind.LEGACY_CHAT,
+    val description: String = "",
+    val avatarDataUrl: String? = null,
+    val memberCount: Int = 0,
+    val subscriberCount: Int = 0,
+    val myRole: BitVoidSpaceRole? = null,
+    val isSubscribed: Boolean = false
 )
 
 data class ClientChannelSession(
@@ -77,7 +86,41 @@ data class ClientChannelSession(
     val token: String,
     val callsign: String,
     val mediaList: List<RemoteMediaItem>,
-    val isLiveClassRoom: Boolean = false
+    val isLiveClassRoom: Boolean = false,
+    val spaceKind: BitVoidSpaceKind = BitVoidSpaceKind.LEGACY_CHAT,
+    val role: BitVoidSpaceRole? = null,
+    val description: String = "",
+    val avatarDataUrl: String? = null,
+    val memberCount: Int = 0,
+    val subscriberCount: Int = 0,
+    val canPublish: Boolean = true
+)
+
+data class RemoteSpaceMember(
+    val username: String,
+    val role: BitVoidSpaceRole,
+    val joinedTimestampMs: Long
+)
+
+data class RemoteSpaceDetails(
+    val channelId: String,
+    val name: String,
+    val description: String,
+    val avatarDataUrl: String?,
+    val spaceKind: BitVoidSpaceKind,
+    val isPublic: Boolean,
+    val myRole: BitVoidSpaceRole?,
+    val memberCount: Int,
+    val subscriberCount: Int,
+    val messageCount: Int,
+    val members: List<RemoteSpaceMember>
+)
+
+data class RemoteSpaceInvitation(
+    val code: String,
+    val inviteLink: String,
+    val expiresAtMs: Long,
+    val remainingUses: Int
 )
 
 data class ClientChatAttachment(
@@ -290,6 +333,9 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
 
     private val _gatewayBaseUrl = MutableStateFlow(DEFAULT_GATEWAY_URL)
     val gatewayBaseUrl: StateFlow<String> = _gatewayBaseUrl.asStateFlow()
+    @Volatile private var identityToken: String = ""
+    @Volatile private var identityUsername: String = ""
+    @Volatile private var identityBaseUrl: String = ""
 
     private val _publicMedia = MutableStateFlow<List<RemoteMediaItem>>(emptyList())
     val publicMedia: StateFlow<List<RemoteMediaItem>> = _publicMedia.asStateFlow()
@@ -308,6 +354,18 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
 
     private val _channelsError = MutableStateFlow<String?>(null)
     val channelsError: StateFlow<String?> = _channelsError.asStateFlow()
+
+    private val _discoveredChannels = MutableStateFlow<List<RemoteChannelSummary>>(emptyList())
+    val discoveredChannels: StateFlow<List<RemoteChannelSummary>> = _discoveredChannels.asStateFlow()
+
+    private val _activeSpaceDetails = MutableStateFlow<RemoteSpaceDetails?>(null)
+    val activeSpaceDetails: StateFlow<RemoteSpaceDetails?> = _activeSpaceDetails.asStateFlow()
+
+    private val _isLoadingSpaceDetails = MutableStateFlow(false)
+    val isLoadingSpaceDetails: StateFlow<Boolean> = _isLoadingSpaceDetails.asStateFlow()
+
+    private val _spaceError = MutableStateFlow<String?>(null)
+    val spaceError: StateFlow<String?> = _spaceError.asStateFlow()
 
     private val _activeChannelSession = MutableStateFlow<ClientChannelSession?>(null)
     val activeChannelSession: StateFlow<ClientChannelSession?> = _activeChannelSession.asStateFlow()
@@ -382,7 +440,12 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
         val normalized = local ?: remote ?: return null
         val changed = normalized != _gatewayBaseUrl.value
         _gatewayBaseUrl.value = normalized
-        if (changed) schedulePendingRetry(100L)
+        if (changed) {
+            identityToken = ""
+            identityUsername = ""
+            identityBaseUrl = ""
+            schedulePendingRetry(100L)
+        }
         return normalized
     }
 
@@ -445,11 +508,15 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
                 } else {
                     "$targetBase/api/channels"
                 }
-                val request = Request.Builder()
+                val requestBuilder = Request.Builder()
                     .url(channelsUrl)
                     .get()
-                    .build()
-                okHttpClient.newCall(request).execute().use { resp ->
+                if (identityToken.isNotBlank() && identityBaseUrl == targetBase &&
+                    identityUsername.equals(cleanUsername, ignoreCase = true)
+                ) {
+                    requestBuilder.header("X-BitVoid-Identity-Token", identityToken)
+                }
+                okHttpClient.newCall(requestBuilder.build()).execute().use { resp ->
                     val bodyStr = resp.body?.string().orEmpty()
                     if (!resp.isSuccessful) {
                         Result.failure(IOException("Gateway returned HTTP ${resp.code}"))
@@ -471,6 +538,158 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
         }.onFailure { err ->
             _channelsError.value = err.message ?: "Unable to reach $targetBase"
         }
+    }
+
+    suspend fun createGroup(
+        name: String,
+        description: String,
+        members: Collection<String>,
+        username: String,
+        avatarDataUrl: String? = null
+    ): Result<String> = executeSpaceMutation(
+        path = "/api/spaces/groups",
+        body = JSONObject().apply {
+            put("name", name.trim())
+            put("description", description.trim())
+            put("username", username.trim().removePrefix("@"))
+            put("members", JSONArray(members.map { it.trim().removePrefix("@") }))
+            avatarDataUrl?.let { put("avatarDataUrl", it) }
+        }
+    ).mapCatching { json -> json.getString("channelId") }
+
+    suspend fun createBroadcastChannel(
+        name: String,
+        description: String,
+        isPublic: Boolean,
+        username: String,
+        avatarDataUrl: String? = null
+    ): Result<String> = executeSpaceMutation(
+        path = "/api/spaces/channels",
+        body = JSONObject().apply {
+            put("name", name.trim())
+            put("description", description.trim())
+            put("isPublic", isPublic)
+            put("username", username.trim().removePrefix("@"))
+            avatarDataUrl?.let { put("avatarDataUrl", it) }
+        }
+    ).mapCatching { json -> json.getString("channelId") }
+
+    suspend fun discoverPublicChannels(query: String = ""): Result<List<RemoteChannelSummary>> {
+        val encoded = URLEncoder.encode(query.trim(), StandardCharsets.UTF_8.name()).replace("+", "%20")
+        val targetBase = _gatewayBaseUrl.value.trimEnd('/')
+        val result = withContext(Dispatchers.IO) {
+            runCatching {
+                val request = Request.Builder().url("$targetBase/api/spaces/discover?q=$encoded").get().build()
+                okHttpClient.newCall(request).execute().use { response ->
+                    val text = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) throw IOException(readApiError(text, "Unable to discover channels"))
+                    parseChannelsArray(JSONObject(text).optJSONArray("channels") ?: JSONArray())
+                }
+            }
+        }
+        result.onSuccess { _discoveredChannels.value = it }
+            .onFailure { _spaceError.value = it.message }
+        return result
+    }
+
+    suspend fun subscribeToChannel(channelId: String, username: String): Result<String> =
+        executeSpaceMutation(
+            path = "/api/spaces/${encodePathSegment(channelId)}/subscribe",
+            body = JSONObject().put("username", username.trim().removePrefix("@"))
+        ).mapCatching { channelId }
+
+    suspend fun joinChannelInvitation(invitation: String, username: String): Result<String> =
+        executeSpaceMutation(
+            path = "/api/spaces/invitations/join",
+            body = JSONObject().apply {
+                put("invitation", invitation.trim())
+                put("username", username.trim().removePrefix("@"))
+            }
+        ).mapCatching { json -> json.getString("channelId") }
+
+    suspend fun fetchActiveSpaceDetails(): Result<RemoteSpaceDetails> {
+        val active = _activeChannelSession.value
+            ?: return Result.failure(IllegalStateException("No group or channel is open."))
+        if (active.token.isBlank()) return Result.failure(IllegalStateException("Reconnect to manage this space."))
+        _isLoadingSpaceDetails.value = true
+        val targetBase = _gatewayBaseUrl.value.trimEnd('/')
+        val result = withContext(Dispatchers.IO) {
+            runCatching {
+                val request = Request.Builder()
+                    .url("$targetBase/api/spaces/${encodePathSegment(active.channelId)}")
+                    .header("X-Channel-Token", active.token)
+                    .get()
+                    .build()
+                okHttpClient.newCall(request).execute().use { response ->
+                    val text = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) throw IOException(readApiError(text, "Unable to load space information"))
+                    parseSpaceDetails(JSONObject(text))
+                }
+            }
+        }
+        _isLoadingSpaceDetails.value = false
+        result.onSuccess {
+            _activeSpaceDetails.value = it
+            _spaceError.value = null
+        }.onFailure { _spaceError.value = it.message }
+        return result
+    }
+
+    suspend fun addSpaceMember(username: String): Result<RemoteSpaceDetails> =
+        mutateActiveSpace("/members/add", JSONObject().put("username", username))
+
+    suspend fun removeSpaceMember(username: String): Result<RemoteSpaceDetails> =
+        mutateActiveSpace("/members/remove", JSONObject().put("username", username))
+
+    suspend fun setSpaceMemberRole(
+        username: String,
+        role: BitVoidSpaceRole
+    ): Result<RemoteSpaceDetails> = mutateActiveSpace(
+        "/members/role",
+        JSONObject().apply {
+            put("username", username)
+            put("role", role.name)
+        }
+    )
+
+    suspend fun updateActiveSpace(
+        name: String,
+        description: String,
+        avatarDataUrl: String?,
+        isPublic: Boolean?
+    ): Result<RemoteSpaceDetails> = mutateActiveSpace(
+        "/settings",
+        JSONObject().apply {
+            put("name", name)
+            put("description", description)
+            put("avatarDataUrl", avatarDataUrl.orEmpty())
+            isPublic?.let { put("isPublic", it) }
+        }
+    )
+
+    suspend fun createActiveSpaceInvitation(): Result<RemoteSpaceInvitation> {
+        val active = _activeChannelSession.value
+            ?: return Result.failure(IllegalStateException("No channel is open."))
+        return executeSpaceMutation(
+            path = "/api/spaces/${encodePathSegment(active.channelId)}/invitations",
+            body = JSONObject().put("maxUses", 50),
+            token = active.token
+        ).mapCatching { json ->
+            RemoteSpaceInvitation(
+                code = json.getString("code"),
+                inviteLink = json.getString("inviteLink"),
+                expiresAtMs = json.optLong("expiresAtMs"),
+                remainingUses = json.optInt("remainingUses")
+            )
+        }
+    }
+
+    suspend fun leaveActiveSpace(): Result<Unit> = mutateActiveSpaceAction("/leave")
+
+    suspend fun deleteActiveSpace(): Result<Unit> = mutateActiveSpaceAction("/delete")
+
+    fun clearSpaceError() {
+        _spaceError.value = null
     }
 
     suspend fun joinChannel(
@@ -501,12 +720,16 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
                     }
                 }.toString()
 
-                val request = Request.Builder()
+                val requestBuilder = Request.Builder()
                     .url("$targetBase/api/channels/join")
                     .post(bodyJson.toRequestBody(JSON_MEDIA_TYPE))
-                    .build()
-
-                okHttpClient.newCall(request).execute().use { resp ->
+                val cleanIdentityUser = username?.trim()?.removePrefix("@").orEmpty()
+                if (identityToken.isNotBlank() && identityBaseUrl == targetBase &&
+                    identityUsername.equals(cleanIdentityUser, ignoreCase = true)
+                ) {
+                    requestBuilder.header("X-BitVoid-Identity-Token", identityToken)
+                }
+                okHttpClient.newCall(requestBuilder.build()).execute().use { resp ->
                     val bodyStr = resp.body?.string().orEmpty()
                     if (resp.code == 401) {
                         Result.failure(SecurityException("Invalid Private Channel ID or key (401 Unauthorized)"))
@@ -521,6 +744,8 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
                         val callsign = json.optString("callsign", "Peer")
                         val mediaArr = json.optJSONArray("media") ?: json.optJSONArray("videos") ?: JSONArray()
                         val msgArr = json.optJSONArray("messages") ?: JSONArray()
+                        val spaceKind = parseSpaceKind(json.optString("spaceKind"))
+                        val role = parseSpaceRole(json.optString("role"))
 
                         val session = ClientChannelSession(
                             channelId = resolvedId,
@@ -528,7 +753,14 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
                             isPublic = isPublic,
                             token = token,
                             callsign = callsign,
-                            mediaList = parseMediaArray(mediaArr)
+                            mediaList = parseMediaArray(mediaArr),
+                            spaceKind = spaceKind,
+                            role = role,
+                            description = json.optString("description"),
+                            avatarDataUrl = json.optString("avatarDataUrl").takeIf { it.isNotBlank() && it != "null" },
+                            memberCount = json.optInt("memberCount", 0),
+                            subscriberCount = json.optInt("subscriberCount", 0),
+                            canPublish = json.optBoolean("canPublish", spaceKind != BitVoidSpaceKind.BROADCAST_CHANNEL)
                         )
                         val messages = parseMessagesArray(msgArr)
                         Result.success(session to messages)
@@ -558,6 +790,11 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
             connectChatWebSocket(targetBase, session)
             startCallStatusPolling(targetBase, session)
             schedulePendingRetry(0L)
+            if (session.spaceKind != BitVoidSpaceKind.LEGACY_CHAT) {
+                scope.launch { fetchActiveSpaceDetails() }
+            } else {
+                _activeSpaceDetails.value = null
+            }
         }.onFailure { err ->
             val cached = messageStore.load(channelId, direct = false)
             if (cached.isNotEmpty() && err !is SecurityException) {
@@ -1141,6 +1378,10 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
         val trimmed = rawText.trim()
         val session = _activeChannelSession.value ?: return
         if (trimmed.isEmpty()) return
+        if (!session.canPublish) {
+            _channelJoinError.value = "Only the channel owner and administrators can publish."
+            return
+        }
 
         val now = System.currentTimeMillis()
         val clientId = "client_${UUID.randomUUID()}"
@@ -1203,6 +1444,9 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
     ): Result<Unit> {
         val session = _activeChannelSession.value
             ?: return Result.failure(IllegalStateException("Join a channel before uploading a file."))
+        if (!session.canPublish) {
+            return Result.failure(SecurityException("Only the channel owner and administrators can publish attachments."))
+        }
         val targetBase = _gatewayBaseUrl.value.trimEnd('/')
         val encodedId = URLEncoder.encode(session.channelId, StandardCharsets.UTF_8.name())
             .replace("+", "%20")
@@ -1370,13 +1614,23 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
                     .put("username", clean)
                     .put("discoverable", discoverable)
                     .toString()
-                val request = Request.Builder()
+                val requestBuilder = Request.Builder()
                     .url("$targetBase/api/users/register")
                     .post(payload.toRequestBody(JSON_MEDIA_TYPE))
-                    .build()
-                okHttpClient.newCall(request).execute().use { resp ->
+                if (identityToken.isNotBlank() && identityBaseUrl == targetBase &&
+                    identityUsername.equals(clean.removePrefix("@"), ignoreCase = true)
+                ) {
+                    requestBuilder.header("X-BitVoid-Identity-Token", identityToken)
+                }
+                okHttpClient.newCall(requestBuilder.build()).execute().use { resp ->
                     if (resp.isSuccessful) {
                         val json = JSONObject(resp.body?.string().orEmpty())
+                        val issuedIdentityToken = json.optString("identityToken")
+                        if (issuedIdentityToken.isNotBlank()) {
+                            identityToken = issuedIdentityToken
+                            identityUsername = json.optString("username", clean).trim().removePrefix("@")
+                            identityBaseUrl = targetBase
+                        }
                         val arr = json.optJSONArray("users")
                         if (arr != null) {
                             _knownUsers.value = parseStringArray(arr)
@@ -1585,6 +1839,7 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
         _activeChannelCallStatus.value = null
         // Keep the authorized subscription alive when the user navigates away from this chat.
         _activeChannelSession.value = null
+        _activeSpaceDetails.value = null
         _channelMessages.value = emptyList()
         _channelPeersCount.value = 1
         _wsStatus.value = ClientWsStatus.DISCONNECTED
@@ -1991,6 +2246,128 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
         return true
     }
 
+    private suspend fun executeSpaceMutation(
+        path: String,
+        body: JSONObject,
+        token: String? = null
+    ): Result<JSONObject> {
+        val targetBase = _gatewayBaseUrl.value.trimEnd('/')
+        val result = withContext(Dispatchers.IO) {
+            runCatching {
+                val builder = Request.Builder()
+                    .url(targetBase + path)
+                    .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                token?.takeIf { it.isNotBlank() }?.let { builder.header("X-Channel-Token", it) }
+                if (identityToken.isNotBlank() && identityBaseUrl == targetBase) {
+                    builder.header("X-BitVoid-Identity-Token", identityToken)
+                }
+                okHttpClient.newCall(builder.build()).execute().use { response ->
+                    val text = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        val detail = readApiError(text, "Request failed (HTTP ${response.code})")
+                        if (response.code == 401 || response.code == 403) throw SecurityException(detail)
+                        throw IOException(detail)
+                    }
+                    JSONObject(text.ifBlank { "{}" })
+                }
+            }
+        }
+        result.onSuccess { json ->
+            json.optJSONObject("space")?.let {
+                _activeSpaceDetails.value = parseSpaceDetails(it)
+            }
+            _spaceError.value = null
+        }.onFailure { _spaceError.value = it.message }
+        return result
+    }
+
+    private suspend fun mutateActiveSpace(
+        suffix: String,
+        body: JSONObject
+    ): Result<RemoteSpaceDetails> {
+        val active = _activeChannelSession.value
+            ?: return Result.failure(IllegalStateException("No group or channel is open."))
+        return executeSpaceMutation(
+            path = "/api/spaces/${encodePathSegment(active.channelId)}$suffix",
+            body = body,
+            token = active.token
+        ).mapCatching { json ->
+            parseSpaceDetails(json.getJSONObject("space")).also { details ->
+                _activeSpaceDetails.value = details
+                _activeChannelSession.value = _activeChannelSession.value
+                    ?.takeIf { it.channelId == details.channelId }
+                    ?.copy(
+                        name = details.name,
+                        isPublic = details.isPublic,
+                        description = details.description,
+                        avatarDataUrl = details.avatarDataUrl,
+                        memberCount = details.memberCount,
+                        subscriberCount = details.subscriberCount,
+                        role = details.myRole,
+                        canPublish = details.spaceKind != BitVoidSpaceKind.BROADCAST_CHANNEL ||
+                            details.myRole in setOf(BitVoidSpaceRole.OWNER, BitVoidSpaceRole.ADMINISTRATOR)
+                    )
+            }
+        }
+    }
+
+    private suspend fun mutateActiveSpaceAction(suffix: String): Result<Unit> {
+        val active = _activeChannelSession.value
+            ?: return Result.failure(IllegalStateException("No group or channel is open."))
+        val result = executeSpaceMutation(
+            path = "/api/spaces/${encodePathSegment(active.channelId)}$suffix",
+            body = JSONObject(),
+            token = active.token
+        ).map { Unit }
+        if (result.isSuccess) leaveChannel()
+        return result
+    }
+
+    private fun parseSpaceDetails(obj: JSONObject): RemoteSpaceDetails {
+        val membersArray = obj.optJSONArray("members") ?: JSONArray()
+        val members = buildList {
+            for (index in 0 until membersArray.length()) {
+                val member = membersArray.optJSONObject(index) ?: continue
+                val role = parseSpaceRole(member.optString("role")) ?: continue
+                add(
+                    RemoteSpaceMember(
+                        username = member.optString("username"),
+                        role = role,
+                        joinedTimestampMs = member.optLong("joinedTimestampMs")
+                    )
+                )
+            }
+        }
+        return RemoteSpaceDetails(
+            channelId = obj.optString("channelId"),
+            name = obj.optString("name", "Space"),
+            description = obj.optString("description"),
+            avatarDataUrl = obj.optString("avatarDataUrl").takeIf { it.isNotBlank() && it != "null" },
+            spaceKind = parseSpaceKind(obj.optString("spaceKind")),
+            isPublic = obj.optBoolean("isPublic"),
+            myRole = parseSpaceRole(obj.optString("myRole")),
+            memberCount = obj.optInt("memberCount"),
+            subscriberCount = obj.optInt("subscriberCount"),
+            messageCount = obj.optInt("messageCount"),
+            members = members
+        )
+    }
+
+    private fun parseSpaceKind(raw: String): BitVoidSpaceKind = runCatching {
+        BitVoidSpaceKind.valueOf(raw)
+    }.getOrDefault(BitVoidSpaceKind.LEGACY_CHAT)
+
+    private fun parseSpaceRole(raw: String): BitVoidSpaceRole? = runCatching {
+        BitVoidSpaceRole.valueOf(raw)
+    }.getOrNull()
+
+    private fun encodePathSegment(value: String): String =
+        URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20")
+
+    private fun readApiError(body: String, fallback: String): String = runCatching {
+        JSONObject(body).optString("detail", fallback).ifBlank { fallback }
+    }.getOrDefault(fallback)
+
     private fun closeSocketOnly() {
         channelReconnectJob?.cancel()
         channelReconnectJob = null
@@ -2026,11 +2403,7 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
             val obj = arr.optJSONObject(i) ?: continue
             val isPublic = obj.optBoolean("isPublic", false)
             val isOwner = obj.optBoolean("isOwner", false)
-            val id = if (isPublic || isOwner) {
-                obj.optString("channelId").takeIf { it.isNotBlank() }
-            } else {
-                null
-            }
+            val id = obj.optString("channelId").takeIf { it.isNotBlank() }
             list.add(
                 RemoteChannelSummary(
                     channelId = id,
@@ -2043,8 +2416,15 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
                     activePeers = obj.optInt("activePeers", 0),
                     messageCount = obj.optInt("messageCount", 0),
                     lastMessagePreview = obj.optString("lastMessagePreview")
-                        .takeIf { it.isNotBlank() },
-                    lastTimestampMs = obj.optLong("lastTimestampMs", 0L)
+                        .takeIf { it.isNotBlank() && it != "null" },
+                    lastTimestampMs = obj.optLong("lastTimestampMs", 0L),
+                    spaceKind = parseSpaceKind(obj.optString("spaceKind")),
+                    description = obj.optString("description"),
+                    avatarDataUrl = obj.optString("avatarDataUrl").takeIf { it.isNotBlank() && it != "null" },
+                    memberCount = obj.optInt("memberCount", 0),
+                    subscriberCount = obj.optInt("subscriberCount", 0),
+                    myRole = parseSpaceRole(obj.optString("myRole")),
+                    isSubscribed = obj.optBoolean("isSubscribed", false)
                 )
             )
         }

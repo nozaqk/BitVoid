@@ -161,6 +161,10 @@ fun BitVoidDashboard(
     val channels by viewModel.channels.collectAsStateWithLifecycle()
 
     val clientChannels by viewModel.clientChannels.collectAsStateWithLifecycle()
+    val discoveredChannels by viewModel.discoveredChannels.collectAsStateWithLifecycle()
+    val activeSpaceDetails by viewModel.activeSpaceDetails.collectAsStateWithLifecycle()
+    val isLoadingSpaceDetails by viewModel.isLoadingSpaceDetails.collectAsStateWithLifecycle()
+    val spaceError by viewModel.spaceError.collectAsStateWithLifecycle()
     val cachedConversationPreviews by viewModel.cachedConversationPreviews.collectAsStateWithLifecycle()
     val activeChannelSession by viewModel.activeChannelSession.collectAsStateWithLifecycle()
     val channelMessages by viewModel.channelMessages.collectAsStateWithLifecycle()
@@ -218,6 +222,9 @@ fun BitVoidDashboard(
     }
 
     var showChannelDialog by rememberSaveable { mutableStateOf(false) }
+    var showCreateGroupDialog by rememberSaveable { mutableStateOf(false) }
+    var showCreateBroadcastDialog by rememberSaveable { mutableStateOf(false) }
+    var showDiscoverChannelsDialog by rememberSaveable { mutableStateOf(false) }
     var editingChannelId by rememberSaveable { mutableStateOf<String?>(null) }
     var showProtocolDialog by rememberSaveable { mutableStateOf(false) }
     var showQrDialog by rememberSaveable { mutableStateOf(false) }
@@ -328,7 +335,10 @@ fun BitVoidDashboard(
                 if (conversationId != null) viewModel.markConversationRead(conversationId)
                 viewModel.selectBottomTab(AppBottomTab.PCHAT)
                 viewModel.openDirectChat(username)
-            }
+            },
+            onCreateGroup = { showCreateGroupDialog = true },
+            onCreateBroadcastChannel = { showCreateBroadcastDialog = true },
+            onDiscoverChannels = { showDiscoverChannelsDialog = true }
         )
     }
 
@@ -346,6 +356,9 @@ fun BitVoidDashboard(
             channelPeersCount = channelPeersCount,
             isJoiningChannel = isJoiningChannel,
             channelJoinError = channelJoinError,
+            activeSpaceDetails = activeSpaceDetails,
+            isLoadingSpaceDetails = isLoadingSpaceDetails,
+            spaceError = spaceError,
             activeDirectSession = activeDirectSession,
             directMessages = directMessages,
             directWsStatus = directWsStatus,
@@ -355,6 +368,9 @@ fun BitVoidDashboard(
                 editingChannelId = null
                 showChannelDialog = true
             },
+            onOpenCreateGroup = { showCreateGroupDialog = true },
+            onOpenCreateBroadcastChannel = { showCreateBroadcastDialog = true },
+            onOpenDiscoverChannels = { showDiscoverChannelsDialog = true },
             onEditChannel = { channelId ->
                 editingChannelId = channelId
                 showChannelDialog = true
@@ -375,6 +391,14 @@ fun BitVoidDashboard(
             },
             onSendChatMessage = { viewModel.sendChannelChatMessage(it) },
             onLeaveChannel = { viewModel.leaveChannel() },
+            onRefreshSpaceDetails = viewModel::refreshActiveSpaceDetails,
+            onAddSpaceMember = viewModel::addActiveGroupMember,
+            onRemoveSpaceMember = viewModel::removeActiveSpaceMember,
+            onSetSpaceMemberRole = viewModel::setActiveSpaceMemberRole,
+            onUpdateSpace = viewModel::updateActiveSpace,
+            onCreateSpaceInvitation = viewModel::createActiveChannelInvitation,
+            onLeaveSpace = viewModel::leaveActiveSpace,
+            onDeleteSpace = viewModel::deleteActiveSpace,
             onOpenDirectChat = { target -> viewModel.openDirectChat(target) },
             onSendDirectMessage = { text -> viewModel.sendDirectChatMessage(text) },
             onLeaveDirectChat = { viewModel.leaveDirectChat() },
@@ -572,6 +596,54 @@ fun BitVoidDashboard(
             hostState = hostState,
             onCopy = ::copyToClipboard,
             onDismiss = { showNodeAccessDialog = false }
+        )
+    }
+
+    if (showCreateGroupDialog) {
+        CreateGroupDialog(
+            onDismiss = { showCreateGroupDialog = false },
+            onCreate = { name, description, members, avatar, done ->
+                viewModel.createGroup(name, description, members, avatar) { result ->
+                    if (result.isSuccess) viewModel.selectBottomTab(AppBottomTab.HUB)
+                    done(result)
+                }
+            }
+        )
+    }
+
+    if (showCreateBroadcastDialog) {
+        CreateBroadcastChannelDialog(
+            onDismiss = { showCreateBroadcastDialog = false },
+            onCreate = { name, description, isPublic, avatar, done ->
+                viewModel.createBroadcastChannel(name, description, isPublic, avatar) { result ->
+                    if (result.isSuccess) viewModel.selectBottomTab(AppBottomTab.HUB)
+                    done(result)
+                }
+            }
+        )
+    }
+
+    if (showDiscoverChannelsDialog) {
+        DiscoverChannelsDialog(
+            channels = discoveredChannels,
+            errorMessage = spaceError,
+            onDismiss = {
+                showDiscoverChannelsDialog = false
+                viewModel.clearSpaceError()
+            },
+            onSearch = viewModel::discoverBroadcastChannels,
+            onSubscribe = { channelId, done ->
+                viewModel.subscribeToBroadcastChannel(channelId) { result ->
+                    if (result.isSuccess) viewModel.selectBottomTab(AppBottomTab.HUB)
+                    done(result)
+                }
+            },
+            onJoinInvitation = { invitation, done ->
+                viewModel.joinBroadcastInvitation(invitation) { result ->
+                    if (result.isSuccess) viewModel.selectBottomTab(AppBottomTab.HUB)
+                    done(result)
+                }
+            }
         )
     }
 

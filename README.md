@@ -20,6 +20,8 @@ BitVoid is designed around local ownership: the host controls the content, rooms
 - [Hosting and connection modes](#hosting-and-connection-modes)
 - [Media sharing and privacy](#media-sharing-and-privacy)
 - [Rooms, chat, calls, and Live Classes](#rooms-chat-calls-and-live-classes)
+- [Groups and broadcast Channels](#groups-and-broadcast-channels)
+- [Space API and persistence migration](#space-api-and-persistence-migration)
 - [Node Log and network discovery](#node-log-and-network-discovery)
 - [Automatic conversations and backend selection](#automatic-conversations-and-backend-selection)
 - [Local web portal](#local-web-portal)
@@ -123,9 +125,25 @@ The current ESP-12E implementation is an initial access-point and discovery targ
 - Channel-based chat over WebSockets.
 - Direct messages between users who are active on the same BitVoid node.
 - Stable client message IDs, idempotent replay, duplicate suppression, preserved timestamps, and ordered history merging.
-- Bounded on-device conversation history and a durable outgoing queue; server-side histories and authorization sessions remain ephemeral.
+- Bounded on-device conversation history and a durable outgoing queue. Android-hosted group/channel definitions, memberships, invitation hashes, media mappings, and bounded channel histories are stored in a versioned SQLite database; scoped authorization sessions remain ephemeral.
 - File attachments shared through the local service.
 - Android notifications for incoming remote channel and direct messages while the foreground service is active.
+
+### Groups
+
+- Create a group with a name, description, optional profile picture, and members selected by username.
+- The creator is the owner; groups support owner, administrator, and member roles.
+- Owners and administrators can add or remove members and edit group information; only the owner can promote or demote administrators and delete the group.
+- Every current member can send messages and supported attachments. Non-members cannot obtain a group session or read its information.
+- Members may leave; the owner must delete the group rather than leaving it ownerless.
+
+### Broadcast Channels
+
+- Create public/discoverable or private/invitation-only Channels with a name, description, and optional profile picture.
+- Channels support owner, administrator, and subscriber roles. Only the owner and administrators can publish posts or attachments; this is enforced by the embedded server for REST, uploads, and WebSockets.
+- Users can search public Channels, subscribe, unsubscribe, join a private Channel with a limited-use expiring invitation, and view subscriber/administrator information.
+- The owner can change visibility, manage administrators, or delete the Channel. Owners and administrators can create shareable private invitations.
+- Groups and subscribed Channels appear in the existing conversation list and use the existing conversation, attachment, notification, cache, and retry paths.
 
 ### Audio calls
 
@@ -262,11 +280,49 @@ The media catalogue and its visibility state are managed by the active host. Thi
 
 ### Chat and direct messages
 
-Channel and direct chat use WebSocket connections to the selected backend. Direct messaging and calls require the intended username to be active on that BitVoid node. The Android client keeps a bounded local conversation cache and durable outgoing queue, while server-side history remains ephemeral rather than becoming a permanent remote archive.
+Channel and direct chat use WebSocket connections to the selected backend. Direct messaging and calls require the intended username to be active on that BitVoid node. The Android client keeps a bounded local conversation cache and durable outgoing queue. Android-hosted group/channel history is now bounded and durable in `bitvoid_spaces.db`; direct-message, room, presence, and authorization-session state remains process-local.
 
 ### Voice and Live Classes
 
 WebRTC handles audio media, while the BitVoid host coordinates signaling and session state. The current configuration does not use public STUN/TURN servers. As a result, calls and classes are intended for devices that can establish a media path over the local network.
+
+## Groups and broadcast Channels
+
+Groups and Channels extend the existing channel transport; they do not create a disconnected messaging stack. A successful join issues an encrypted, process-scoped channel session containing the current role and space type. Membership and role changes revoke affected sessions so the client must rejoin with fresh authorization.
+
+- **Groups:** membership is explicit. A username not present in the membership table cannot join, read group details, post, or upload.
+- **Public Channels:** discovery returns public broadcast Channels. Subscription creates a subscriber membership before opening the conversation.
+- **Private Channels:** discovery does not reveal them. Joining requires an unexpired, unused invitation. Only the invitation hash is retained by the server.
+- **Publishing:** owner/administrator authorization is checked by the server for HTTP message posts, multipart uploads, and incoming WebSocket frames. Subscriber-only clients also hide the composer, but that UI check is not a security boundary.
+- **Conflicts and replay:** messages retain client UUIDs, original timestamps, `Idempotency-Key` support, and stable-ID deduplication. Membership and settings mutations are applied transactionally to the local SQLite store. A role change invalidates old tokens instead of attempting to merge stale privileges.
+- **Offline behavior:** already-open Android conversations retain their bounded local cache and outgoing queue. Queued group messages retry after a valid member session is reopened. Subscribers are never allowed to queue Channel posts.
+
+Current identity note: the embedded local gateway issues a 256-bit, expiring `X-BitVoid-Identity-Token` when the active app/browser username registers. Creation, typed-space joins, subscriptions, and invitation joins require that token to match the submitted active username; later mutations are bound to a validated scoped space token. This protects request identity within one gateway session. A separate production cloud service must still authenticate durable account ownership before enrollment (the local first-use username registry is not a password service); node identity discovery alone is not account authentication.
+
+## Space API and persistence migration
+
+The embedded service exposes these JSON routes in addition to the existing `/api/channels/{id}/chat`, `/upload`, and `/ws/chat/{id}` transports:
+
+| Method | Route | Purpose |
+|---|---|---|
+| `POST` | `/api/spaces/groups` | Create a group and initial username membership |
+| `POST` | `/api/spaces/channels` | Create a public or private broadcast Channel |
+| `GET` | `/api/spaces/discover?q=` | Search public broadcast Channels |
+| `GET` | `/api/spaces/{id}` | Read authenticated space information and members |
+| `POST` | `/api/spaces/{id}/subscribe` | Subscribe to a public Channel |
+| `POST` | `/api/spaces/{id}/unsubscribe` | Unsubscribe with the current scoped token |
+| `POST` | `/api/spaces/invitations/join` | Join a private Channel invitation |
+| `POST` | `/api/spaces/{id}/invitations` | Create a limited-use invitation as owner/admin |
+| `POST` | `/api/spaces/{id}/members/add` | Add a group member as owner/admin |
+| `POST` | `/api/spaces/{id}/members/remove` | Remove an authorized member/subscriber |
+| `POST` | `/api/spaces/{id}/members/role` | Promote/demote an administrator as owner |
+| `POST` | `/api/spaces/{id}/settings` | Update name, description, picture, or owner-only visibility |
+| `POST` | `/api/spaces/{id}/leave` | Leave a group or unsubscribe from a Channel |
+| `POST` | `/api/spaces/{id}/delete` | Owner-only permanent deletion |
+
+The Android-hosted database is `bitvoid_spaces.db`, schema version **1**. It contains normalized `spaces`, `space_members`, `space_invitations`, `space_media`, and `channel_messages` tables with cascading foreign keys. This is the first durable-space schema; upgrading from earlier releases requires no destructive migration because those releases kept channel definitions in process memory. Existing accounts, direct conversations, rooms, and media files are not rewritten. Session tokens and live WebSocket presence are intentionally not persisted and are safely reissued after restart. Future schema versions must use forward-only `SQLiteOpenHelper.onUpgrade` migrations and must not drop conversation or membership data.
+
+SQLite durability is local to the Android host. Campus/cloud synchronization uses the selected backend and existing idempotent message replay, but this repository does not include a multi-node consensus service or production account-authenticated cloud database. Deployments that synchronize one space across independent gateways must provide canonical account identity, revision/conflict policy, and the same authorization contract server-side rather than merging SQLite files.
 
 ---
 
@@ -320,6 +376,7 @@ Portal behavior includes:
 - A public broadcast page.
 - Private room entry and room-scoped content.
 - Browser-based chat and audio meeting interfaces.
+- Group/Channel creation, public discovery, private invitation joining, role-aware publishing, and prompt-based information/member/administrator controls.
 - Attachment cards and supported file previews.
 - Local-only navigation restrictions.
 - Captive-network probe redirects for common Android, Apple, Windows, Firefox, and other platform paths where the request reaches the local server.
@@ -454,8 +511,9 @@ BitVoid is designed to reduce unnecessary data collection and keep local activit
 - Private media is excluded from public catalogue responses.
 - Private room APIs require an expiring room token.
 - Optional room passkeys are derived with PBKDF2-HMAC-SHA256; raw passkeys are not stored.
-- Room tokens and transient room/session state are held in memory.
-- Chat history and participant state are ephemeral.
+- Room tokens, identity/space authorization tokens, WebSocket presence, direct-message history, and room history are held in memory.
+- Group/Channel membership, hashed invitations, settings, media mappings, and bounded Channel history are durable in the Android host's private SQLite database.
+- Typed-space joins and identity-bearing mutations require a matching expiring gateway identity token; role and membership mutations require a scoped space token.
 - The server does not retain request logs or client IP/MAC histories in its application request flow.
 - Identifying request headers are discarded by the server.
 - The portal restricts navigation to local addresses and disables persistent cookies/cache and browser access to camera, microphone, and geolocation.
@@ -471,7 +529,7 @@ BitVoid is designed to reduce unnecessary data collection and keep local activit
 
 ### Data lifecycle
 
-Room IDs, passkey verifiers, room tokens, client sessions, participant state, and chat history are held in memory by the active host. Stopping the host or ending the app process clears this transient state. Imported media files remain in app-scoped storage until removed by the user or the application.
+Room IDs, passkey verifiers, room tokens, identity/space sessions, direct-message and room history, and participant presence are held in memory by the active host. Stopping the host or ending the app process clears that transient state. Group/Channel definitions, membership, hashed invitations, settings, media mappings, and bounded Channel posts survive in `bitvoid_spaces.db`. Imported media files remain in app-scoped storage until removed by the user or the application.
 
 BitVoid is not a VPN, Tor client, internet anonymity system, or end-to-end cloud backup service. Its privacy protections apply to the local services and data flows described in this project.
 
@@ -489,6 +547,7 @@ BitVoid is not a VPN, Tor client, internet anonymity system, or end-to-end cloud
 - Android foreground services
 - NanoHTTPD and NanoWSD for embedded HTTP/WebSocket hosting
 - OkHttp for client networking
+- Android SQLite (`SQLiteOpenHelper`) for durable Groups/Channels
 - Android Media3 / ExoPlayer for media playback
 - WebRTC for audio calls and Live Classes
 - ZXing for Wi-Fi QR payload generation
@@ -673,6 +732,9 @@ The ESP-12E example firmware refuses to start with the placeholder password. Thi
 | Media import, public/private visibility, and local streaming | Implemented |
 | Private rooms and room-token authorization | Implemented |
 | Channel chat and direct messaging | Implemented |
+| Telegram-style Groups and role/member management | Implemented on Android-hosted backend and clients |
+| Broadcast Channels, discovery, subscriptions, invitations, and administrator publishing | Implemented on Android-hosted backend and clients |
+| Durable Android-hosted space schema and bounded Channel history | SQLite schema v1 implemented |
 | Local file attachments | Implemented |
 | Audio-only WebRTC calls | Implemented |
 | Audio-only Live Classes | Implemented |
@@ -700,7 +762,7 @@ Before shipping against a production cloud deployment, run `./gradlew testDebugU
 - existing channel/direct histories before and after backend switching;
 - two-account incoming, outgoing, accepted, rejected, muted, speaker, and ended audio calls.
 
-Known deployment limitations: the repository contains no production Render URL or cloud credentials; backend authorization sessions are reopened rather than persisted; server-side histories remain memory-only; and internet WebRTC needs compatible cloud signaling plus deployed STUN/TURN infrastructure.
+Known deployment limitations: the repository contains no production Render URL or cloud credentials; backend authorization sessions are reopened rather than persisted; direct-message and room histories remain memory-only on the embedded server; SQLite space persistence is local to one Android host rather than a cross-node consensus database; and internet WebRTC needs compatible cloud signaling plus deployed STUN/TURN infrastructure.
 
 ---
 

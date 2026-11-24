@@ -3,7 +3,10 @@ package com.bitvoid.network.ui
 import android.app.Application
 import android.content.ComponentName
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.Base64
 import android.provider.Settings
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -20,6 +23,7 @@ import com.bitvoid.network.backend.BitVoidBackendState
 import com.bitvoid.network.backend.BitVoidBackendType
 import com.bitvoid.network.channel.BitVoidChannel
 import com.bitvoid.network.channel.BitVoidChannelManager
+import com.bitvoid.network.channel.BitVoidSpaceRole
 import com.bitvoid.network.client.BitVoidClientManager
 import com.bitvoid.network.client.BitVoidClientRepository
 import com.bitvoid.network.client.BitVoidClientRepositoryProvider
@@ -33,6 +37,8 @@ import com.bitvoid.network.client.ClientWsStatus
 import com.bitvoid.network.client.RemoteChannelSummary
 import com.bitvoid.network.client.RemoteLiveClassSummary
 import com.bitvoid.network.client.RemoteMediaItem
+import com.bitvoid.network.client.RemoteSpaceDetails
+import com.bitvoid.network.client.RemoteSpaceInvitation
 import com.bitvoid.network.connection.BitVoidConnectionPhase
 import com.bitvoid.network.connection.BitVoidConnectionState
 import com.bitvoid.network.connection.BitVoidHardwareIntegration
@@ -53,6 +59,7 @@ import com.bitvoid.network.model.NodeConnectionEventType
 import com.bitvoid.network.model.NodeMode
 import com.bitvoid.network.service.BitVoidForegroundService
 import com.bitvoid.network.service.BitVoidNodeStateHolder
+import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -135,6 +142,10 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     val publicMediaError: StateFlow<String?> = clientRepository.publicMediaError
 
     val clientChannels: StateFlow<List<RemoteChannelSummary>> = clientRepository.channels
+    val discoveredChannels: StateFlow<List<RemoteChannelSummary>> = clientRepository.discoveredChannels
+    val activeSpaceDetails: StateFlow<RemoteSpaceDetails?> = clientRepository.activeSpaceDetails
+    val isLoadingSpaceDetails: StateFlow<Boolean> = clientRepository.isLoadingSpaceDetails
+    val spaceError: StateFlow<String?> = clientRepository.spaceError
     val cachedConversationPreviews = clientRepository.cachedConversationPreviews
     val liveClasses: StateFlow<List<RemoteLiveClassSummary>> = clientRepository.liveClasses
     val isLoadingChannels: StateFlow<Boolean> = clientRepository.isLoadingChannels
@@ -914,6 +925,180 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         return result
     }
 
+    fun createGroup(
+        name: String,
+        description: String,
+        members: Collection<String>,
+        avatarUri: Uri?,
+        onDone: (Result<String>) -> Unit
+    ) {
+        viewModelScope.launch {
+            clientRepository.registerUsername(
+                _myUsername.value,
+                discoverable = _isUserIdDiscoverable.value
+            )
+            val avatar = encodeAvatarDataUrl(avatarUri)
+            if (avatarUri != null && avatar == null) {
+                onDone(Result.failure(IllegalArgumentException("Unable to read that profile picture.")))
+                return@launch
+            }
+            val result = clientRepository.createGroup(
+                name = name,
+                description = description,
+                members = members,
+                username = _myUsername.value,
+                avatarDataUrl = avatar
+            )
+            result.onSuccess { channelId ->
+                clientRepository.fetchChannels(username = _myUsername.value)
+                clientRepository.joinChannel(channelId, username = _myUsername.value)
+            }
+            onDone(result)
+        }
+    }
+
+    fun createBroadcastChannel(
+        name: String,
+        description: String,
+        isPublic: Boolean,
+        avatarUri: Uri?,
+        onDone: (Result<String>) -> Unit
+    ) {
+        viewModelScope.launch {
+            clientRepository.registerUsername(
+                _myUsername.value,
+                discoverable = _isUserIdDiscoverable.value
+            )
+            val avatar = encodeAvatarDataUrl(avatarUri)
+            if (avatarUri != null && avatar == null) {
+                onDone(Result.failure(IllegalArgumentException("Unable to read that profile picture.")))
+                return@launch
+            }
+            val result = clientRepository.createBroadcastChannel(
+                name = name,
+                description = description,
+                isPublic = isPublic,
+                username = _myUsername.value,
+                avatarDataUrl = avatar
+            )
+            result.onSuccess { channelId ->
+                clientRepository.fetchChannels(username = _myUsername.value)
+                clientRepository.joinChannel(channelId, username = _myUsername.value)
+            }
+            onDone(result)
+        }
+    }
+
+    fun discoverBroadcastChannels(query: String = "") {
+        viewModelScope.launch { clientRepository.discoverPublicChannels(query) }
+    }
+
+    fun subscribeToBroadcastChannel(channelId: String, onDone: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            clientRepository.registerUsername(
+                _myUsername.value,
+                discoverable = _isUserIdDiscoverable.value
+            )
+            val result = clientRepository.subscribeToChannel(channelId, _myUsername.value)
+            result.onSuccess {
+                clientRepository.fetchChannels(username = _myUsername.value)
+                clientRepository.joinChannel(channelId, username = _myUsername.value)
+            }
+            onDone(result)
+        }
+    }
+
+    fun joinBroadcastInvitation(invitation: String, onDone: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            clientRepository.registerUsername(
+                _myUsername.value,
+                discoverable = _isUserIdDiscoverable.value
+            )
+            val result = clientRepository.joinChannelInvitation(invitation, _myUsername.value)
+            result.onSuccess { channelId ->
+                clientRepository.fetchChannels(username = _myUsername.value)
+                clientRepository.joinChannel(channelId, username = _myUsername.value)
+            }
+            onDone(result)
+        }
+    }
+
+    fun refreshActiveSpaceDetails() {
+        viewModelScope.launch { clientRepository.fetchActiveSpaceDetails() }
+    }
+
+    fun addActiveGroupMember(username: String, onDone: (Result<RemoteSpaceDetails>) -> Unit) {
+        viewModelScope.launch {
+            val result = clientRepository.addSpaceMember(username)
+            if (result.isSuccess) clientRepository.fetchChannels(username = _myUsername.value)
+            onDone(result)
+        }
+    }
+
+    fun removeActiveSpaceMember(username: String, onDone: (Result<RemoteSpaceDetails>) -> Unit) {
+        viewModelScope.launch {
+            val result = clientRepository.removeSpaceMember(username)
+            if (result.isSuccess) clientRepository.fetchChannels(username = _myUsername.value)
+            onDone(result)
+        }
+    }
+
+    fun setActiveSpaceMemberRole(
+        username: String,
+        role: BitVoidSpaceRole,
+        onDone: (Result<RemoteSpaceDetails>) -> Unit
+    ) {
+        viewModelScope.launch {
+            val result = clientRepository.setSpaceMemberRole(username, role)
+            if (result.isSuccess) clientRepository.fetchChannels(username = _myUsername.value)
+            onDone(result)
+        }
+    }
+
+    fun updateActiveSpace(
+        name: String,
+        description: String,
+        avatarUri: Uri?,
+        keepExistingAvatar: Boolean,
+        isPublic: Boolean?,
+        onDone: (Result<RemoteSpaceDetails>) -> Unit
+    ) {
+        viewModelScope.launch {
+            val existing = activeSpaceDetails.value?.avatarDataUrl
+            val encoded = encodeAvatarDataUrl(avatarUri)
+            if (avatarUri != null && encoded == null) {
+                onDone(Result.failure(IllegalArgumentException("Unable to read that profile picture.")))
+                return@launch
+            }
+            val avatar = if (keepExistingAvatar && avatarUri == null) existing else encoded
+            val result = clientRepository.updateActiveSpace(name, description, avatar, isPublic)
+            if (result.isSuccess) clientRepository.fetchChannels(username = _myUsername.value)
+            onDone(result)
+        }
+    }
+
+    fun createActiveChannelInvitation(onDone: (Result<RemoteSpaceInvitation>) -> Unit) {
+        viewModelScope.launch { onDone(clientRepository.createActiveSpaceInvitation()) }
+    }
+
+    fun leaveActiveSpace(onDone: (Result<Unit>) -> Unit) {
+        viewModelScope.launch {
+            val result = clientRepository.leaveActiveSpace()
+            if (result.isSuccess) clientRepository.fetchChannels(username = _myUsername.value)
+            onDone(result)
+        }
+    }
+
+    fun deleteActiveSpace(onDone: (Result<Unit>) -> Unit) {
+        viewModelScope.launch {
+            val result = clientRepository.deleteActiveSpace()
+            if (result.isSuccess) clientRepository.fetchChannels(username = _myUsername.value)
+            onDone(result)
+        }
+    }
+
+    fun clearSpaceError() = clientRepository.clearSpaceError()
+
     fun updateChannel(
         channelId: String,
         name: String,
@@ -1063,6 +1248,11 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
 
     fun refreshClientChannels(urlOverride: String? = null) {
         viewModelScope.launch {
+            clientRepository.registerUsername(
+                _myUsername.value,
+                urlOverride = urlOverride,
+                discoverable = _isUserIdDiscoverable.value
+            )
             clientRepository.fetchChannels(urlOverride, username = _myUsername.value)
         }
     }
@@ -1094,6 +1284,10 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             ensureLocalGatewayReadyIfNeeded()
             syncGatewayToLocalIfAvailable()
+            clientRepository.registerUsername(
+                _myUsername.value,
+                discoverable = _isUserIdDiscoverable.value
+            )
             clientRepository.joinChannel(
                 rawChannelId = channelId,
                 rawPrivateKey = privateKey,
@@ -1505,6 +1699,38 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
 
     fun buildAttachmentUrl(pathOrUrl: String, token: String? = null): String {
         return clientRepository.buildAttachmentUrl(pathOrUrl, token)
+    }
+
+    private suspend fun encodeAvatarDataUrl(uri: Uri?): String? {
+        if (uri == null) return null
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val decoded = appContext.contentResolver.openInputStream(uri)?.use(BitmapFactory::decodeStream)
+                    ?: error("Unable to decode profile picture.")
+                val maxEdge = maxOf(decoded.width, decoded.height)
+                val scaled = if (maxEdge > 512) {
+                    val scale = 512f / maxEdge.toFloat()
+                    Bitmap.createScaledBitmap(
+                        decoded,
+                        (decoded.width * scale).toInt().coerceAtLeast(1),
+                        (decoded.height * scale).toInt().coerceAtLeast(1),
+                        true
+                    ).also { if (it !== decoded) decoded.recycle() }
+                } else {
+                    decoded
+                }
+                try {
+                    val bytes = ByteArrayOutputStream()
+                    check(scaled.compress(Bitmap.CompressFormat.JPEG, 84, bytes)) {
+                        "Unable to encode profile picture."
+                    }
+                    val encoded = Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP)
+                    "data:image/jpeg;base64,$encoded"
+                } finally {
+                    scaled.recycle()
+                }
+            }.getOrNull()
+        }
     }
 
     fun openSystemWifiSettings() {
