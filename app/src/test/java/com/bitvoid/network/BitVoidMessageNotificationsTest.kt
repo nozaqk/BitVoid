@@ -117,6 +117,70 @@ class BitVoidMessageNotificationsTest {
     }
 
     @Test
+    fun `notification is suppressed only for the visible foreground conversation`() {
+        val channelSpec = requireNotNull(
+            BitVoidMessageNotifications.createSpec(
+                ClientIncomingMessageEvent.Channel(
+                    channelSession,
+                    message(sender = "bob", text = "hello")
+                )
+            )
+        )
+
+        assertTrue(
+            BitVoidMessageNotifications.shouldSuppress(
+                spec = channelSpec,
+                isAppInForeground = true,
+                visibleConversationId = "ch-ops"
+            )
+        )
+        assertEquals(
+            false,
+            BitVoidMessageNotifications.shouldSuppress(
+                spec = channelSpec,
+                isAppInForeground = true,
+                visibleConversationId = "another-channel"
+            )
+        )
+        assertEquals(
+            false,
+            BitVoidMessageNotifications.shouldSuppress(
+                spec = channelSpec,
+                isAppInForeground = false,
+                visibleConversationId = "CH-OPS"
+            )
+        )
+        assertEquals(
+            false,
+            BitVoidMessageNotifications.shouldSuppress(
+                spec = channelSpec,
+                isAppInForeground = true,
+                visibleConversationId = null
+            )
+        )
+    }
+
+    @Test
+    fun `direct notification is suppressed when that direct chat is visible`() {
+        val directSpec = requireNotNull(
+            BitVoidMessageNotifications.createSpec(
+                ClientIncomingMessageEvent.Direct(
+                    directSession,
+                    message(channelId = directSession.dmId, sender = "bob", text = "hello")
+                )
+            )
+        )
+
+        assertTrue(
+            BitVoidMessageNotifications.shouldSuppress(
+                spec = directSpec,
+                isAppInForeground = true,
+                visibleConversationId = directSession.dmId
+            )
+        )
+    }
+
+    @Test
     fun `conversation notification ids are stable and type scoped`() {
         val first = BitVoidMessageNotifications.stableId(
             MessageNotificationDestination.CHANNEL,

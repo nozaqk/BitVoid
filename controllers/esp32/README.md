@@ -1,5 +1,10 @@
 # BitVoid ESP32 same-LAN coordinator
 
+> **Compatibility status:** this existing firmware currently implements the legacy mesh identity
+> protocol, not the complete Universal Gateway API v1. It is not yet a drop-in replacement for the
+> ESP-12E gateway. Implement every required route in `../../docs/gateway-api-v1.md` before marking
+> this target API-v1 compatible. The Android app must not branch on this board's model.
+
 This PlatformIO firmware turns an ESP32 into a lightweight BitVoid registry on an **existing
 protected Wi-Fi network**. It scans visible Wi-Fi in the background and lets apps with different
 private IP addresses/URLs find one another through the common mesh registry.

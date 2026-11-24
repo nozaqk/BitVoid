@@ -276,6 +276,13 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
 
     private var activeWebSocket: WebSocket? = null
     private var activeDirectWebSocket: WebSocket? = null
+    // Retain authorized sockets for conversations already opened in this app session.
+    private val channelSubscriptions = ConcurrentHashMap<String, Pair<ClientChannelSession, WebSocket>>()
+    private val directSubscriptions = ConcurrentHashMap<String, Pair<ClientDirectSession, WebSocket>>()
+    private val channelSubscriptionSessions = ConcurrentHashMap<String, ClientChannelSession>()
+    private val directSubscriptionSessions = ConcurrentHashMap<String, ClientDirectSession>()
+    private val _hasNotificationSubscriptions = MutableStateFlow(false)
+    val hasNotificationSubscriptions: StateFlow<Boolean> = _hasNotificationSubscriptions.asStateFlow()
     private var channelReconnectJob: Job? = null
     private var directReconnectJob: Job? = null
     private var callStatusPollJob: Job? = null
@@ -534,7 +541,6 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
 
         _isJoiningChannel.value = false
         result.onSuccess { (session, initialMessages) ->
-            closeSocketOnly()
             _activeChannelSession.value = session
             val pendingForChannel = (
                 _channelMessages.value + messageStore.load(session.channelId, direct = false)
@@ -555,7 +561,6 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
         }.onFailure { err ->
             val cached = messageStore.load(channelId, direct = false)
             if (cached.isNotEmpty() && err !is SecurityException) {
-                closeSocketOnly()
                 _activeChannelSession.value = ClientChannelSession(
                     channelId = channelId,
                     name = _channels.value.firstOrNull { it.channelId == channelId }?.name
@@ -1495,7 +1500,6 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
 
         _isOpeningDirectChat.value = false
         result.onSuccess { (session, initialMessages) ->
-            closeDirectSocketOnly()
             _activeDirectSession.value = session
             val pendingForDirect = (
                 _directMessages.value + messageStore.load(session.dmId, direct = true)
@@ -1519,7 +1523,6 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
             val offlineDmId = "dm__${pair[0]}__${pair[1]}"
             val cached = messageStore.load(offlineDmId, direct = true)
             if (cached.isNotEmpty()) {
-                closeDirectSocketOnly()
                 _activeDirectSession.value = ClientDirectSession(
                     dmId = offlineDmId,
                     myUsername = cleanMe,
@@ -1580,7 +1583,7 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
         callStatusPollJob?.cancel()
         callStatusPollJob = null
         _activeChannelCallStatus.value = null
-        closeSocketOnly()
+        // Keep the authorized subscription alive when the user navigates away from this chat.
         _activeChannelSession.value = null
         _channelMessages.value = emptyList()
         _channelPeersCount.value = 1
@@ -1592,7 +1595,7 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
         directCallStatusPollJob?.cancel()
         directCallStatusPollJob = null
         _activeDirectCallStatus.value = null
-        closeDirectSocketOnly()
+        // Keep the authorized subscription alive when the user navigates away from this chat.
         _activeDirectSession.value = null
         _directMessages.value = emptyList()
         _directWsStatus.value = ClientWsStatus.DISCONNECTED
@@ -1606,13 +1609,21 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
     fun release() {
         leaveChannel()
         leaveDirectChat()
+        closeSocketOnly()
+        closeDirectSocketOnly()
         scope.cancel()
         okHttpClient.dispatcher.executorService.shutdown()
     }
 
     private fun connectChatWebSocket(baseUrl: String, session: ClientChannelSession) {
-        closeSocketOnly()
-        _wsStatus.value = ClientWsStatus.CONNECTING
+        channelSubscriptionSessions[session.channelId] = session
+        val existing = channelSubscriptions[session.channelId]
+        if (existing?.first?.token == session.token) {
+            if (_activeChannelSession.value?.channelId == session.channelId) activeWebSocket = existing.second
+            return
+        }
+        existing?.second?.close(1000, "Replacing channel authorization")
+        if (_activeChannelSession.value?.channelId == session.channelId) _wsStatus.value = ClientWsStatus.CONNECTING
 
         val wsBase = when {
             baseUrl.startsWith("https://") -> "wss://${baseUrl.removePrefix("https://")}"
@@ -1629,74 +1640,77 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
             .header("X-Channel-Token", session.token)
             .build()
 
-        activeWebSocket = okHttpClient.newWebSocket(
+        val socket = okHttpClient.newWebSocket(
             request,
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                    _wsStatus.value = ClientWsStatus.LIVE
-                    flushPendingMessages()
+                    if (_activeChannelSession.value?.channelId == session.channelId) {
+                        _wsStatus.value = ClientWsStatus.LIVE
+                        flushPendingMessages()
+                    }
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
-                    handleWebSocketFrame(text)
+                    handleWebSocketFrame(text, session)
                 }
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                     webSocket.close(1000, null)
-                    _wsStatus.value = ClientWsStatus.DISCONNECTED
+                    if (_activeChannelSession.value?.channelId == session.channelId) _wsStatus.value = ClientWsStatus.DISCONNECTED
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    _wsStatus.value = ClientWsStatus.DISCONNECTED
+                    if (_activeChannelSession.value?.channelId == session.channelId) _wsStatus.value = ClientWsStatus.DISCONNECTED
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    _wsStatus.value = ClientWsStatus.ERROR
+                    if (_activeChannelSession.value?.channelId == session.channelId) _wsStatus.value = ClientWsStatus.ERROR
+                    if (channelSubscriptions[session.channelId]?.second === webSocket) channelSubscriptions.remove(session.channelId)
                     scheduleChannelReconnect(baseUrl, session)
                 }
             }
         )
+        channelSubscriptions[session.channelId] = session to socket
+        if (_activeChannelSession.value?.channelId == session.channelId) activeWebSocket = socket
+        _hasNotificationSubscriptions.value = true
     }
 
     private fun scheduleChannelReconnect(baseUrl: String, session: ClientChannelSession) {
-        channelReconnectJob?.cancel()
         channelReconnectJob = scope.launch {
             delay(1800)
-            val current = _activeChannelSession.value ?: return@launch
-            if (current.channelId == session.channelId && current.token == session.token) {
-                connectChatWebSocket(baseUrl, current)
-            }
+            val desired = channelSubscriptionSessions[session.channelId] ?: return@launch
+            if (desired.token == session.token) connectChatWebSocket(baseUrl, desired)
         }
     }
 
-    private fun handleWebSocketFrame(rawJson: String) {
+    private fun handleWebSocketFrame(rawJson: String, session: ClientChannelSession) {
         try {
             val json = JSONObject(rawJson)
             when (json.optString("type")) {
                 "history" -> {
                     val arr = json.optJSONArray("messages") ?: return
                     val parsed = parseMessagesArray(arr)
-                    parsed.forEach { appendMessageIfNew(it) }
+                    if (_activeChannelSession.value?.channelId == session.channelId) parsed.forEach { appendMessageIfNew(it) }
                 }
                 "chat" -> {
                     val msgObj = json.optJSONObject("message") ?: return
                     val message = parseMessageObject(msgObj)
-                    val session = _activeChannelSession.value
-                    if (appendMessageIfNew(message) && session != null &&
-                        session.channelId == message.channelId
-                    ) {
-                        _incomingMessages.tryEmit(
-                            ClientIncomingMessageEvent.Channel(session, message)
-                        )
+                    if (message.channelId == session.channelId) {
+                        if (_activeChannelSession.value?.channelId == session.channelId) appendMessageIfNew(message)
+                        _incomingMessages.tryEmit(ClientIncomingMessageEvent.Channel(session, message))
                     }
                 }
                 "presence" -> {
-                    val count = json.optInt("activeCount", 1).coerceAtLeast(1)
-                    _channelPeersCount.value = count
+                    if (_activeChannelSession.value?.channelId == session.channelId) {
+                        val count = json.optInt("activeCount", 1).coerceAtLeast(1)
+                        _channelPeersCount.value = count
+                    }
                 }
                 "notice" -> {
                     val noticeText = json.optString("text", "")
-                    if (noticeText.isNotBlank()) {
+                    if (noticeText.isNotBlank() &&
+                        _activeChannelSession.value?.channelId == session.channelId
+                    ) {
                         appendMessageIfNew(
                             ClientChatMessage(
                                 id = "notice_${System.nanoTime()}",
@@ -1716,8 +1730,14 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
     }
 
     private fun connectDirectWebSocket(baseUrl: String, session: ClientDirectSession) {
-        closeDirectSocketOnly()
-        _directWsStatus.value = ClientWsStatus.CONNECTING
+        directSubscriptionSessions[session.dmId] = session
+        val existing = directSubscriptions[session.dmId]
+        if (existing?.first?.token == session.token) {
+            if (_activeDirectSession.value?.dmId == session.dmId) activeDirectWebSocket = existing.second
+            return
+        }
+        existing?.second?.close(1000, "Replacing direct-chat authorization")
+        if (_activeDirectSession.value?.dmId == session.dmId) _directWsStatus.value = ClientWsStatus.CONNECTING
 
         val wsBase = when {
             baseUrl.startsWith("https://") -> "wss://${baseUrl.removePrefix("https://")}"
@@ -1734,64 +1754,63 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
             .header("X-DM-Token", session.token)
             .build()
 
-        activeDirectWebSocket = okHttpClient.newWebSocket(
+        val socket = okHttpClient.newWebSocket(
             request,
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                    _directWsStatus.value = ClientWsStatus.LIVE
-                    flushPendingMessages()
+                    if (_activeDirectSession.value?.dmId == session.dmId) {
+                        _directWsStatus.value = ClientWsStatus.LIVE
+                        flushPendingMessages()
+                    }
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
-                    handleDirectWebSocketFrame(text)
+                    handleDirectWebSocketFrame(text, session)
                 }
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                     webSocket.close(1000, null)
-                    _directWsStatus.value = ClientWsStatus.DISCONNECTED
+                    if (_activeDirectSession.value?.dmId == session.dmId) _directWsStatus.value = ClientWsStatus.DISCONNECTED
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    _directWsStatus.value = ClientWsStatus.DISCONNECTED
+                    if (_activeDirectSession.value?.dmId == session.dmId) _directWsStatus.value = ClientWsStatus.DISCONNECTED
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    _directWsStatus.value = ClientWsStatus.ERROR
+                    if (_activeDirectSession.value?.dmId == session.dmId) _directWsStatus.value = ClientWsStatus.ERROR
+                    if (directSubscriptions[session.dmId]?.second === webSocket) directSubscriptions.remove(session.dmId)
                     scheduleDirectReconnect(baseUrl, session)
                 }
             }
         )
+        directSubscriptions[session.dmId] = session to socket
+        if (_activeDirectSession.value?.dmId == session.dmId) activeDirectWebSocket = socket
+        _hasNotificationSubscriptions.value = true
     }
 
     private fun scheduleDirectReconnect(baseUrl: String, session: ClientDirectSession) {
-        directReconnectJob?.cancel()
         directReconnectJob = scope.launch {
             delay(1800)
-            val current = _activeDirectSession.value ?: return@launch
-            if (current.dmId == session.dmId && current.token == session.token) {
-                connectDirectWebSocket(baseUrl, current)
-            }
+            val desired = directSubscriptionSessions[session.dmId] ?: return@launch
+            if (desired.token == session.token) connectDirectWebSocket(baseUrl, desired)
         }
     }
 
-    private fun handleDirectWebSocketFrame(rawJson: String) {
+    private fun handleDirectWebSocketFrame(rawJson: String, session: ClientDirectSession) {
         try {
             val json = JSONObject(rawJson)
             when (json.optString("type")) {
                 "history" -> {
                     val arr = json.optJSONArray("messages") ?: return
-                    parseMessagesArray(arr).forEach { appendDirectMessageIfNew(it) }
+                    if (_activeDirectSession.value?.dmId == session.dmId) parseMessagesArray(arr).forEach { appendDirectMessageIfNew(it) }
                 }
                 "chat" -> {
                     val msgObj = json.optJSONObject("message") ?: return
                     val message = parseMessageObject(msgObj)
-                    val session = _activeDirectSession.value
-                    if (appendDirectMessageIfNew(message) && session != null &&
-                        session.dmId == message.channelId
-                    ) {
-                        _incomingMessages.tryEmit(
-                            ClientIncomingMessageEvent.Direct(session, message)
-                        )
+                    if (message.channelId == session.dmId) {
+                        if (_activeDirectSession.value?.dmId == session.dmId) appendDirectMessageIfNew(message)
+                        _incomingMessages.tryEmit(ClientIncomingMessageEvent.Direct(session, message))
                     }
                 }
             }
@@ -1975,21 +1994,21 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
     private fun closeSocketOnly() {
         channelReconnectJob?.cancel()
         channelReconnectJob = null
-        try {
-            activeWebSocket?.close(1000, "Client exited channel")
-        } catch (_: Exception) {
-        }
+        channelSubscriptions.values.forEach { (_, socket) -> runCatching { socket.close(1000, "Repository released") } }
+        channelSubscriptions.clear()
+        channelSubscriptionSessions.clear()
         activeWebSocket = null
+        _hasNotificationSubscriptions.value = directSubscriptionSessions.isNotEmpty()
     }
 
     private fun closeDirectSocketOnly() {
         directReconnectJob?.cancel()
         directReconnectJob = null
-        try {
-            activeDirectWebSocket?.close(1000, "Client exited direct chat")
-        } catch (_: Exception) {
-        }
+        directSubscriptions.values.forEach { (_, socket) -> runCatching { socket.close(1000, "Repository released") } }
+        directSubscriptions.clear()
+        directSubscriptionSessions.clear()
         activeDirectWebSocket = null
+        _hasNotificationSubscriptions.value = channelSubscriptionSessions.isNotEmpty()
     }
 
     private fun parseStringArray(arr: JSONArray): List<String> {

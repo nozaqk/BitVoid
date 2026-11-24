@@ -318,19 +318,30 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         }
         viewModelScope.launch {
             var wasMonitoringMessages = false
-            combine(
-                clientRepository.activeChannelSession,
-                clientRepository.activeDirectSession
-            ) { channelSession, directSession ->
-                (channelSession != null && !channelSession.isLiveClassRoom) || directSession != null
-            }.collect { hasActiveConversation ->
-                if (hasActiveConversation) {
+            clientRepository.hasNotificationSubscriptions.collect { hasSubscriptions ->
+                if (hasSubscriptions) {
                     BitVoidForegroundService.startMessageMonitoring(appContext)
                     wasMonitoringMessages = true
                 } else if (wasMonitoringMessages) {
                     BitVoidForegroundService.stopMessageMonitoring(appContext)
                     wasMonitoringMessages = false
                 }
+            }
+        }
+        viewModelScope.launch {
+            combine(
+                selectedBottomTab,
+                clientRepository.activeChannelSession,
+                clientRepository.activeDirectSession
+            ) { tab, channelSession, directSession ->
+                when (tab) {
+                    // HUB displays channel chat; direct chat is shown only on the PCHAT tab.
+                    AppBottomTab.HUB -> channelSession?.takeUnless { it.isLiveClassRoom }?.channelId
+                    AppBottomTab.PCHAT -> directSession?.dmId
+                    else -> null
+                }
+            }.collect { visibleConversationId ->
+                BitVoidForegroundService.setVisibleConversation(visibleConversationId)
             }
         }
         viewModelScope.launch {

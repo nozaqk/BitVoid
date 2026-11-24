@@ -66,6 +66,23 @@ class BitVoidForegroundService : Service() {
         private const val FRIENDLY_HTTP_PORT = 80
         const val DEFAULT_SSID = BitVoidNetworkConfig.DEFAULT_VISIBLE_SSID
 
+        @Volatile
+        private var appInForeground = false
+
+        @Volatile
+        private var visibleConversationId: String? = null
+
+        /** Tracks whether a conversation is actually on screen, not merely connected. */
+        fun setAppInForeground(isForeground: Boolean) {
+            // Keep the last visible conversation across background/foreground transitions.
+            // The foreground flag alone decides whether notifications are suppressed.
+            appInForeground = isForeground
+        }
+
+        fun setVisibleConversation(conversationId: String?) {
+            visibleConversationId = conversationId?.trim()?.takeIf { it.isNotEmpty() }
+        }
+
         fun startHostNode(context: Context) {
             val intent = Intent(context, BitVoidForegroundService::class.java).apply {
                 action = ACTION_START_HOST_NODE
@@ -1314,6 +1331,15 @@ class BitVoidForegroundService : Service() {
     }
 
     private fun showMessageNotification(spec: MessageNotificationSpec) {
+        if (BitVoidMessageNotifications.shouldSuppress(
+                spec = spec,
+                isAppInForeground = appInForeground,
+                visibleConversationId = visibleConversationId
+            )
+        ) {
+            return
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
             PackageManager.PERMISSION_GRANTED
