@@ -676,9 +676,9 @@ class BitVoidLocalServerTest {
     }
 
     @Test
-    fun `bottom tabs match Home Hub P Chat Settings and autonomous loopback URL is allowed`() {
+    fun `bottom tabs match Chats Channels People Settings and autonomous loopback URL is allowed`() {
         val labels = com.bitvoid.network.model.AppBottomTab.entries.map { it.label }
-        assertEquals(listOf("Home", "Hub", "P.Chat", "Settings"), labels)
+        assertEquals(listOf("Chats", "Channels", "People", "Settings"), labels)
 
         val normalizedLoopback = BitVoidClientManager.normalizeLocalPortalUrl("http://127.0.0.1:$testPort")
         assertEquals("http://127.0.0.1:$testPort", normalizedLoopback)
