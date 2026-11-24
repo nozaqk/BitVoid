@@ -24,11 +24,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddComment
+import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -58,6 +60,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -68,6 +71,7 @@ import com.bitvoid.network.backend.BitVoidBackendState
 import com.bitvoid.network.backend.BitVoidBackendType
 import com.bitvoid.network.channel.BitVoidChannel
 import com.bitvoid.network.channel.BitVoidChannelManager
+import com.bitvoid.network.channel.BitVoidSpaceKind
 import com.bitvoid.network.client.CachedConversationPreview
 import com.bitvoid.network.client.RemoteChannelSummary
 import com.bitvoid.network.direct.DirectConversationSummary
@@ -75,7 +79,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private enum class ConversationKind { CHANNEL, DIRECT }
+private enum class ConversationKind { LEGACY_CHANNEL, GROUP, BROADCAST_CHANNEL, DIRECT }
 
 private data class TelegramConversationItem(
     val stableId: String,
@@ -85,6 +89,7 @@ private data class TelegramConversationItem(
     val kind: ConversationKind,
     val peerUsername: String? = null,
     val channelId: String? = null,
+    val avatarDataUrl: String? = null,
     val online: Boolean = false,
     val unreadCount: Int = 0,
     val messageCount: Int = 0
@@ -104,6 +109,9 @@ fun BitVoidChatsScreen(
     onRefresh: () -> Unit,
     onOpenChannel: (String) -> Unit,
     onOpenDirectChat: (String) -> Unit,
+    onCreateGroup: () -> Unit,
+    onCreateBroadcastChannel: () -> Unit,
+    onDiscoverChannels: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var searchQuery by rememberSaveable { mutableStateOf("") }
@@ -134,41 +142,64 @@ fun BitVoidChatsScreen(
         onlineSet
     ) {
         val channels = if (useRemoteChannels) {
-            remoteChannels.mapNotNull { channel ->
-                val id = channel.channelId ?: return@mapNotNull null
-                TelegramConversationItem(
-                    stableId = id,
-                    title = channel.name,
-                    preview = channel.lastMessagePreview
-                        ?: if (channel.messageCount > 0) {
-                            "${channel.messageCount} messages"
-                        } else {
-                            "No messages yet"
-                        },
-                    timestampMs = channel.lastTimestampMs,
-                    kind = ConversationKind.CHANNEL,
-                    channelId = id,
-                    online = channel.activePeers > 0,
-                    unreadCount = unreadCounts[id] ?: 0,
-                    messageCount = channel.messageCount
-                )
-            }
+            remoteChannels
+                .filter { channel ->
+                    channel.spaceKind != BitVoidSpaceKind.BROADCAST_CHANNEL || channel.isSubscribed
+                }
+                .mapNotNull { channel ->
+                    val id = channel.channelId ?: return@mapNotNull null
+                    TelegramConversationItem(
+                        stableId = id,
+                        title = channel.name,
+                        preview = channel.lastMessagePreview
+                            ?: when (channel.spaceKind) {
+                                BitVoidSpaceKind.GROUP -> "${channel.memberCount} members"
+                                BitVoidSpaceKind.BROADCAST_CHANNEL -> "${channel.subscriberCount} subscribers"
+                                BitVoidSpaceKind.LEGACY_CHAT -> if (channel.messageCount > 0) {
+                                    "${channel.messageCount} messages"
+                                } else {
+                                    "No messages yet"
+                                }
+                            },
+                        timestampMs = channel.lastTimestampMs,
+                        kind = channel.spaceKind.toConversationKind(),
+                        channelId = id,
+                        avatarDataUrl = channel.avatarDataUrl,
+                        online = channel.activePeers > 0,
+                        unreadCount = unreadCounts[id] ?: 0,
+                        messageCount = channel.messageCount
+                    )
+                }
         } else {
             hostChannels
-                .filter { !it.isHidden || it.creatorUsername.equals(myUsername, ignoreCase = true) }
+                .filter { channel ->
+                    when (channel.spaceKind) {
+                        BitVoidSpaceKind.GROUP,
+                        BitVoidSpaceKind.BROADCAST_CHANNEL -> channel.members.any {
+                            it.username.equals(myUsername, ignoreCase = true)
+                        }
+                        BitVoidSpaceKind.LEGACY_CHAT -> !channel.isHidden ||
+                            channel.creatorUsername.equals(myUsername, ignoreCase = true)
+                    }
+                }
                 .map { channel ->
                     TelegramConversationItem(
                         stableId = channel.channelId,
                         title = channel.name,
                         preview = channel.lastMessagePreview
-                            ?: if (channel.channelId == BitVoidChannelManager.DEFAULT_PUBLIC_CHANNEL_ID) {
-                                "Campus-wide conversation"
-                            } else {
-                                "No messages yet"
+                            ?: when (channel.spaceKind) {
+                                BitVoidSpaceKind.GROUP -> "${channel.members.size} members"
+                                BitVoidSpaceKind.BROADCAST_CHANNEL -> "${channel.subscriberCount} subscribers"
+                                BitVoidSpaceKind.LEGACY_CHAT -> if (channel.channelId == BitVoidChannelManager.DEFAULT_PUBLIC_CHANNEL_ID) {
+                                    "Campus-wide conversation"
+                                } else {
+                                    "No messages yet"
+                                }
                             },
                         timestampMs = channel.lastTimestampMs,
-                        kind = ConversationKind.CHANNEL,
+                        kind = channel.spaceKind.toConversationKind(),
                         channelId = channel.channelId,
+                        avatarDataUrl = channel.avatarDataUrl,
                         online = channel.activeParticipants.any { it.isWebSocketConnected },
                         unreadCount = unreadCounts[channel.channelId] ?: 0,
                         messageCount = channel.messageCount
@@ -214,7 +245,7 @@ fun BitVoidChatsScreen(
                         title = cached.conversationId.replace('-', ' ').replaceFirstChar { it.uppercase() },
                         preview = cached.lastMessage.text.ifBlank { "Queued attachment" },
                         timestampMs = cached.lastMessage.timestampMs,
-                        kind = ConversationKind.CHANNEL,
+                        kind = ConversationKind.LEGACY_CHANNEL,
                         channelId = cached.conversationId,
                         unreadCount = unreadCounts[cached.conversationId] ?: 0,
                         messageCount = cached.messageCount
@@ -347,7 +378,7 @@ fun BitVoidChatsScreen(
     if (showNewMessage) {
         NewMessageDialog(
             onlineUsers = onlineUsers,
-            channels = conversations.filter { it.kind == ConversationKind.CHANNEL },
+            channels = conversations.filter { it.kind != ConversationKind.DIRECT },
             onDismiss = { showNewMessage = false },
             onOpenUser = { username ->
                 showNewMessage = false
@@ -356,6 +387,18 @@ fun BitVoidChatsScreen(
             onOpenChannel = { channelId ->
                 showNewMessage = false
                 onOpenChannel(channelId)
+            },
+            onCreateGroup = {
+                showNewMessage = false
+                onCreateGroup()
+            },
+            onCreateBroadcastChannel = {
+                showNewMessage = false
+                onCreateBroadcastChannel()
+            },
+            onDiscoverChannels = {
+                showNewMessage = false
+                onDiscoverChannels()
             }
         )
     }
@@ -561,22 +604,30 @@ private fun ConversationAvatar(item: TelegramConversationItem) {
     )
     val color = palette[(item.stableId.hashCode() and Int.MAX_VALUE) % palette.size]
     Box(modifier = Modifier.size(56.dp)) {
-        Box(
-            modifier = Modifier
-                .size(54.dp)
-                .clip(CircleShape)
-                .background(color),
-            contentAlignment = Alignment.Center
-        ) {
-            if (item.kind == ConversationKind.CHANNEL && item.title.isBlank()) {
-                Icon(Icons.Filled.Group, contentDescription = null, tint = Color.White)
-            } else {
-                Text(
-                    text = initials(item.title),
-                    color = Color.White,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
+        if (!item.avatarDataUrl.isNullOrBlank()) {
+            SpaceAvatar(
+                dataUrl = item.avatarDataUrl,
+                fallback = if (item.kind == ConversationKind.BROADCAST_CHANNEL) Icons.Filled.Campaign else Icons.Filled.Group,
+                modifier = Modifier.size(54.dp)
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(54.dp)
+                    .clip(CircleShape)
+                    .background(color),
+                contentAlignment = Alignment.Center
+            ) {
+                when (item.kind) {
+                    ConversationKind.GROUP -> Icon(Icons.Filled.Group, contentDescription = null, tint = Color.White)
+                    ConversationKind.BROADCAST_CHANNEL -> Icon(Icons.Filled.Campaign, contentDescription = null, tint = Color.White)
+                    else -> Text(
+                        text = initials(item.title),
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
         if (item.online) {
@@ -638,7 +689,10 @@ private fun NewMessageDialog(
     channels: List<TelegramConversationItem>,
     onDismiss: () -> Unit,
     onOpenUser: (String) -> Unit,
-    onOpenChannel: (String) -> Unit
+    onOpenChannel: (String) -> Unit,
+    onCreateGroup: () -> Unit,
+    onCreateBroadcastChannel: () -> Unit,
+    onDiscoverChannels: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -648,6 +702,30 @@ private fun NewMessageDialog(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                item(key = "new_create_group") {
+                    NewSpaceActionRow(
+                        icon = Icons.Filled.PersonAdd,
+                        title = "Create Group",
+                        subtitle = "Message multiple members",
+                        onClick = onCreateGroup
+                    )
+                }
+                item(key = "new_create_channel") {
+                    NewSpaceActionRow(
+                        icon = Icons.Filled.Campaign,
+                        title = "Create Channel",
+                        subtitle = "Broadcast posts to subscribers",
+                        onClick = onCreateBroadcastChannel
+                    )
+                }
+                item(key = "new_discover_channels") {
+                    NewSpaceActionRow(
+                        icon = Icons.Filled.Search,
+                        title = "Discover Channels",
+                        subtitle = "Search public channels or use an invitation",
+                        onClick = onDiscoverChannels
+                    )
+                }
                 if (onlineUsers.isNotEmpty()) {
                     item {
                         Text(
@@ -709,6 +787,44 @@ private fun NewMessageDialog(
             TextButton(onClick = onDismiss) { Text("CLOSE") }
         }
     )
+}
+
+@Composable
+private fun NewSpaceActionRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    Card(
+        onClick = onClick,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, fontWeight = FontWeight.SemiBold)
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+private fun BitVoidSpaceKind.toConversationKind(): ConversationKind = when (this) {
+    BitVoidSpaceKind.LEGACY_CHAT -> ConversationKind.LEGACY_CHANNEL
+    BitVoidSpaceKind.GROUP -> ConversationKind.GROUP
+    BitVoidSpaceKind.BROADCAST_CHANNEL -> ConversationKind.BROADCAST_CHANNEL
 }
 
 private fun initials(value: String): String {

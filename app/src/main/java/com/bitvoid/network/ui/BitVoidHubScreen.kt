@@ -32,13 +32,16 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ContentCopy
@@ -46,11 +49,14 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.School
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.AlertDialog
@@ -82,6 +88,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -92,6 +99,8 @@ import com.bitvoid.network.call.BitVoidCallState
 import com.bitvoid.network.call.DirectCallPhase
 import com.bitvoid.network.channel.BitVoidChannel
 import com.bitvoid.network.channel.BitVoidChannelManager
+import com.bitvoid.network.channel.BitVoidSpaceKind
+import com.bitvoid.network.channel.BitVoidSpaceRole
 import com.bitvoid.network.client.ClientChannelSession
 import com.bitvoid.network.client.ClientChatAttachment
 import com.bitvoid.network.client.ClientChatMessage
@@ -101,6 +110,8 @@ import com.bitvoid.network.client.MessageDeliveryState
 import com.bitvoid.network.client.RemoteChannelSummary
 import com.bitvoid.network.client.RemoteLiveClassSummary
 import com.bitvoid.network.client.RemoteMediaItem
+import com.bitvoid.network.client.RemoteSpaceDetails
+import com.bitvoid.network.client.RemoteSpaceInvitation
 import com.bitvoid.network.direct.DirectConversationSummary
 import com.bitvoid.network.model.ClientConnectionStatus
 import com.bitvoid.network.model.ClientState
@@ -121,7 +132,11 @@ private data class HubChannelDisplayItem(
     val mediaCount: Int,
     val activePeers: Int,
     val messageCount: Int,
-    val isGeneralChat: Boolean
+    val isGeneralChat: Boolean,
+    val spaceKind: BitVoidSpaceKind = BitVoidSpaceKind.LEGACY_CHAT,
+    val myRole: BitVoidSpaceRole? = null,
+    val memberCount: Int = 0,
+    val subscriberCount: Int = 0
 )
 
 @Composable
@@ -370,18 +385,32 @@ fun BitVoidHubScreen(
     channelPeersCount: Int,
     isJoiningChannel: Boolean,
     channelJoinError: String?,
+    activeSpaceDetails: RemoteSpaceDetails?,
+    isLoadingSpaceDetails: Boolean,
+    spaceError: String?,
     activeDirectSession: ClientDirectSession?,
     directMessages: List<ClientChatMessage>,
     directWsStatus: ClientWsStatus,
     isOpeningDirectChat: Boolean,
     directChatError: String?,
     onOpenCreateChannel: () -> Unit,
+    onOpenCreateGroup: () -> Unit,
+    onOpenCreateBroadcastChannel: () -> Unit,
+    onOpenDiscoverChannels: () -> Unit,
     onEditChannel: (channelId: String) -> Unit,
     onDeleteChannel: (channelId: String) -> Unit,
     onCopyChannelId: (label: String, channelId: String) -> Unit,
     onOpenChannel: (channelId: String, privateKey: String?) -> Unit,
     onSendChatMessage: (String) -> Unit,
     onLeaveChannel: () -> Unit,
+    onRefreshSpaceDetails: () -> Unit,
+    onAddSpaceMember: (String, (Result<RemoteSpaceDetails>) -> Unit) -> Unit,
+    onRemoveSpaceMember: (String, (Result<RemoteSpaceDetails>) -> Unit) -> Unit,
+    onSetSpaceMemberRole: (String, BitVoidSpaceRole, (Result<RemoteSpaceDetails>) -> Unit) -> Unit,
+    onUpdateSpace: (String, String, Uri?, Boolean, Boolean?, (Result<RemoteSpaceDetails>) -> Unit) -> Unit,
+    onCreateSpaceInvitation: ((Result<RemoteSpaceInvitation>) -> Unit) -> Unit,
+    onLeaveSpace: ((Result<Unit>) -> Unit) -> Unit,
+    onDeleteSpace: ((Result<Unit>) -> Unit) -> Unit,
     onOpenDirectChat: (targetUsername: String) -> Unit,
     onSendDirectMessage: (String) -> Unit,
     onLeaveDirectChat: () -> Unit,
@@ -400,6 +429,11 @@ fun BitVoidHubScreen(
     modifier: Modifier = Modifier
 ) {
     var pendingAutoVoiceCall by rememberSaveable { mutableStateOf(false) }
+    var showActiveSpaceInfo by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(activeChannelSession?.channelId) {
+        showActiveSpaceInfo = false
+    }
 
     if (activeDirectSession != null) {
         val directCallStageActive = callUiState.isInRoom(activeDirectSession.dmId)
@@ -475,6 +509,26 @@ fun BitVoidHubScreen(
     }
 
     if (activeChannelSession != null) {
+        if (activeChannelSession.spaceKind != BitVoidSpaceKind.LEGACY_CHAT && showActiveSpaceInfo) {
+            BackHandler { showActiveSpaceInfo = false }
+            BitVoidSpaceInfoScreen(
+                session = activeChannelSession,
+                details = activeSpaceDetails,
+                isLoading = isLoadingSpaceDetails,
+                errorMessage = spaceError,
+                onBack = { showActiveSpaceInfo = false },
+                onRefresh = onRefreshSpaceDetails,
+                onAddMember = onAddSpaceMember,
+                onRemoveMember = onRemoveSpaceMember,
+                onSetRole = onSetSpaceMemberRole,
+                onUpdate = onUpdateSpace,
+                onCreateInvitation = onCreateSpaceInvitation,
+                onLeave = onLeaveSpace,
+                onDelete = onDeleteSpace,
+                modifier = modifier
+            )
+            return
+        }
         BackHandler { onLeaveChannel() }
         WhatsAppChannelChatSpace(
             session = activeChannelSession,
@@ -483,6 +537,12 @@ fun BitVoidHubScreen(
             peersCount = channelPeersCount,
             isUploadingFile = isUploadingFile,
             onBack = onLeaveChannel,
+            onOpenInfo = {
+                if (activeChannelSession.spaceKind != BitVoidSpaceKind.LEGACY_CHAT) {
+                    showActiveSpaceInfo = true
+                    onRefreshSpaceDetails()
+                }
+            },
             onSendMessage = onSendChatMessage,
             onUploadFile = onUploadChannelFile,
             onBuildStreamUrl = onBuildStreamUrl,
@@ -544,7 +604,11 @@ fun BitVoidHubScreen(
                     mediaCount = rc.mediaCount,
                     activePeers = rc.activePeers,
                     messageCount = rc.messageCount,
-                    isGeneralChat = rc.channelId == BitVoidChannelManager.DEFAULT_PUBLIC_CHANNEL_ID
+                    isGeneralChat = rc.channelId == BitVoidChannelManager.DEFAULT_PUBLIC_CHANNEL_ID,
+                    spaceKind = rc.spaceKind,
+                    myRole = rc.myRole,
+                    memberCount = rc.memberCount,
+                    subscriberCount = rc.subscriberCount
                 )
             }
         } else {
@@ -552,8 +616,14 @@ fun BitVoidHubScreen(
             // directly without typing the private ID again.
             hostChannels
                 .filter { channel ->
-                    !channel.isHidden ||
-                        channel.creatorUsername.equals(myUsername, ignoreCase = true)
+                    when (channel.spaceKind) {
+                        BitVoidSpaceKind.LEGACY_CHAT -> !channel.isHidden ||
+                            channel.creatorUsername.equals(myUsername, ignoreCase = true)
+                        BitVoidSpaceKind.GROUP,
+                        BitVoidSpaceKind.BROADCAST_CHANNEL -> channel.isPublic || channel.members.any {
+                            it.username.equals(myUsername, ignoreCase = true)
+                        }
+                    }
                 }
                 .map { hc ->
                     val isOwner = hc.creatorUsername.equals(myUsername, ignoreCase = true)
@@ -567,15 +637,29 @@ fun BitVoidHubScreen(
                         mediaCount = hc.mediaList.size,
                         activePeers = hc.activeParticipants.count { it.isWebSocketConnected },
                         messageCount = hc.messageCount,
-                        isGeneralChat = hc.channelId == BitVoidChannelManager.DEFAULT_PUBLIC_CHANNEL_ID
+                        isGeneralChat = hc.channelId == BitVoidChannelManager.DEFAULT_PUBLIC_CHANNEL_ID,
+                        spaceKind = hc.spaceKind,
+                        myRole = hc.members.firstOrNull {
+                            it.username.equals(myUsername, ignoreCase = true)
+                        }?.role,
+                        memberCount = hc.members.size,
+                        subscriberCount = hc.subscriberCount
                     )
                 }
         }
     }
 
     val generalChannels = displayItems.filter { it.isGeneralChat }
-    val publicChannels = displayItems.filter { it.isPublic && !it.isGeneralChat }
-    val privateChannels = displayItems.filter { !it.isPublic }
+    val groupSpaces = displayItems.filter { it.spaceKind == BitVoidSpaceKind.GROUP }
+    val broadcastSpaces = displayItems.filter {
+        it.spaceKind == BitVoidSpaceKind.BROADCAST_CHANNEL && it.myRole != null
+    }
+    val publicChannels = displayItems.filter {
+        it.spaceKind == BitVoidSpaceKind.LEGACY_CHAT && it.isPublic && !it.isGeneralChat
+    }
+    val privateChannels = displayItems.filter {
+        it.spaceKind == BitVoidSpaceKind.LEGACY_CHAT && !it.isPublic
+    }
     val selectablePeers = remember(knownUsers, myUsername) {
         knownUsers.filter { !it.equals(myUsername, ignoreCase = true) }
     }
@@ -692,9 +776,57 @@ fun BitVoidHubScreen(
                 }
             }
 
+            item(key = "section_groups") {
+                Spacer(modifier = Modifier.height(6.dp))
+                HubSectionHeader(title = "GROUPS", accent = VoidMint)
+            }
+            if (groupSpaces.isEmpty()) {
+                item(key = "empty_groups") {
+                    Text(
+                        "No groups yet. Tap + to create one with members by username.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                items(groupSpaces, key = { "group_${it.channelId ?: it.name}" }) { group ->
+                    HubChannelRow(
+                        title = group.name,
+                        subtitle = "${group.memberCount} members · ${group.myRole?.name?.replace('_', ' ') ?: "MEMBER"} · ${group.messageCount} msgs",
+                        isPublic = true,
+                        onClick = { group.channelId?.let { onOpenChannel(it, null) } },
+                        testTag = "hub_group_${group.channelId ?: group.name}"
+                    )
+                }
+            }
+
+            item(key = "section_broadcast_channels") {
+                Spacer(modifier = Modifier.height(6.dp))
+                HubSectionHeader(title = "CHANNELS", accent = VoidCyan)
+            }
+            if (broadcastSpaces.isEmpty()) {
+                item(key = "empty_broadcast_channels") {
+                    Text(
+                        "No subscriptions yet. Tap + to create or discover a Channel.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                items(broadcastSpaces, key = { "broadcast_${it.channelId ?: it.name}" }) { channel ->
+                    HubChannelRow(
+                        title = channel.name,
+                        subtitle = "${channel.subscriberCount} subscribers · ${channel.myRole?.name?.replace('_', ' ') ?: "SUBSCRIBER"} · ${channel.messageCount} posts",
+                        isPublic = channel.isPublic,
+                        onClick = { channel.channelId?.let { onOpenChannel(it, null) } },
+                        testTag = "hub_broadcast_${channel.channelId ?: channel.name}"
+                    )
+                }
+            }
+
             item(key = "section_public") {
                 Spacer(modifier = Modifier.height(6.dp))
-                HubSectionHeader(title = "PUBLIC", accent = VoidCyan)
+                HubSectionHeader(title = "MEDIA CHAT SPACES · PUBLIC", accent = VoidCyan)
             }
 
             if (publicChannels.isEmpty()) {
@@ -725,7 +857,7 @@ fun BitVoidHubScreen(
 
             item(key = "section_private") {
                 Spacer(modifier = Modifier.height(6.dp))
-                HubSectionHeader(title = "PRIVATE", accent = VoidAmber)
+                HubSectionHeader(title = "MEDIA CHAT SPACES · PRIVATE", accent = VoidAmber)
             }
 
             if (privateChannels.isEmpty()) {
@@ -925,7 +1057,42 @@ fun BitVoidHubScreen(
                 )
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 520.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    HubQuickActionCard(
+                        icon = Icons.Filled.GroupAdd,
+                        title = "Create Group",
+                        subtitle = "Start a role-managed group by username",
+                        accent = VoidMint,
+                        onClick = {
+                            showPlusChooserDialog = false
+                            onOpenCreateGroup()
+                        }
+                    )
+                    HubQuickActionCard(
+                        icon = Icons.Filled.Campaign,
+                        title = "Create Broadcast Channel",
+                        subtitle = "Public or private · administrators publish",
+                        accent = VoidCyan,
+                        onClick = {
+                            showPlusChooserDialog = false
+                            onOpenCreateBroadcastChannel()
+                        }
+                    )
+                    HubQuickActionCard(
+                        icon = Icons.Filled.Search,
+                        title = "Discover Channels",
+                        subtitle = "Search public channels or enter an invitation",
+                        accent = VoidAmber,
+                        onClick = {
+                            showPlusChooserDialog = false
+                            onOpenDiscoverChannels()
+                        }
+                    )
                     Card(
                         onClick = {
                             showPlusChooserDialog = false
@@ -962,13 +1129,13 @@ fun BitVoidHubScreen(
                             }
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "Create Channel",
+                                    text = "Create Media Chat Space",
                                     style = MaterialTheme.typography.titleSmall,
                                     color = MaterialTheme.colorScheme.onSurface,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = "Public, Private (Show), or Private (Hidden)",
+                                    text = "Legacy public/private space with assigned vault media",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -1339,6 +1506,51 @@ fun BitVoidHubScreen(
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun HubQuickActionCard(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    accent: Color,
+    onClick: () -> Unit
+) {
+    Card(
+        onClick = onClick,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.background),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.65f)),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(accent.copy(alpha = 0.14f))
+                    .border(1.dp, accent, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = accent)
+        }
     }
 }
 
@@ -2147,6 +2359,7 @@ private fun WhatsAppChannelChatSpace(
     peersCount: Int,
     isUploadingFile: Boolean,
     onBack: () -> Unit,
+    onOpenInfo: () -> Unit,
     onSendMessage: (String) -> Unit,
     onUploadFile: (Uri, String) -> Unit,
     onBuildStreamUrl: (RemoteMediaItem, String?) -> String,
@@ -2211,20 +2424,40 @@ private fun WhatsAppChannelChatSpace(
                     .border(1.dp, accent, CircleShape),
                 contentAlignment = Alignment.Center
             ) {
-                if (session.isPublic) {
-                    Text(
-                        text = "#",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = VoidMint,
-                        fontWeight = FontWeight.Bold
+                if (!session.avatarDataUrl.isNullOrBlank() && session.spaceKind != BitVoidSpaceKind.LEGACY_CHAT) {
+                    SpaceAvatar(
+                        dataUrl = session.avatarDataUrl,
+                        fallback = if (session.spaceKind == BitVoidSpaceKind.GROUP) Icons.Filled.Group else Icons.Filled.Campaign,
+                        modifier = Modifier.fillMaxSize()
                     )
-                } else {
-                    Icon(
-                        imageVector = Icons.Filled.Lock,
+                } else when (session.spaceKind) {
+                    BitVoidSpaceKind.GROUP -> Icon(
+                        Icons.Filled.Group,
                         contentDescription = null,
-                        tint = VoidAmber,
-                        modifier = Modifier.size(18.dp)
+                        tint = accent,
+                        modifier = Modifier.size(20.dp)
                     )
+                    BitVoidSpaceKind.BROADCAST_CHANNEL -> Icon(
+                        Icons.Filled.Campaign,
+                        contentDescription = null,
+                        tint = accent,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    BitVoidSpaceKind.LEGACY_CHAT -> if (session.isPublic) {
+                        Text(
+                            text = "#",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = VoidMint,
+                            fontWeight = FontWeight.Bold
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Filled.Lock,
+                            contentDescription = null,
+                            tint = VoidAmber,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
 
@@ -2238,16 +2471,36 @@ private fun WhatsAppChannelChatSpace(
                 )
                 Text(
                     text = buildString {
-                        append(if (session.isPublic) "PUBLIC" else "PRIVATE")
+                        when (session.spaceKind) {
+                            BitVoidSpaceKind.GROUP -> append("${session.memberCount} MEMBERS")
+                            BitVoidSpaceKind.BROADCAST_CHANNEL -> append("${session.subscriberCount} SUBSCRIBERS")
+                            BitVoidSpaceKind.LEGACY_CHAT -> append(if (session.isPublic) "PUBLIC" else "PRIVATE")
+                        }
+                        session.role?.let { append(" · ${it.name.replace('_', ' ')}") }
                         append(" · ")
-                        append(if (wsStatus == ClientWsStatus.LIVE) "WS LIVE" else wsStatus.name)
-                        append(" · $peersCount peer(s)")
+                        append(if (wsStatus == ClientWsStatus.LIVE) "LIVE" else wsStatus.name)
+                        if (session.spaceKind != BitVoidSpaceKind.BROADCAST_CHANNEL) append(" · $peersCount peer(s)")
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = if (wsStatus == ClientWsStatus.LIVE) VoidMint else VoidCyan,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+            }
+
+            if (session.spaceKind != BitVoidSpaceKind.LEGACY_CHAT) {
+                IconButton(
+                    onClick = onOpenInfo,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("space_info_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.MoreVert,
+                        contentDescription = if (session.spaceKind == BitVoidSpaceKind.GROUP) "Group information" else "Channel information",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             IconButton(
@@ -2364,10 +2617,14 @@ private fun WhatsAppChannelChatSpace(
                             .padding(horizontal = 14.dp, vertical = 8.dp)
                     ) {
                         Text(
-                            text = if (session.isPublic) {
-                                "${session.name} · Public channel chat space (you: ${session.callsign})"
-                            } else {
-                                "${session.name} · Private ID-locked chat space (you: ${session.callsign})"
+                            text = when (session.spaceKind) {
+                                BitVoidSpaceKind.GROUP -> "${session.name} · Group conversation (you: ${session.callsign})"
+                                BitVoidSpaceKind.BROADCAST_CHANNEL -> "${session.name} · ${if (session.isPublic) "Public" else "Private"} broadcast channel"
+                                BitVoidSpaceKind.LEGACY_CHAT -> if (session.isPublic) {
+                                    "${session.name} · Public channel chat space (you: ${session.callsign})"
+                                } else {
+                                    "${session.name} · Private ID-locked chat space (you: ${session.callsign})"
+                                }
                             },
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -2385,7 +2642,11 @@ private fun WhatsAppChannelChatSpace(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "No messages yet. Say hello to start this channel conversation.",
+                            text = if (session.canPublish) {
+                                "No messages yet. Start the conversation."
+                            } else {
+                                "No posts yet. New posts from channel administrators will appear here."
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -2410,9 +2671,11 @@ private fun WhatsAppChannelChatSpace(
             }
         }
 
-        // Sticky Bottom Composer
+        // Sticky Bottom Composer. Broadcast subscribers intentionally receive a read-only view;
+        // the same rule is enforced again by the repository and server.
         HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
-        Row(
+        if (session.canPublish) {
+            Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(MaterialTheme.colorScheme.surface)
@@ -2497,6 +2760,23 @@ private fun WhatsAppChannelChatSpace(
                         modifier = Modifier.size(20.dp)
                     )
                 }
+            }
+        }
+        } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(Icons.Filled.Campaign, contentDescription = null, tint = VoidCyan)
+                Text(
+                    "Only the channel owner and administrators can publish.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
