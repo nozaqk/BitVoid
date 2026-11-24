@@ -479,14 +479,22 @@ class BitVoidLocalServerTest {
             }
             assertTrue(repo.channelMessages.value.any { it.text == "Channel WS telemetry check" })
 
-            // Verify HTTP channel chat sees the same message
-            val chatHttp = (URL("http://127.0.0.1:$testPort/api/channels/${prvChannel.channelId}/chat").openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                setRequestProperty("X-Channel-Token", session.token)
+            // Verify HTTP channel chat sees the same message. The repository updates its local
+            // cache before the WebSocket frame is durably accepted, so poll the server briefly.
+            var persistedChatBody = ""
+            attempts = 0
+            while (!persistedChatBody.contains("Channel WS telemetry check") && attempts < 25) {
+                val chatHttp = (URL("http://127.0.0.1:$testPort/api/channels/${prvChannel.channelId}/chat").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    setRequestProperty("X-Channel-Token", session.token)
+                }
+                assertEquals(200, chatHttp.responseCode)
+                persistedChatBody = String(chatHttp.inputStream.readBytes())
+                chatHttp.disconnect()
+                if (!persistedChatBody.contains("Channel WS telemetry check")) delay(50)
+                attempts++
             }
-            assertEquals(200, chatHttp.responseCode)
-            assertTrue(String(chatHttp.inputStream.readBytes()).contains("Channel WS telemetry check"))
-            chatHttp.disconnect()
+            assertTrue(persistedChatBody.contains("Channel WS telemetry check"))
 
             // Toggling channel from Private -> Public revokes prior private tokens and broadcasts notice
             val toggleRes = BitVoidChannelManager.setChannelVisibility(prvChannel.channelId, isPublic = true)

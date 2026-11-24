@@ -15,10 +15,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Lan
-import androidx.compose.material.icons.filled.Login
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
@@ -297,7 +297,7 @@ fun BitVoidAccountAccessScreen(
                     } else {
                         Icon(
                             imageVector = if (mode == BitVoidAccessMode.LOGIN) {
-                                Icons.Filled.Login
+                                Icons.AutoMirrored.Filled.Login
                             } else {
                                 Icons.Filled.PersonAdd
                             },
