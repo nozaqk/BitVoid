@@ -150,6 +150,9 @@ fun BitVoidDashboard(
 ) {
     val mode by viewModel.selectedMode.collectAsStateWithLifecycle()
     val selectedBottomTab by viewModel.selectedBottomTab.collectAsStateWithLifecycle()
+    val backendState by viewModel.backendState.collectAsStateWithLifecycle()
+    val backendConfig by viewModel.backendConfig.collectAsStateWithLifecycle()
+    val unreadCounts by viewModel.unreadCounts.collectAsStateWithLifecycle()
     val hostState by viewModel.hostState.collectAsStateWithLifecycle()
     val auditLogs by viewModel.auditLogs.collectAsStateWithLifecycle()
     val nodeConnectionLogs by viewModel.nodeConnectionLogs.collectAsStateWithLifecycle()
@@ -158,6 +161,7 @@ fun BitVoidDashboard(
     val channels by viewModel.channels.collectAsStateWithLifecycle()
 
     val clientChannels by viewModel.clientChannels.collectAsStateWithLifecycle()
+    val cachedConversationPreviews by viewModel.cachedConversationPreviews.collectAsStateWithLifecycle()
     val activeChannelSession by viewModel.activeChannelSession.collectAsStateWithLifecycle()
     val channelMessages by viewModel.channelMessages.collectAsStateWithLifecycle()
     val clientWsStatus by viewModel.clientWsStatus.collectAsStateWithLifecycle()
@@ -247,12 +251,20 @@ fun BitVoidDashboard(
     }
 
     val settingsIdentityContent: @Composable () -> Unit = {
-        SettingsUserIdentityCard(
-            username = myUsername,
-            isDiscoverable = isUserIdDiscoverable,
-            onSetDiscoverable = { viewModel.setUserIdDiscoverable(it) },
-            onCopyUsername = ::copyToClipboard
-        )
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            SettingsUserIdentityCard(
+                username = myUsername,
+                isDiscoverable = isUserIdDiscoverable,
+                onSetDiscoverable = { viewModel.setUserIdDiscoverable(it) },
+                onCopyUsername = ::copyToClipboard
+            )
+            BackendConnectionSettingsCard(
+                state = backendState,
+                config = backendConfig,
+                onSave = viewModel::updateBackendSettings,
+                onRefresh = viewModel::refreshMessagingData
+            )
+        }
     }
 
     val pChatScreenContent: @Composable () -> Unit = {
@@ -276,6 +288,45 @@ fun BitVoidDashboard(
                 viewModel.uploadFileToActiveDirectChat(uri, caption)
             },
             onBuildAttachmentUrl = { path, token -> viewModel.buildAttachmentUrl(path, token) }
+        )
+    }
+
+    val chatsScreenContent: @Composable () -> Unit = {
+        BitVoidChatsScreen(
+            myUsername = myUsername,
+            backendState = backendState,
+            hostChannels = channels,
+            remoteChannels = clientChannels,
+            directConversations = directConversations,
+            cachedConversations = cachedConversationPreviews,
+            knownUsers = knownUsers,
+            unreadCounts = unreadCounts,
+            homeStatusContent = if (mode == NodeMode.HOST) {
+                {
+                    ConversationHomeTelemetry(
+                        hostState = hostState,
+                        channels = channels,
+                        onToggleHost = { viewModel.toggleHost() },
+                        onOpenGateway = onOpenGateway
+                    )
+                }
+            } else {
+                null
+            },
+            onRefresh = viewModel::refreshMessagingData,
+            onOpenChannel = { channelId ->
+                viewModel.markConversationRead(channelId)
+                viewModel.selectBottomTab(AppBottomTab.HUB)
+                viewModel.openHubChannel(channelId)
+            },
+            onOpenDirectChat = { username ->
+                val conversationId = directConversations
+                    .firstOrNull { it.peerUsername.equals(username, ignoreCase = true) }
+                    ?.dmId
+                if (conversationId != null) viewModel.markConversationRead(conversationId)
+                viewModel.selectBottomTab(AppBottomTab.PCHAT)
+                viewModel.openDirectChat(username)
+            }
         )
     }
 
@@ -372,7 +423,7 @@ fun BitVoidDashboard(
     }
 
     Scaffold(
-        containerColor = VoidObsidian,
+        containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets.safeDrawing,
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         bottomBar = {
@@ -387,7 +438,7 @@ fun BitVoidDashboard(
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
-                .background(VoidObsidian)
+                .background(MaterialTheme.colorScheme.background)
                 .padding(innerPadding)
                 .consumeWindowInsets(innerPadding)
         ) {
@@ -435,6 +486,7 @@ fun BitVoidDashboard(
                         onDeleteFile = { viewModel.deleteFile(it) },
                         onClearLogs = { viewModel.clearAuditLogs() },
                         clientHubContent = clientHubContent,
+                        chatsScreenContent = chatsScreenContent,
                         hubScreenContent = hubScreenContent,
                         pChatScreenContent = pChatScreenContent,
                         settingsIdentityContent = settingsIdentityContent,
@@ -485,6 +537,7 @@ fun BitVoidDashboard(
                     onDeleteFile = { viewModel.deleteFile(it) },
                     onClearLogs = { viewModel.clearAuditLogs() },
                     clientHubContent = clientHubContent,
+                    chatsScreenContent = chatsScreenContent,
                     hubScreenContent = hubScreenContent,
                     pChatScreenContent = pChatScreenContent,
                     settingsIdentityContent = settingsIdentityContent,
@@ -616,6 +669,7 @@ private fun CompactDashboardContent(
     onDeleteFile: (String) -> Unit,
     onClearLogs: () -> Unit,
     clientHubContent: @Composable () -> Unit,
+    chatsScreenContent: @Composable () -> Unit,
     hubScreenContent: @Composable () -> Unit,
     pChatScreenContent: @Composable () -> Unit,
     settingsIdentityContent: @Composable () -> Unit,
@@ -633,6 +687,12 @@ private fun CompactDashboardContent(
         }
         return
     }
+    if (selectedBottomTab == AppBottomTab.HOME) {
+        Box(modifier = modifier.fillMaxSize()) {
+            chatsScreenContent()
+        }
+        return
+    }
 
     var showAuditLogs by rememberSaveable { mutableStateOf(false) }
 
@@ -642,36 +702,7 @@ private fun CompactDashboardContent(
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         when (selectedBottomTab) {
-            AppBottomTab.HOME -> {
-                if (mode == NodeMode.HOST) {
-                    item(key = "host_power_card") {
-                        Box(modifier = Modifier.padding(horizontal = 16.dp)) {
-                            HostPowerControlCard(
-                                hostState = hostState,
-                                onToggleHost = onToggleHost
-                            )
-                        }
-                    }
-                    item(key = "host_telemetry_card") {
-                        Box(modifier = Modifier.padding(horizontal = 16.dp)) {
-                            PrivacyTelemetryCard(hostState = hostState)
-                        }
-                    }
-                    item(key = "gateway_overview_card") {
-                        Box(modifier = Modifier.padding(horizontal = 16.dp)) {
-                            GatewayOverviewCard(
-                                hostState = hostState,
-                                channels = channels,
-                                onOpenGateway = onOpenGateway
-                            )
-                        }
-                    }
-                } else {
-                    item(key = "home_client_hub") {
-                        clientHubContent()
-                    }
-                }
-            }
+            AppBottomTab.HOME -> Unit
 
             AppBottomTab.HUB -> Unit
 
@@ -742,6 +773,7 @@ private fun WideDashboardContent(
     onClearLogs: () -> Unit,
     onOpenClientNode: () -> Unit,
     clientHubContent: @Composable () -> Unit,
+    chatsScreenContent: @Composable () -> Unit,
     hubScreenContent: @Composable () -> Unit,
     pChatScreenContent: @Composable () -> Unit,
     settingsIdentityContent: @Composable () -> Unit
@@ -750,58 +782,8 @@ private fun WideDashboardContent(
 
     when (selectedBottomTab) {
         AppBottomTab.HOME -> {
-            if (mode == NodeMode.CLIENT) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                        .padding(vertical = 8.dp),
-                    contentAlignment = Alignment.TopCenter
-                ) {
-                    Box(modifier = Modifier.widthIn(max = 860.dp)) {
-                        clientHubContent()
-                    }
-                }
-                return
-            }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                LazyColumn(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight(),
-                    contentPadding = PaddingValues(bottom = 24.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    item {
-                        HostPowerControlCard(
-                            hostState = hostState,
-                            onToggleHost = onToggleHost
-                        )
-                    }
-                }
-
-                LazyColumn(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight(),
-                    contentPadding = PaddingValues(bottom = 24.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    item { PrivacyTelemetryCard(hostState = hostState) }
-                    item {
-                        GatewayOverviewCard(
-                            hostState = hostState,
-                            channels = channels,
-                            onOpenGateway = onOpenGateway
-                        )
-                    }
-                }
+            Box(modifier = Modifier.fillMaxSize()) {
+                chatsScreenContent()
             }
         }
 
@@ -870,6 +852,83 @@ private fun WideDashboardContent(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ConversationHomeTelemetry(
+    hostState: HostState,
+    channels: List<BitVoidChannel>,
+    onToggleHost: () -> Unit,
+    onOpenGateway: () -> Unit
+) {
+    val isRunning = hostState.status == HotspotStatus.ACTIVE ||
+        hostState.status == HotspotStatus.SERVER_ONLY
+    val bytesPerSecond = rememberGatewayBytesPerSecond(
+        totalBytes = hostState.bytesServed,
+        isRunning = isRunning
+    )
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("host_telemetry_card"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = if (isRunning) "Gateway telemetry live" else "Gateway is ready to start",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "${hostState.connectedNodesCount} nodes · " +
+                            "${countConnectedUsers(channels)} users · ${channels.size} channels · " +
+                            formatGatewaySpeed(bytesPerSecond),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("gateway_overview_card")
+                    )
+                }
+                IconButton(
+                    onClick = onOpenGateway,
+                    enabled = hostState.hasClientGatewayAddress
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.OpenInBrowser,
+                        contentDescription = "Open gateway portal",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+                IconButton(onClick = onToggleHost) {
+                    Icon(
+                        imageVector = Icons.Filled.PowerSettingsNew,
+                        contentDescription = if (isRunning) "Stop host" else "Start host",
+                        tint = if (isRunning) VoidCrimson else MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+            Text(
+                text = "${hostState.publicCount} public broadcasts · " +
+                    formatBytes(hostState.bytesServed) + " served · no identifying request logs",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }

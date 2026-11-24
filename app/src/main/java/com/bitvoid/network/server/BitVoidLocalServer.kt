@@ -904,6 +904,8 @@ class BitVoidLocalServer(
             put("mediaCount", ch.mediaList.size)
             put("activePeers", livePeers)
             put("messageCount", ch.messageCount)
+            put("lastMessagePreview", ch.lastMessagePreview ?: JSONObject.NULL)
+            put("lastTimestampMs", ch.lastTimestampMs)
         }.toString()
     }
 
@@ -1354,17 +1356,21 @@ class BitVoidLocalServer(
         }
 
         val rawBody = readPostBody(session)
-        val text = try {
-            JSONObject(rawBody).optString("text", "")
-        } catch (_: Exception) {
-            rawBody
-        }
+        val bodyJson = runCatching { JSONObject(rawBody) }.getOrNull()
+        val text = bodyJson?.optString("text", "") ?: rawBody
+        val stableMessageId = bodyJson?.optString("clientMessageId")
+            ?.takeIf { it.isNotBlank() }
+            ?: session.headers["idempotency-key"]
+        val clientTimestampMs = bodyJson?.optLong("timestampMs", 0L)
+            ?.takeIf { it > 0L }
 
         val callsign = validated?.callsign ?: "Anon-${ephemeralToken.takeLast(4).uppercase(Locale.US)}"
         val saved = BitVoidChannelManager.appendChatMessage(
             channelId = channelId,
             callsign = callsign,
-            rawText = text
+            rawText = text,
+            stableMessageId = stableMessageId,
+            clientTimestampMs = clientTimestampMs
         ) ?: return buildPaddedTextResponse(
             status = Response.Status.BAD_REQUEST,
             mimeType = "application/json; charset=utf-8",
@@ -1642,15 +1648,19 @@ class BitVoidLocalServer(
         val validated = BitVoidDirectChatManager.validateToken(authToken, requiredDmId = dmId)
             ?: return unauthorizedResponse(ephemeralToken)
         val rawBody = readPostBody(session)
-        val text = try {
-            JSONObject(rawBody).optString("text", "")
-        } catch (_: Exception) {
-            rawBody
-        }
+        val bodyJson = runCatching { JSONObject(rawBody) }.getOrNull()
+        val text = bodyJson?.optString("text", "") ?: rawBody
+        val stableMessageId = bodyJson?.optString("clientMessageId")
+            ?.takeIf { it.isNotBlank() }
+            ?: session.headers["idempotency-key"]
+        val clientTimestampMs = bodyJson?.optLong("timestampMs", 0L)
+            ?.takeIf { it > 0L }
         val saved = BitVoidDirectChatManager.appendMessage(
             dmId = dmId,
             senderUsername = validated.myUsername,
-            rawText = text
+            rawText = text,
+            stableMessageId = stableMessageId,
+            clientTimestampMs = clientTimestampMs
         ) ?: return buildPaddedTextResponse(
             status = Response.Status.BAD_REQUEST,
             mimeType = "application/json; charset=utf-8",
@@ -5679,16 +5689,14 @@ class BitVoidLocalServer(
 
         override fun onMessage(message: WebSocketFrame) {
             val raw = message.textPayload ?: return
-            val text = try {
-                val obj = JSONObject(raw)
-                obj.optString("text", raw)
-            } catch (_: Exception) {
-                raw
-            }
+            val json = runCatching { JSONObject(raw) }.getOrNull()
+            val text = json?.optString("text", raw) ?: raw
             BitVoidChannelManager.appendChatMessage(
                 channelId = channelSession.channelId,
                 callsign = channelSession.callsign,
-                rawText = text
+                rawText = text,
+                stableMessageId = json?.optString("clientMessageId")?.takeIf { it.isNotBlank() },
+                clientTimestampMs = json?.optLong("timestampMs", 0L)?.takeIf { it > 0L }
             )
         }
 
@@ -5801,16 +5809,14 @@ class BitVoidLocalServer(
 
         override fun onMessage(message: WebSocketFrame) {
             val raw = message.textPayload ?: return
-            val text = try {
-                val obj = JSONObject(raw)
-                obj.optString("text", raw)
-            } catch (_: Exception) {
-                raw
-            }
+            val json = runCatching { JSONObject(raw) }.getOrNull()
+            val text = json?.optString("text", raw) ?: raw
             BitVoidDirectChatManager.appendMessage(
                 dmId = directSession.dmId,
                 senderUsername = directSession.myUsername,
-                rawText = text
+                rawText = text,
+                stableMessageId = json?.optString("clientMessageId")?.takeIf { it.isNotBlank() },
+                clientTimestampMs = json?.optLong("timestampMs", 0L)?.takeIf { it > 0L }
             )
         }
 

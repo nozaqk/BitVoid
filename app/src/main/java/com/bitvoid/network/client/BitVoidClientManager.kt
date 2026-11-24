@@ -793,6 +793,11 @@ class BitVoidClientManager(private val context: Context) {
         }
     }
 
+    /** Releases Wi-Fi process pinning before using the internet/cloud backend. */
+    fun releaseNetworkBindingForCloud() {
+        connectivityManager.bindProcessToNetwork(null)
+    }
+
     fun disconnectFromNode() {
         log(
             NodeConnectionEventType.DISCONNECTED,

@@ -1,11 +1,11 @@
 # BitVoid
 
-BitVoid is an offline-first Android local video node. A host phone creates an Android **Local Only Hotspot** or uses an already-running system hotspot, keeps the node alive with a foreground service, and serves public broadcasts or token-gated private rooms over an embedded NanoHTTPD/NanoWSD portal. Peers can connect without a router, SIM, ISP, cloud service, or account.
+BitVoid is an offline-first Android communications and local video node. It opens directly to conversations, automatically prefers a healthy campus BitVoid gateway, falls back to a configured Render deployment, and remains usable with a durable on-device message outbox when neither is reachable. Its existing host mode can still create an Android **Local Only Hotspot** or use an already-running system hotspot and serve public broadcasts or token-gated private rooms over an embedded NanoHTTPD/NanoWSD portal.
 
 ## Features
 
 - Kotlin, Jetpack Compose, Material 3, coroutines, minSdk 26, target/compile SDK 36
-- Polished dark responsive interface with adaptive launcher branding, accessible status states, and clear host/client workflows
+- Conversation-first, responsive Material 3 interface with system light/dark themes, search, unread state, delivery indicators, and accessible campus/cloud/offline status
 - Persistent connected-device foreground service and low-importance notification
 - Persisted pre-launch selector for **Open Visible** or **WPA2 Visible** hosting; hidden SSIDs are never supported
 - WPA2 mode uses Android `startLocalOnlyHotspot()`, verifies the generated AP is visible, and displays its generated SSID/passphrase
@@ -23,7 +23,7 @@ BitVoid is an offline-first Android local video node. A host phone creates an An
 - Host-created private Room IDs with optional PBKDF2-hashed passkeys
 - Cryptographically random, expiring room tokens held in memory only
 - Token-gated private video routes and room APIs using `X-Room-Token`
-- Real-time NanoWSD channel and direct chat with ephemeral RAM-only history and arbitrary file attachments
+- Real-time NanoWSD channel and direct chat with stable message IDs, server-side deduplication, client-side cached history/durable outbox, and arbitrary file attachments
 - High-priority Android alerts for new remote channel/direct messages, with channel/sender identity and foreground-service delivery after the UI is dismissed
 - Local-only, audio-only WebRTC voice calls with microphone mute, speaker routing, and no external STUN/TURN servers
 - Audio-only Live Classes with host/student roles, shareable `CLS-XXXX-XX` IDs, visible or hidden Hub listings, microphone controls, and synchronized participant state
@@ -40,7 +40,7 @@ BitVoid is an offline-first Android local video node. A host phone creates an An
 - Fixed-size privacy padding header and 4 KiB-block portal body padding
 - **Node Log** replaces Client Node and records Wi-Fi changes, scans, local identity checks, ESP32/Pi coordinator heartbeats, gateway selection, reconnects, and errors in memory
 - Node Log automatically refreshes visible Wi-Fi names, probes the active local subnet, verifies `/api/node` identities, and exchanges `/api/mesh/nodes` registries
-- Apps automatically route to an available BitVoid gateway; if none exists, Node Log starts and shares this phone's LAN gateway, with manual local IP/URL entry available as a verified fallback
+- Apps automatically discover and health-check campus gateways, prefer local service, fall back to a configured HTTPS Render backend, then enter offline queueing without automatically starting a phone-hosted gateway
 - Android apps, ESP32, and Raspberry Pi coordinators can use different private addresses while converging through the same-LAN registry
 - Sandboxed local WebView with room JavaScript enabled but WebRTC injection-blocked; cookies, persistent cache, external hosts, camera, microphone, and geolocation remain disabled
 
@@ -64,6 +64,38 @@ controllers/
 ├── esp32/       # PlatformIO same-LAN coordinator firmware
 └── pi/          # Python Raspberry Pi/Linux coordinator service
 ```
+
+## Automatic conversations and backend selection
+
+BitVoid loads the **Chats** interface immediately; connectivity checks never block navigation. In the
+background it uses the existing mesh discovery (`/api/node` and `/api/mesh/nodes`), optional
+configured campus LAN fallback, and health checks to select a backend in this order:
+
+1. A healthy discovered/configured campus gateway.
+2. The configured HTTPS Render backend.
+3. Offline mode with queued sending and cached conversation history.
+
+The coordinator listens for Android network changes, releases campus process-network binding before
+cloud use, reconnects with capped exponential backoff, reopens active conversations, and replays
+pending messages. Client-generated UUIDs, client timestamps, `Idempotency-Key`, and server-side
+stable-ID checks suppress duplicate REST/WebSocket replay. The on-device cache contains conversation
+messages and delivery states, not passwords, access credentials, or backend session tokens.
+
+Set the default cloud endpoint at build time without committing a secret:
+
+```bash
+BITVOID_CLOUD_BASE_URL=https://your-bitvoid-service.onrender.com ./gradlew assembleDebug
+```
+
+`BITVOID_CLOUD_BASE_URL` may also be a Gradle property. Users can edit campus and cloud endpoints in
+**Settings → Automatic connection**; only HTTP private-LAN campus URLs and HTTPS cloud URLs are
+accepted. The application has no bundled production Render URL, so cloud fallback remains disabled
+until a real compatible endpoint is configured.
+
+Audio calls remain audio-only. Campus calls use the existing authenticated signaling and WebRTC
+implementation. Internet calls additionally require the configured cloud service to expose the same
+signaling contract and suitable ICE/TURN infrastructure; this repository intentionally does not
+invent credentials or weaken signaling host validation.
 
 ## Same-LAN app, ESP32, and Raspberry Pi mesh
 
@@ -121,14 +153,14 @@ The APK is produced at `app/build/outputs/apk/debug/app-debug.apk`.
 6. Press **START BITVOID HOST ENGINE**. BitVoid creates a password-protected Wi-Fi Direct group or Android Local Only Hotspot and displays the active credentials. If Android returns an unsecured hotspot, BitVoid refuses it and keeps the vault in server-only mode.
 7. Confirm the security card and use the join-share button to send friends the SSID, required passphrase, portal URL, and WPA Wi-Fi QR payload.
 8. Nearby viewers join the displayed network and open `http://bitvoid.local`. BitVoid advertises that stable name over local multicast DNS, while the displayed IP endpoint remains available as a fallback. Captive-probe requests that reach BitVoid are redirected to the friendly hostname. The first screen asks for a Private Room ID, optional passkey, and chat alias; the public broadcast remains at `/public`.
-9. In another BitVoid app, open **NODE LOG**. BitVoid automatically discovers app gateways and ESP32/Pi coordinators through the phone's current Wi-Fi, records each connection event, and links without IP or URL entry. **Refresh Mesh Now** is available only as an optional immediate retry.
+9. In another BitVoid app, open **Chats** and begin using the app immediately. BitVoid discovers app gateways and ESP32/Pi coordinators through the current Wi-Fi in the background; **Node Log** remains available from Home for live diagnostics, and pull-to-refresh is an optional immediate retry.
 10. Authenticated room members receive an in-memory token, can stream only videos assigned to that room, exchange real-time local chat messages, and share files.
 11. From **HUB**, start an audio call with a channel or username, or create a named audio-only Live Class. Share its `CLS-XXXX-XX` ID with students on the same BitVoid network.
 12. During a Live Class, the host and students use microphone audio and the participant stage; students can leave and the host can end the class from either the native app or local browser portal.
 
 ## Room, call, and classroom security model
 
-- Room IDs, passkey verifiers, client sessions, participant state, and chat history live only in memory. Stopping the host node or ending the app process clears all rooms and chat.
+- Room IDs, passkey verifiers, backend session tokens, and host participant state live only in memory. The Android client caches bounded channel/direct history and queued outgoing messages on device so its conversation view and outbox survive process death; server-side history is still ephemeral.
 - Passkeys are salted and derived with PBKDF2-HMAC-SHA256. Raw passkeys are not stored.
 - Private room APIs require `X-Room-Token`; missing, expired, or room-mismatched tokens receive `401 Unauthorized`.
 - Native WebSocket clients can send `X-Room-Token` during the upgrade. Browser WebSocket APIs cannot set arbitrary headers, so the bundled portal carries the same bearer token in the `Sec-WebSocket-Protocol` handshake header.
@@ -136,6 +168,25 @@ The APK is produced at `app/build/outputs/apk/debug/app-debug.apk`.
 - Chat and WebRTC signaling are host-relayed over the isolated LAN. WebRTC media is peer-to-peer and encrypted by WebRTC. BitVoid-created wireless networks require a WPA2/WPA3 password; room tokens provide an additional application-level access control.
 - Call and classroom signaling accepts only local-node requests and validates channel, direct-chat, or Live Class sessions. The peer connection is configured without external ICE servers, so media remains on the local network.
 - Live Class IDs map to in-memory host sessions. Ending the class, stopping the host, or ending the app process revokes the session and closes its signaling peers.
+
+## Validation matrix
+
+The automated test suite covers backend URL policy, retry backoff, stable direct-message
+idempotency, service notifications, gateway telemetry, host security, and existing protocol
+behavior. Before shipping against a production deployment, run `./gradlew testDebugUnitTest
+assembleDebug` and complete this two-device matrix with the actual Render URL:
+
+- campus Wi-Fi discovery and configured LAN fallback;
+- outside-campus HTTPS cloud selection and authentication;
+- local failure → cloud, internet failure → campus, and both unavailable → offline;
+- Wi-Fi ↔ mobile transitions and campus recovery preference;
+- process restart with offline send, replay, stable ordering, and no duplicates;
+- existing channel/direct histories before and after backend switching;
+- two-account incoming, outgoing, accepted, rejected, muted, speaker, and ended audio calls.
+
+Known deployment limitations are deliberate: the repository does not contain the production Render
+URL or cloud credentials; backend sessions are reopened rather than persisted; host histories remain
+RAM-only; and internet WebRTC requires compatible cloud signaling plus STUN/TURN deployment.
 
 ## Platform notes
 

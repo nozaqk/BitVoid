@@ -2,6 +2,7 @@ package com.bitvoid.network.client
 
 import android.content.Context
 import android.net.Uri
+import com.bitvoid.network.backend.BitVoidBackendPrefs
 import android.provider.OpenableColumns
 import com.bitvoid.network.call.DirectCallPhase
 import com.bitvoid.network.call.ParticipantRole
@@ -14,6 +15,8 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -62,7 +65,9 @@ data class RemoteChannelSummary(
     val hasPrivateKey: Boolean,
     val mediaCount: Int,
     val activePeers: Int,
-    val messageCount: Int
+    val messageCount: Int,
+    val lastMessagePreview: String? = null,
+    val lastTimestampMs: Long = 0L
 )
 
 data class ClientChannelSession(
@@ -84,14 +89,24 @@ data class ClientChatAttachment(
     val downloadUrl: String
 )
 
+enum class MessageDeliveryState {
+    PENDING,
+    SENT,
+    DELIVERED,
+    READ,
+    FAILED
+}
+
 data class ClientChatMessage(
     val id: String,
     val channelId: String,
     val sender: String,
     val text: String,
     val time: String,
+    val timestampMs: Long = 0L,
     val isSystemNotice: Boolean = false,
-    val attachment: ClientChatAttachment? = null
+    val attachment: ClientChatAttachment? = null,
+    val deliveryState: MessageDeliveryState = MessageDeliveryState.DELIVERED
 )
 
 data class ClientDirectSession(
@@ -99,6 +114,13 @@ data class ClientDirectSession(
     val myUsername: String,
     val peerUsername: String,
     val token: String
+)
+
+data class CachedConversationPreview(
+    val conversationId: String,
+    val direct: Boolean,
+    val lastMessage: ClientChatMessage,
+    val messageCount: Int
 )
 
 /**
@@ -169,7 +191,7 @@ enum class ClientWsStatus {
     ERROR
 }
 
-class BitVoidClientRepository {
+class BitVoidClientRepository(private val appContext: Context? = null) {
 
     companion object {
         const val DEFAULT_GATEWAY_URL = "http://" + BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME
@@ -177,6 +199,53 @@ class BitVoidClientRepository {
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    @Volatile private var allowedCloudBaseUrl: String = appContext
+        ?.let(BitVoidBackendPrefs::load)
+        ?.cloudServerUrl
+        .orEmpty()
+
+    private data class PendingOutgoingMessage(
+        val id: String,
+        val conversationId: String,
+        val text: String,
+        val direct: Boolean,
+        val createdAtMs: Long
+    )
+
+    private val messageStore = BitVoidMessageStore(appContext)
+    private val pendingOutgoing = ConcurrentHashMap<String, PendingOutgoingMessage>()
+    private var pendingRetryJob: Job? = null
+    private val _cachedConversationPreviews = MutableStateFlow<List<CachedConversationPreview>>(emptyList())
+    val cachedConversationPreviews: StateFlow<List<CachedConversationPreview>> =
+        _cachedConversationPreviews.asStateFlow()
+
+    init {
+        val storedThreads = messageStore.loadAll()
+        _cachedConversationPreviews.value = storedThreads.mapNotNull { thread ->
+            thread.messages.lastOrNull()?.let { last ->
+                CachedConversationPreview(
+                    conversationId = thread.conversationId,
+                    direct = thread.direct,
+                    lastMessage = last,
+                    messageCount = thread.messages.size
+                )
+            }
+        }
+        storedThreads.forEach { thread ->
+            thread.messages
+                .filter { it.deliveryState != MessageDeliveryState.DELIVERED &&
+                    it.deliveryState != MessageDeliveryState.READ }
+                .forEach { message ->
+                    pendingOutgoing[message.id] = PendingOutgoingMessage(
+                        id = message.id,
+                        conversationId = thread.conversationId,
+                        text = message.text,
+                        direct = thread.direct,
+                        createdAtMs = message.timestampMs
+                    )
+                }
+        }
+    }
 
     private val okHttpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(6, TimeUnit.SECONDS)
@@ -186,8 +255,14 @@ class BitVoidClientRepository {
         .addInterceptor { chain ->
             val original = chain.request()
             val host = original.url.host
-            if (!BitVoidClientManager.isPrivateLocalHost(host)) {
-                throw IOException("Blocked non-RFC1918 host '$host' by BitVoid firewall.")
+            val configuredCloudHost = runCatching {
+                Uri.parse(allowedCloudBaseUrl).host
+            }.getOrNull()
+            val allowedRemote = !configuredCloudHost.isNullOrBlank() &&
+                host.equals(configuredCloudHost, ignoreCase = true) &&
+                original.url.isHttps
+            if (!BitVoidClientManager.isPrivateLocalHost(host) && !allowedRemote) {
+                throw IOException("Blocked unconfigured backend host '$host' by BitVoid firewall.")
             }
             val sanitized = original.newBuilder()
                 .header("User-Agent", "BitVoid/1.0 (Isolated)")
@@ -283,12 +358,29 @@ class BitVoidClientRepository {
     private val _liveClasses = MutableStateFlow<List<RemoteLiveClassSummary>>(emptyList())
     val liveClasses: StateFlow<List<RemoteLiveClassSummary>> = _liveClasses.asStateFlow()
 
-    fun setGatewayBaseUrl(rawUrl: String): String? {
-        val normalized = BitVoidClientManager.normalizeLocalPortalUrl(rawUrl)
-            ?.trimEnd('/')
-            ?: return null
-        _gatewayBaseUrl.value = normalized
+    fun configureCloudBaseUrl(rawUrl: String): String? {
+        val normalized = BitVoidBackendPrefs.normalizeConfiguredUrl(rawUrl, allowCleartext = false)
+        allowedCloudBaseUrl = normalized.orEmpty()
         return normalized
+    }
+
+    fun setGatewayBaseUrl(rawUrl: String): String? {
+        val local = BitVoidClientManager.normalizeLocalPortalUrl(rawUrl)?.trimEnd('/')
+        val configuredCloud = allowedCloudBaseUrl.trimEnd('/')
+        val remote = BitVoidBackendPrefs.normalizeConfiguredUrl(rawUrl, allowCleartext = false)
+            ?.trimEnd('/')
+            ?.takeIf { candidate ->
+                configuredCloud.isNotBlank() && candidate.equals(configuredCloud, ignoreCase = true)
+            }
+        val normalized = local ?: remote ?: return null
+        val changed = normalized != _gatewayBaseUrl.value
+        _gatewayBaseUrl.value = normalized
+        if (changed) schedulePendingRetry(100L)
+        return normalized
+    }
+
+    fun flushPendingMessages() {
+        schedulePendingRetry(0L)
     }
 
     suspend fun fetchPublicMedia(urlOverride: String? = null) {
@@ -444,13 +536,41 @@ class BitVoidClientRepository {
         result.onSuccess { (session, initialMessages) ->
             closeSocketOnly()
             _activeChannelSession.value = session
-            _channelMessages.value = initialMessages
+            val pendingForChannel = (
+                _channelMessages.value + messageStore.load(session.channelId, direct = false)
+            ).filter {
+                it.channelId == session.channelId &&
+                    it.deliveryState in setOf(MessageDeliveryState.PENDING, MessageDeliveryState.SENT, MessageDeliveryState.FAILED)
+            }
+            _channelMessages.value = (initialMessages + pendingForChannel)
+                .distinctBy { it.id }
+                .sortedBy { it.timestampMs }
+                .takeLast(120)
+            messageStore.save(session.channelId, direct = false, _channelMessages.value)
             _channelJoinError.value = null
             _channelPeersCount.value = 1
             connectChatWebSocket(targetBase, session)
             startCallStatusPolling(targetBase, session)
+            schedulePendingRetry(0L)
         }.onFailure { err ->
-            _channelJoinError.value = err.message ?: "Failed to unlock channel"
+            val cached = messageStore.load(channelId, direct = false)
+            if (cached.isNotEmpty() && err !is SecurityException) {
+                closeSocketOnly()
+                _activeChannelSession.value = ClientChannelSession(
+                    channelId = channelId,
+                    name = _channels.value.firstOrNull { it.channelId == channelId }?.name
+                        ?: channelId,
+                    isPublic = true,
+                    token = "",
+                    callsign = username?.trim()?.removePrefix("@").orEmpty().ifBlank { "Offline" },
+                    mediaList = emptyList()
+                )
+                _channelMessages.value = cached
+                _wsStatus.value = ClientWsStatus.DISCONNECTED
+                _channelJoinError.value = "Offline · messages are queued until BitVoid reconnects."
+            } else {
+                _channelJoinError.value = err.message ?: "Failed to unlock channel"
+            }
         }
     }
 
@@ -1017,36 +1137,33 @@ class BitVoidClientRepository {
         val session = _activeChannelSession.value ?: return
         if (trimmed.isEmpty()) return
 
-        val payload = JSONObject().put("text", trimmed).toString()
-        val ws = activeWebSocket
-        if (ws != null && _wsStatus.value == ClientWsStatus.LIVE && ws.send(payload)) {
-            return
-        }
-
-        val targetBase = _gatewayBaseUrl.value.trimEnd('/')
-        val encodedId = URLEncoder.encode(session.channelId, StandardCharsets.UTF_8.name())
-            .replace("+", "%20")
-        scope.launch {
-            try {
-                val request = Request.Builder()
-                    .url("$targetBase/api/channels/$encodedId/chat")
-                    .header("X-Channel-Token", session.token)
-                    .post(payload.toRequestBody(JSON_MEDIA_TYPE))
-                    .build()
-                okHttpClient.newCall(request).execute().use { resp ->
-                    if (resp.isSuccessful) {
-                        val obj = JSONObject(resp.body?.string().orEmpty())
-                        val msgJson = obj.optJSONObject("message")
-                        if (msgJson != null) {
-                            appendMessageIfNew(parseMessageObject(msgJson))
-                        }
-                    } else if (resp.code == 401) {
-                        leaveChannel()
-                    }
-                }
-            } catch (_: Exception) {
-            }
-        }
+        val now = System.currentTimeMillis()
+        val clientId = "client_${UUID.randomUUID()}"
+        val pending = PendingOutgoingMessage(
+            id = clientId,
+            conversationId = session.channelId,
+            text = trimmed,
+            direct = false,
+            createdAtMs = now
+        )
+        pendingOutgoing[clientId] = pending
+        appendMessageIfNew(
+            ClientChatMessage(
+                id = clientId,
+                channelId = session.channelId,
+                sender = session.callsign,
+                text = trimmed,
+                time = formatMessageTime(now),
+                timestampMs = now,
+                deliveryState = MessageDeliveryState.PENDING
+            )
+        )
+        val payload = pendingPayload(pending)
+        val sentOverSocket = activeWebSocket
+            ?.takeIf { _wsStatus.value == ClientWsStatus.LIVE }
+            ?.send(payload) == true
+        if (sentOverSocket) markMessageSent(clientId, direct = false)
+        schedulePendingRetry(if (sentOverSocket) 2_000L else 0L)
     }
 
     fun buildAbsoluteStreamUrl(item: RemoteMediaItem, channelToken: String? = null): String {
@@ -1380,13 +1497,41 @@ class BitVoidClientRepository {
         result.onSuccess { (session, initialMessages) ->
             closeDirectSocketOnly()
             _activeDirectSession.value = session
-            _directMessages.value = initialMessages
+            val pendingForDirect = (
+                _directMessages.value + messageStore.load(session.dmId, direct = true)
+            ).filter {
+                it.channelId == session.dmId &&
+                    it.deliveryState in setOf(MessageDeliveryState.PENDING, MessageDeliveryState.SENT, MessageDeliveryState.FAILED)
+            }
+            _directMessages.value = (initialMessages + pendingForDirect)
+                .distinctBy { it.id }
+                .sortedBy { it.timestampMs }
+                .takeLast(150)
+            messageStore.save(session.dmId, direct = true, _directMessages.value)
             _directChatError.value = null
             connectDirectWebSocket(targetBase, session)
             startDirectCallStatusPolling(targetBase, session)
+            schedulePendingRetry(0L)
             scope.launch { fetchKnownUsers(targetBase) }
         }.onFailure { err ->
-            _directChatError.value = err.message ?: "Unable to start direct chat"
+            val cleanMe = myUsername.trim().removePrefix("@")
+            val pair = listOf(cleanMe.lowercase(), cleanTarget.lowercase()).sorted()
+            val offlineDmId = "dm__${pair[0]}__${pair[1]}"
+            val cached = messageStore.load(offlineDmId, direct = true)
+            if (cached.isNotEmpty()) {
+                closeDirectSocketOnly()
+                _activeDirectSession.value = ClientDirectSession(
+                    dmId = offlineDmId,
+                    myUsername = cleanMe,
+                    peerUsername = cleanTarget,
+                    token = ""
+                )
+                _directMessages.value = cached
+                _directWsStatus.value = ClientWsStatus.DISCONNECTED
+                _directChatError.value = "Offline · messages are queued until BitVoid reconnects."
+            } else {
+                _directChatError.value = err.message ?: "Unable to start direct chat"
+            }
         }
     }
 
@@ -1395,36 +1540,33 @@ class BitVoidClientRepository {
         val session = _activeDirectSession.value ?: return
         if (trimmed.isEmpty()) return
 
-        val payload = JSONObject().put("text", trimmed).toString()
-        val ws = activeDirectWebSocket
-        if (ws != null && _directWsStatus.value == ClientWsStatus.LIVE && ws.send(payload)) {
-            return
-        }
-
-        val targetBase = _gatewayBaseUrl.value.trimEnd('/')
-        val encodedDm = URLEncoder.encode(session.dmId, StandardCharsets.UTF_8.name())
-            .replace("+", "%20")
-        scope.launch {
-            try {
-                val request = Request.Builder()
-                    .url("$targetBase/api/dm/$encodedDm/messages")
-                    .header("X-DM-Token", session.token)
-                    .post(payload.toRequestBody(JSON_MEDIA_TYPE))
-                    .build()
-                okHttpClient.newCall(request).execute().use { resp ->
-                    if (resp.isSuccessful) {
-                        val obj = JSONObject(resp.body?.string().orEmpty())
-                        val msgJson = obj.optJSONObject("message")
-                        if (msgJson != null) {
-                            appendDirectMessageIfNew(parseMessageObject(msgJson))
-                        }
-                    } else if (resp.code == 401) {
-                        leaveDirectChat()
-                    }
-                }
-            } catch (_: Exception) {
-            }
-        }
+        val now = System.currentTimeMillis()
+        val clientId = "client_${UUID.randomUUID()}"
+        val pending = PendingOutgoingMessage(
+            id = clientId,
+            conversationId = session.dmId,
+            text = trimmed,
+            direct = true,
+            createdAtMs = now
+        )
+        pendingOutgoing[clientId] = pending
+        appendDirectMessageIfNew(
+            ClientChatMessage(
+                id = clientId,
+                channelId = session.dmId,
+                sender = session.myUsername,
+                text = trimmed,
+                time = formatMessageTime(now),
+                timestampMs = now,
+                deliveryState = MessageDeliveryState.PENDING
+            )
+        )
+        val payload = pendingPayload(pending)
+        val sentOverSocket = activeDirectWebSocket
+            ?.takeIf { _directWsStatus.value == ClientWsStatus.LIVE }
+            ?.send(payload) == true
+        if (sentOverSocket) markMessageSent(clientId, direct = true)
+        schedulePendingRetry(if (sentOverSocket) 2_000L else 0L)
     }
 
     fun suspendChannelChatForLiveClass() {
@@ -1492,6 +1634,7 @@ class BitVoidClientRepository {
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     _wsStatus.value = ClientWsStatus.LIVE
+                    flushPendingMessages()
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
@@ -1596,6 +1739,7 @@ class BitVoidClientRepository {
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     _directWsStatus.value = ClientWsStatus.LIVE
+                    flushPendingMessages()
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
@@ -1655,17 +1799,176 @@ class BitVoidClientRepository {
         }
     }
 
+    private fun pendingPayload(pending: PendingOutgoingMessage): String = JSONObject()
+        .put("text", pending.text)
+        .put("clientMessageId", pending.id)
+        .put("timestampMs", pending.createdAtMs)
+        .toString()
+
+    private fun schedulePendingRetry(delayMs: Long) {
+        pendingRetryJob?.cancel()
+        pendingRetryJob = scope.launch {
+            if (delayMs > 0L) delay(delayMs)
+            flushPendingMessagesNow()
+        }
+    }
+
+    private suspend fun flushPendingMessagesNow() {
+        pendingOutgoing.values
+            .sortedBy { it.createdAtMs }
+            .forEach { pending ->
+                val sessionToken = if (pending.direct) {
+                    _activeDirectSession.value
+                        ?.takeIf { it.dmId == pending.conversationId }
+                        ?.token
+                } else {
+                    _activeChannelSession.value
+                        ?.takeIf { it.channelId == pending.conversationId }
+                        ?.token
+                }?.takeIf { it.isNotBlank() } ?: return@forEach
+                val encodedConversation = URLEncoder.encode(
+                    pending.conversationId,
+                    StandardCharsets.UTF_8.name()
+                ).replace("+", "%20")
+                val targetBase = _gatewayBaseUrl.value.trimEnd('/')
+                val path = if (pending.direct) {
+                    "/api/dm/$encodedConversation/messages"
+                } else {
+                    "/api/channels/$encodedConversation/chat"
+                }
+                val tokenHeader = if (pending.direct) "X-DM-Token" else "X-Channel-Token"
+                try {
+                    val request = Request.Builder()
+                        .url(targetBase + path)
+                        .header(tokenHeader, sessionToken)
+                        .header("Idempotency-Key", pending.id)
+                        .post(pendingPayload(pending).toRequestBody(JSON_MEDIA_TYPE))
+                        .build()
+                    okHttpClient.newCall(request).execute().use { response ->
+                        if (response.isSuccessful) {
+                            val body = JSONObject(response.body?.string().orEmpty())
+                            val messageJson = body.optJSONObject("message")
+                            if (messageJson != null) {
+                                val delivered = parseMessageObject(messageJson)
+                                    .copy(deliveryState = MessageDeliveryState.DELIVERED)
+                                if (pending.direct) appendDirectMessageIfNew(delivered)
+                                else appendMessageIfNew(delivered)
+                            }
+                            pendingOutgoing.remove(pending.id)
+                        } else if (response.code == 401) {
+                            // A backend switch invalidates old session tokens. Keep the message;
+                            // reopening the same conversation supplies a new token and retries it.
+                            markMessageFailed(pending.id, pending.direct)
+                        }
+                    }
+                } catch (_: Exception) {
+                    // Offline is a normal state. Keep the stable-ID item queued for the next
+                    // backend health transition or WebSocket reconnect.
+                }
+            }
+        if (pendingOutgoing.isNotEmpty()) schedulePendingRetry(8_000L)
+    }
+
+    private fun markMessageSent(id: String, direct: Boolean) {
+        updateDeliveryState(id, direct, MessageDeliveryState.SENT)
+    }
+
+    private fun markMessageFailed(id: String, direct: Boolean) {
+        updateDeliveryState(id, direct, MessageDeliveryState.FAILED)
+    }
+
+    private fun updateDeliveryState(
+        id: String,
+        direct: Boolean,
+        state: MessageDeliveryState
+    ) {
+        if (direct) {
+            _directMessages.value = _directMessages.value.map {
+                if (it.id == id) it.copy(deliveryState = state) else it
+            }
+            _activeDirectSession.value?.let {
+                messageStore.save(it.dmId, direct = true, _directMessages.value)
+                updateCachedPreview(it.dmId, direct = true, _directMessages.value)
+            }
+        } else {
+            _channelMessages.value = _channelMessages.value.map {
+                if (it.id == id) it.copy(deliveryState = state) else it
+            }
+            _activeChannelSession.value?.let {
+                messageStore.save(it.channelId, direct = false, _channelMessages.value)
+                updateCachedPreview(it.channelId, direct = false, _channelMessages.value)
+            }
+        }
+    }
+
+    private fun updateCachedPreview(
+        conversationId: String,
+        direct: Boolean,
+        messages: List<ClientChatMessage>
+    ) {
+        val last = messages.lastOrNull() ?: return
+        val next = CachedConversationPreview(
+            conversationId = conversationId,
+            direct = direct,
+            lastMessage = last,
+            messageCount = messages.size
+        )
+        _cachedConversationPreviews.value = (
+            _cachedConversationPreviews.value.filterNot {
+                it.conversationId == conversationId && it.direct == direct
+            } + next
+        ).sortedByDescending { it.lastMessage.timestampMs }
+    }
+
     private fun appendMessageIfNew(msg: ClientChatMessage): Boolean {
         val current = _channelMessages.value
-        if (current.any { it.id == msg.id }) return false
-        _channelMessages.value = (current + msg).takeLast(120)
+        val existingIndex = current.indexOfFirst { it.id == msg.id }
+        if (existingIndex >= 0) {
+            val updated = current.toMutableList()
+            updated[existingIndex] = msg.copy(deliveryState = MessageDeliveryState.DELIVERED)
+            _channelMessages.value = updated
+            messageStore.save(msg.channelId, direct = false, updated)
+            updateCachedPreview(msg.channelId, direct = false, updated)
+            pendingOutgoing.remove(msg.id)
+            return false
+        }
+        _channelMessages.value = (current + msg)
+            .distinctBy { it.id }
+            .sortedWith(compareBy<ClientChatMessage> { it.timestampMs.takeIf { ts -> ts > 0L } ?: Long.MAX_VALUE })
+            .takeLast(120)
+        messageStore.save(msg.channelId, direct = false, _channelMessages.value)
+        updateCachedPreview(msg.channelId, direct = false, _channelMessages.value)
+        if (msg.deliveryState == MessageDeliveryState.DELIVERED ||
+            msg.deliveryState == MessageDeliveryState.READ
+        ) {
+            pendingOutgoing.remove(msg.id)
+        }
         return true
     }
 
     private fun appendDirectMessageIfNew(msg: ClientChatMessage): Boolean {
         val current = _directMessages.value
-        if (current.any { it.id == msg.id }) return false
-        _directMessages.value = (current + msg).takeLast(150)
+        val existingIndex = current.indexOfFirst { it.id == msg.id }
+        if (existingIndex >= 0) {
+            val updated = current.toMutableList()
+            updated[existingIndex] = msg.copy(deliveryState = MessageDeliveryState.DELIVERED)
+            _directMessages.value = updated
+            messageStore.save(msg.channelId, direct = true, updated)
+            updateCachedPreview(msg.channelId, direct = true, updated)
+            pendingOutgoing.remove(msg.id)
+            return false
+        }
+        _directMessages.value = (current + msg)
+            .distinctBy { it.id }
+            .sortedWith(compareBy<ClientChatMessage> { it.timestampMs.takeIf { ts -> ts > 0L } ?: Long.MAX_VALUE })
+            .takeLast(150)
+        messageStore.save(msg.channelId, direct = true, _directMessages.value)
+        updateCachedPreview(msg.channelId, direct = true, _directMessages.value)
+        if (msg.deliveryState == MessageDeliveryState.DELIVERED ||
+            msg.deliveryState == MessageDeliveryState.READ
+        ) {
+            pendingOutgoing.remove(msg.id)
+        }
         return true
     }
 
@@ -1719,7 +2022,10 @@ class BitVoidClientRepository {
                     hasPrivateKey = obj.optBoolean("hasPrivateKey", false),
                     mediaCount = obj.optInt("mediaCount", 0),
                     activePeers = obj.optInt("activePeers", 0),
-                    messageCount = obj.optInt("messageCount", 0)
+                    messageCount = obj.optInt("messageCount", 0),
+                    lastMessagePreview = obj.optString("lastMessagePreview")
+                        .takeIf { it.isNotBlank() },
+                    lastTimestampMs = obj.optLong("lastTimestampMs", 0L)
                 )
             )
         }
@@ -1777,8 +2083,19 @@ class BitVoidClientRepository {
             sender = obj.optString("sender", "Peer"),
             text = obj.optString("text", ""),
             time = obj.optString("time", ""),
+            timestampMs = obj.optLong("timestampMs", 0L),
             isSystemNotice = false,
-            attachment = attachment
+            attachment = attachment,
+            deliveryState = runCatching {
+                MessageDeliveryState.valueOf(
+                    obj.optString("deliveryState", MessageDeliveryState.DELIVERED.name)
+                )
+            }.getOrDefault(MessageDeliveryState.DELIVERED)
         )
+    }
+
+    private fun formatMessageTime(timestampMs: Long): String {
+        return java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+            .format(java.util.Date(timestampMs))
     }
 }

@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Person
@@ -75,6 +76,8 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.bitvoid.network.backend.BitVoidBackendConfig
+import com.bitvoid.network.backend.BitVoidBackendState
 import com.bitvoid.network.model.AppBottomTab
 import com.bitvoid.network.model.HostState
 import com.bitvoid.network.model.HotspotStatus
@@ -96,23 +99,23 @@ fun BitVoidBottomNavigationBar(
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
-        HorizontalDivider(thickness = 1.dp, color = VoidBorder)
+        HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
         NavigationBar(
-            containerColor = VoidSurface,
-            contentColor = VoidTextPrimary,
+            containerColor = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface,
             tonalElevation = 0.dp
         ) {
             AppBottomTab.entries.forEach { tab ->
                 val selected = selectedTab == tab
                 val selectedIcon = when (tab) {
-                    AppBottomTab.HOME -> Icons.Filled.Home
-                    AppBottomTab.HUB -> Icons.Filled.Forum
+                    AppBottomTab.HOME -> Icons.Filled.Forum
+                    AppBottomTab.HUB -> Icons.Filled.Groups
                     AppBottomTab.PCHAT -> Icons.Filled.Person
                     AppBottomTab.SETTINGS -> Icons.Filled.Settings
                 }
                 val unselectedIcon = when (tab) {
-                    AppBottomTab.HOME -> Icons.Outlined.Home
-                    AppBottomTab.HUB -> Icons.Outlined.Forum
+                    AppBottomTab.HOME -> Icons.Outlined.Forum
+                    AppBottomTab.HUB -> Icons.Filled.Groups
                     AppBottomTab.PCHAT -> Icons.Filled.Person
                     AppBottomTab.SETTINGS -> Icons.Outlined.Settings
                 }
@@ -136,11 +139,11 @@ fun BitVoidBottomNavigationBar(
                         )
                     },
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = VoidMint,
-                        selectedTextColor = VoidMint,
-                        indicatorColor = VoidMintContainer,
-                        unselectedIconColor = VoidTextSecondary,
-                        unselectedTextColor = VoidTextSecondary
+                        selectedIconColor = MaterialTheme.colorScheme.primary,
+                        selectedTextColor = MaterialTheme.colorScheme.primary,
+                        indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
                     ),
                     modifier = Modifier.testTag("bottom_nav_${tab.name.lowercase()}")
                 )
@@ -378,6 +381,133 @@ fun SettingsUserIdentityCard(
                 ),
                 modifier = Modifier.testTag("settings_user_discoverability_switch")
             )
+        }
+    }
+}
+
+@Composable
+fun BackendConnectionSettingsCard(
+    state: BitVoidBackendState,
+    config: BitVoidBackendConfig,
+    onSave: (String, String) -> Result<Unit>,
+    onRefresh: () -> Unit
+) {
+    var localUrl by rememberSaveable(config.localServerUrl) {
+        mutableStateOf(config.localServerUrl)
+    }
+    var cloudUrl by rememberSaveable(config.cloudServerUrl) {
+        mutableStateOf(config.cloudServerUrl)
+    }
+    var error by remember { mutableStateOf<String?>(null) }
+    var saved by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("backend_connection_settings_card"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+        shape = RoundedCornerShape(14.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(9.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "AUTOMATIC SERVER CONNECTION",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        state.statusLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                BackendConnectionPill(state)
+            }
+            Text(
+                "Campus is always preferred. BitVoid falls back to the configured HTTPS cloud backend and keeps retrying silently.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedTextField(
+                value = localUrl,
+                onValueChange = {
+                    localUrl = it
+                    error = null
+                    saved = false
+                },
+                label = { Text("Campus server URL") },
+                supportingText = { Text("mDNS default: http://bitvoid.local") },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("settings_local_backend_url")
+            )
+            OutlinedTextField(
+                value = cloudUrl,
+                onValueChange = {
+                    cloudUrl = it
+                    error = null
+                    saved = false
+                },
+                label = { Text("Render cloud backend URL") },
+                supportingText = { Text("HTTPS only · can also be supplied at build time") },
+                placeholder = { Text("https://your-bitvoid-service.onrender.com") },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("settings_cloud_backend_url")
+            )
+            error?.let {
+                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
+            if (saved) {
+                Text(
+                    "Saved. Automatic discovery is refreshing now.",
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onRefresh,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(17.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("RETRY NOW")
+                }
+                Button(
+                    onClick = {
+                        onSave(localUrl, cloudUrl)
+                            .onSuccess {
+                                error = null
+                                saved = true
+                            }
+                            .onFailure {
+                                error = it.message ?: "Unable to save server settings"
+                                saved = false
+                            }
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("settings_save_backend_urls")
+                ) {
+                    Icon(Icons.Filled.Save, contentDescription = null, modifier = Modifier.size(17.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("SAVE")
+                }
+            }
         }
     }
 }

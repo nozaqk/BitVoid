@@ -72,6 +72,7 @@ class BitVoidCallManager(context: Context) {
     }
 
     private val appContext = context.applicationContext
+    @Volatile private var allowedCloudHost: String? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
@@ -83,8 +84,11 @@ class BitVoidCallManager(context: Context) {
         .addInterceptor { chain ->
             val original = chain.request()
             val host = original.url.host
-            if (!BitVoidClientManager.isPrivateLocalHost(host)) {
-                throw IOException("Blocked non-local signaling host '$host'.")
+            val allowedRemote = !allowedCloudHost.isNullOrBlank() &&
+                host.equals(allowedCloudHost, ignoreCase = true) &&
+                original.url.isHttps
+            if (!BitVoidClientManager.isPrivateLocalHost(host) && !allowedRemote) {
+                throw IOException("Blocked unconfigured signaling host '$host'.")
             }
             val sanitized = original.newBuilder()
                 .header("User-Agent", "BitVoid-RTC/1.0")
@@ -136,6 +140,12 @@ class BitVoidCallManager(context: Context) {
 
     private val _liveClassCode = MutableStateFlow<String?>(null)
     val liveClassCode: StateFlow<String?> = _liveClassCode.asStateFlow()
+
+    fun configureCloudBaseUrl(baseUrl: String?) {
+        allowedCloudHost = baseUrl
+            ?.takeIf { it.startsWith("https://", ignoreCase = true) }
+            ?.let { runCatching { android.net.Uri.parse(it).host }.getOrNull() }
+    }
 
     @Synchronized
     fun startOrJoinSession(
