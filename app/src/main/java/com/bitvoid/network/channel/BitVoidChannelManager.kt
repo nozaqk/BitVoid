@@ -52,7 +52,9 @@ data class BitVoidChannel(
     val activeParticipants: List<ChannelParticipant> = emptyList(),
     val messageCount: Int = 0,
     val creatorUsername: String = "",
-    val createdTimestamp: Long = System.currentTimeMillis()
+    val createdTimestamp: Long = System.currentTimeMillis(),
+    val lastMessagePreview: String? = null,
+    val lastTimestampMs: Long = 0L
 )
 
 data class ChannelSession(
@@ -507,17 +509,28 @@ object BitVoidChannelManager {
         channelId: String,
         callsign: String,
         rawText: String,
-        attachment: BitVoidMediaItem? = null
+        attachment: BitVoidMediaItem? = null,
+        stableMessageId: String? = null,
+        clientTimestampMs: Long? = null
     ): ChannelChatMessage? {
         val trimmed = rawText.trim()
         if ((trimmed.isEmpty() && attachment == null) || !channels.containsKey(channelId)) return null
         val safeText = if (trimmed.length > 1000) trimmed.take(1000) else trimmed
-        val now = System.currentTimeMillis()
+        val history = chatHistory.computeIfAbsent(channelId) { CopyOnWriteArrayList() }
+        val requestedId = stableMessageId
+            ?.trim()
+            ?.takeIf { it.length in 8..80 && it.matches(Regex("^[A-Za-z0-9._:-]+$")) }
+        if (requestedId != null) {
+            history.firstOrNull { it.id == requestedId }?.let { return it }
+        }
+        val now = clientTimestampMs
+            ?.takeIf { it in 1..(System.currentTimeMillis() + 60_000L) }
+            ?: System.currentTimeMillis()
         val encodedAttachmentId = attachment?.let {
             URLEncoder.encode(it.id, StandardCharsets.UTF_8.name()).replace("+", "%20")
         }
         val message = ChannelChatMessage(
-            id = "cmsg_${randomHex(8)}",
+            id = requestedId ?: "cmsg_${randomHex(8)}",
             channelId = channelId,
             senderCallsign = callsign,
             text = safeText,
@@ -533,7 +546,6 @@ object BitVoidChannelManager {
         if (attachment != null) {
             channels[channelId]?.mediaIds?.add(attachment.id)
         }
-        val history = chatHistory.computeIfAbsent(channelId) { CopyOnWriteArrayList() }
         history.add(message)
         while (history.size > MAX_CHAT_HISTORY_PER_CHANNEL) {
             history.removeAt(0)
@@ -699,6 +711,7 @@ object BitVoidChannelManager {
         mediaCatalog: List<BitVoidMediaItem> = BitVoidMediaManager.mediaItems.value
     ): BitVoidChannel {
         val assignedMedia = mediaCatalog.filter { it.id in storedChannel.mediaIds }
+        val lastMessage = chatHistory[storedChannel.channelId]?.lastOrNull()
         return BitVoidChannel(
             channelId = storedChannel.channelId,
             name = storedChannel.name,
@@ -709,7 +722,11 @@ object BitVoidChannelManager {
             activeParticipants = getParticipants(storedChannel.channelId),
             messageCount = chatHistory[storedChannel.channelId]?.size ?: 0,
             creatorUsername = storedChannel.creatorUsername,
-            createdTimestamp = storedChannel.createdTimestamp
+            createdTimestamp = storedChannel.createdTimestamp,
+            lastMessagePreview = lastMessage?.let { message ->
+                if (message.text.isNotBlank()) message.text else message.attachmentName
+            },
+            lastTimestampMs = lastMessage?.timestampMs ?: storedChannel.createdTimestamp
         )
     }
 
@@ -719,7 +736,7 @@ object BitVoidChannelManager {
         } else {
             ""
         }
-        return """{"id":"${jsonEscape(msg.id)}","channelId":"${jsonEscape(msg.channelId)}","roomId":"${jsonEscape(msg.channelId)}","sender":"${jsonEscape(msg.senderCallsign)}","text":"${jsonEscape(msg.text)}","time":"${jsonEscape(msg.timestampLabel)}"$attachmentJson}"""
+        return """{"id":"${jsonEscape(msg.id)}","channelId":"${jsonEscape(msg.channelId)}","roomId":"${jsonEscape(msg.channelId)}","sender":"${jsonEscape(msg.senderCallsign)}","text":"${jsonEscape(msg.text)}","time":"${jsonEscape(msg.timestampLabel)}","timestampMs":${msg.timestampMs},"deliveryState":"DELIVERED"$attachmentJson}"""
     }
 
     private fun isCreator(channel: InternalChannel, rawUsername: String): Boolean {

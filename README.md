@@ -4,7 +4,7 @@
 
 It turns a nearby Android phone or compatible BitVoid gateway into a private local hub. People connected to the same Wi-Fi network can discover the hub, browse shared videos, join private rooms, exchange messages and files, and participate in audio calls or live audio classes — without requiring the public internet, a cloud account, or a third-party messaging server.
 
-BitVoid is designed around local ownership: the host controls the content, rooms, participants, and network. The Android application is the user interface and can operate as both a host and a client. The wider project also includes hardware gateway controllers so a dedicated board can eventually provide the central network and server role.
+BitVoid is designed around local ownership: the host controls the content, rooms, participants, and network. The Android application opens directly to its conversation interface, automatically prefers a healthy campus gateway, can fall back to a configured compatible HTTPS deployment, and queues messages on device when neither is available. The app can operate as both a host and a client. The wider project also includes hardware gateway controllers so a dedicated board can eventually provide the central network and server role.
 
 > **Project status:** The Android application already contains the local hosting, media, rooms, chat, audio-call, Live Class, portal, and mesh-discovery systems described below. The Universal Gateway API v1 and ESP-12E controller are an active hardware-portability implementation. Secure gateway pairing, complete API-v1 support on every controller, and the final automatic Android-to-hardware Wi-Fi onboarding flow are not yet complete. See [Hardware gateway roadmap](#hardware-gateway-and-board-independence).
 
@@ -21,6 +21,7 @@ BitVoid is designed around local ownership: the host controls the content, rooms
 - [Media sharing and privacy](#media-sharing-and-privacy)
 - [Rooms, chat, calls, and Live Classes](#rooms-chat-calls-and-live-classes)
 - [Node Log and network discovery](#node-log-and-network-discovery)
+- [Automatic conversations and backend selection](#automatic-conversations-and-backend-selection)
 - [Local web portal](#local-web-portal)
 - [Architecture](#architecture)
 - [Hardware gateway and board independence](#hardware-gateway-and-board-independence)
@@ -118,9 +119,11 @@ The current ESP-12E implementation is an initial access-point and discovery targ
 
 ### Real-time communication
 
+- A conversation-first Chats screen with search, previews, timestamps, unread counters, presence, and delivery state.
 - Channel-based chat over WebSockets.
 - Direct messages between users who are active on the same BitVoid node.
-- Ephemeral message history held in memory.
+- Stable client message IDs, idempotent replay, duplicate suppression, preserved timestamps, and ordered history merging.
+- Bounded on-device conversation history and a durable outgoing queue; server-side histories and authorization sessions remain ephemeral.
 - File attachments shared through the local service.
 - Android notifications for incoming remote channel and direct messages while the foreground service is active.
 
@@ -259,7 +262,7 @@ The media catalogue and its visibility state are managed by the active host. Thi
 
 ### Chat and direct messages
 
-Channel and direct chat use WebSocket connections to the local host. Direct messaging and calls are available only when the intended username is active on the current BitVoid node. Message history is ephemeral and held in memory rather than stored as a permanent remote conversation archive.
+Channel and direct chat use WebSocket connections to the selected backend. Direct messaging and calls require the intended username to be active on that BitVoid node. The Android client keeps a bounded local conversation cache and durable outgoing queue, while server-side history remains ephemeral rather than becoming a permanent remote archive.
 
 ### Voice and Live Classes
 
@@ -283,6 +286,28 @@ The current mesh identity protocol uses:
 Identity checks help identify BitVoid-compatible nodes on the local network. They are **not cryptographic authentication**. A public identity response must not be treated as proof that a device is trusted or authorized to access private services.
 
 Android discovery can scan the permitted local subnet, exchange coordinator registries, and select an available app gateway. Discovery behavior is subject to Android Wi-Fi scan permissions, throttling, multicast handling, and network topology.
+
+---
+
+## Automatic conversations and backend selection
+
+BitVoid loads the **Chats** interface immediately; connectivity checks never block navigation. In the background it uses existing mesh discovery, the configurable campus LAN fallback, and health checks to select a backend in this order:
+
+1. A healthy discovered or configured campus gateway.
+2. The configured compatible HTTPS Render backend.
+3. Offline mode with queued sending and cached conversation history.
+
+The coordinator responds to Android network changes, releases campus process-network binding before cloud use, reconnects with capped exponential backoff, reopens the active conversation, and replays pending messages. Client UUIDs, original timestamps, `Idempotency-Key`, and server stable-ID checks make REST/WebSocket replay idempotent. The cache stores bounded messages and delivery states, not passwords or backend session tokens.
+
+Set a build-time cloud default without committing credentials:
+
+```bash
+BITVOID_CLOUD_BASE_URL=https://your-bitvoid-service.onrender.com ./gradlew assembleDebug
+```
+
+The value may also be supplied as a Gradle property. Users can edit both endpoints under **Settings → Automatic connection**. Campus configuration accepts HTTP only for private/local hosts; cloud configuration requires HTTPS. This repository does not contain a production Render URL, so cloud fallback stays disabled until a real compatible endpoint is configured.
+
+Calls remain audio-only. Internet calls additionally require the cloud service to implement the existing signaling contract and deploy suitable ICE/STUN/TURN infrastructure; the Android repository does not invent or hardcode those credentials.
 
 ---
 
@@ -641,6 +666,9 @@ The ESP-12E example firmware refuses to start with the placeholder password. Thi
 | Area | Status |
 |---|---|
 | Android native application and Compose UI | Implemented |
+| Conversation-first Chats UI and compact Home telemetry | Implemented |
+| Campus → HTTPS cloud → offline coordinator | Implemented; production cloud URL not bundled |
+| Stable message IDs, deduplication, and durable Android outbox/cache | Implemented |
 | Android-hosted local HTTP/WebSocket server | Implemented |
 | Media import, public/private visibility, and local streaming | Implemented |
 | Private rooms and room-token authorization | Implemented |
@@ -659,6 +687,20 @@ The ESP-12E example firmware refuses to start with the placeholder password. Thi
 | Hardware replacement compatibility test suite | Pending |
 
 This table describes the repository's intended and implemented scope at the time of this revision. It is not a claim that every feature has been validated on every Android device or hardware board.
+
+### Release validation matrix
+
+Before shipping against a production cloud deployment, run `./gradlew testDebugUnitTest assembleDebug` and complete this two-device matrix with the actual Render URL:
+
+- campus Wi-Fi discovery and configured LAN fallback;
+- outside-campus HTTPS cloud selection and authentication;
+- local failure → cloud, internet failure → campus, and both unavailable → offline;
+- Wi-Fi ↔ mobile transitions and campus recovery preference;
+- process restart with offline send, replay, stable ordering, and no duplicates;
+- existing channel/direct histories before and after backend switching;
+- two-account incoming, outgoing, accepted, rejected, muted, speaker, and ended audio calls.
+
+Known deployment limitations: the repository contains no production Render URL or cloud credentials; backend authorization sessions are reopened rather than persisted; server-side histories remain memory-only; and internet WebRTC needs compatible cloud signaling plus deployed STUN/TURN infrastructure.
 
 ---
 

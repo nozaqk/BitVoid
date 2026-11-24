@@ -38,6 +38,7 @@
         android:required="false" />
 
     <application
+        android:name="com.bitvoid.network.BitVoidApplication"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"

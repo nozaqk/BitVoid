@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.School
@@ -96,6 +97,7 @@ import com.bitvoid.network.client.ClientChatAttachment
 import com.bitvoid.network.client.ClientChatMessage
 import com.bitvoid.network.client.ClientDirectSession
 import com.bitvoid.network.client.ClientWsStatus
+import com.bitvoid.network.client.MessageDeliveryState
 import com.bitvoid.network.client.RemoteChannelSummary
 import com.bitvoid.network.client.RemoteLiveClassSummary
 import com.bitvoid.network.client.RemoteMediaItem
@@ -103,16 +105,10 @@ import com.bitvoid.network.direct.DirectConversationSummary
 import com.bitvoid.network.model.ClientConnectionStatus
 import com.bitvoid.network.model.ClientState
 import com.bitvoid.network.ui.theme.VoidAmber
-import com.bitvoid.network.ui.theme.VoidBorder
 import com.bitvoid.network.ui.theme.VoidCrimson
 import com.bitvoid.network.ui.theme.VoidCyan
 import com.bitvoid.network.ui.theme.VoidMint
 import com.bitvoid.network.ui.theme.VoidMintContainer
-import com.bitvoid.network.ui.theme.VoidObsidian
-import com.bitvoid.network.ui.theme.VoidSurface
-import com.bitvoid.network.ui.theme.VoidSurfaceElevated
-import com.bitvoid.network.ui.theme.VoidTextPrimary
-import com.bitvoid.network.ui.theme.VoidTextSecondary
 import java.util.Locale
 
 private data class HubChannelDisplayItem(
@@ -183,7 +179,7 @@ fun BitVoidPrivateChatScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(VoidObsidian)
+            .background(MaterialTheme.colorScheme.background)
     ) {
         Row(
             modifier = Modifier
@@ -196,7 +192,7 @@ fun BitVoidPrivateChatScreen(
                 Text(
                     text = "P.CHAT",
                     style = MaterialTheme.typography.titleLarge,
-                    color = VoidTextPrimary,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
@@ -229,13 +225,13 @@ fun BitVoidPrivateChatScreen(
                 }
             }
         }
-        HorizontalDivider(thickness = 1.dp, color = VoidBorder)
+        HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
 
         if (isOpeningDirectChat) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(VoidSurface)
+                    .background(MaterialTheme.colorScheme.surface)
                     .padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -264,7 +260,7 @@ fun BitVoidPrivateChatScreen(
                     Text(
                         "No visible users are online. Tap + to add someone by their exact User ID.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = VoidTextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             } else {
@@ -286,9 +282,9 @@ fun BitVoidPrivateChatScreen(
     if (showAddUserDialog) {
         AlertDialog(
             onDismissRequest = { showAddUserDialog = false },
-            containerColor = VoidSurface,
+            containerColor = MaterialTheme.colorScheme.surface,
             titleContentColor = VoidMint,
-            textContentColor = VoidTextPrimary,
+            textContentColor = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.testTag("pchat_add_user_dialog"),
             title = { Text("ADD PRIVATE CHAT") },
             text = {
@@ -296,7 +292,7 @@ fun BitVoidPrivateChatScreen(
                     Text(
                         "Enter the exact User ID. This also works when that user disabled automatic display.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = VoidTextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     OutlinedTextField(
                         value = targetUsername,
@@ -310,9 +306,9 @@ fun BitVoidPrivateChatScreen(
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = VoidMint,
-                            unfocusedBorderColor = VoidBorder,
-                            focusedTextColor = VoidTextPrimary,
-                            unfocusedTextColor = VoidTextPrimary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
                             cursorColor = VoidMint
                         ),
                         modifier = Modifier
@@ -341,7 +337,7 @@ fun BitVoidPrivateChatScreen(
                     enabled = !isOpeningDirectChat,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = VoidMint,
-                        contentColor = VoidObsidian
+                        contentColor = MaterialTheme.colorScheme.background
                     ),
                     modifier = Modifier
                         .height(48.dp)
@@ -352,7 +348,7 @@ fun BitVoidPrivateChatScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showAddUserDialog = false }) {
-                    Text("CANCEL", color = VoidTextSecondary)
+                    Text("CANCEL", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         )
@@ -592,7 +588,7 @@ fun BitVoidHubScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(VoidObsidian)
+            .background(MaterialTheme.colorScheme.background)
     ) {
         // Minimal Hub Header with Top-Right Plus (+) Logo
         Row(
@@ -606,7 +602,7 @@ fun BitVoidHubScreen(
                 Text(
                     text = "HUB",
                     style = MaterialTheme.typography.titleLarge,
-                    color = VoidTextPrimary,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
@@ -636,13 +632,13 @@ fun BitVoidHubScreen(
             }
         }
 
-        HorizontalDivider(thickness = 1.dp, color = VoidBorder)
+        HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
 
         if (isJoiningChannel || isOpeningDirectChat) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(VoidSurface)
+                    .background(MaterialTheme.colorScheme.surface)
                     .padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -706,7 +702,7 @@ fun BitVoidHubScreen(
                     Text(
                         text = "No extra public channels yet. Tap + top right to create one.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = VoidTextSecondary,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 4.dp)
                     )
                 }
@@ -737,7 +733,7 @@ fun BitVoidHubScreen(
                     Text(
                         text = "No private channels active. Tap + top right to create a Private Channel or enter a Private ID below.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = VoidTextSecondary,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 4.dp)
                     )
                 }
@@ -790,7 +786,7 @@ fun BitVoidHubScreen(
                         localDialogError = null
                         showPrivateUnlockDialog = true
                     },
-                    colors = CardDefaults.cardColors(containerColor = VoidSurface),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     border = BorderStroke(1.dp, VoidAmber.copy(alpha = 0.55f)),
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
@@ -829,7 +825,7 @@ fun BitVoidHubScreen(
                             Text(
                                 text = "Unlock any Private or Hidden channel by ID",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = VoidTextSecondary
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         Icon(
@@ -862,7 +858,7 @@ fun BitVoidHubScreen(
                         callActions.onClearCallError()
                         showJoinClassByIdDialog = true
                     },
-                    colors = CardDefaults.cardColors(containerColor = VoidSurface),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     border = BorderStroke(1.dp, VoidCyan.copy(alpha = 0.6f)),
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
@@ -901,7 +897,7 @@ fun BitVoidHubScreen(
                             Text(
                                 text = "Enter a Class ID (CLS-...) from the same Wi-Fi node to join",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = VoidTextSecondary
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         Icon(
@@ -918,9 +914,9 @@ fun BitVoidHubScreen(
     if (showPlusChooserDialog) {
         AlertDialog(
             onDismissRequest = { showPlusChooserDialog = false },
-            containerColor = VoidSurface,
+            containerColor = MaterialTheme.colorScheme.surface,
             titleContentColor = VoidMint,
-            textContentColor = VoidTextPrimary,
+            textContentColor = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.testTag("hub_plus_chooser_dialog"),
             title = {
                 Text(
@@ -935,7 +931,7 @@ fun BitVoidHubScreen(
                             showPlusChooserDialog = false
                             onOpenCreateChannel()
                         },
-                        colors = CardDefaults.cardColors(containerColor = VoidObsidian),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.background),
                         border = BorderStroke(1.dp, VoidMint.copy(alpha = 0.65f)),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
@@ -968,13 +964,13 @@ fun BitVoidHubScreen(
                                 Text(
                                     text = "Create Channel",
                                     style = MaterialTheme.typography.titleSmall,
-                                    color = VoidTextPrimary,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
                                     text = "Public, Private (Show), or Private (Hidden)",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = VoidTextSecondary
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                             Icon(
@@ -991,7 +987,7 @@ fun BitVoidHubScreen(
                             callActions.onClearCallError()
                             showStartLiveClassDialog = true
                         },
-                        colors = CardDefaults.cardColors(containerColor = VoidObsidian),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.background),
                         border = BorderStroke(1.dp, VoidCyan.copy(alpha = 0.65f)),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
@@ -1024,13 +1020,13 @@ fun BitVoidHubScreen(
                                 Text(
                                     text = "Start Live Class",
                                     style = MaterialTheme.typography.titleSmall,
-                                    color = VoidTextPrimary,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
                                     text = "Name class, Show/Hidden in Hub & share CLS- ID",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = VoidTextSecondary
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                             Icon(
@@ -1048,7 +1044,7 @@ fun BitVoidHubScreen(
                     onClick = { showPlusChooserDialog = false },
                     modifier = Modifier.height(48.dp)
                 ) {
-                    Text("CLOSE", color = VoidTextSecondary)
+                    Text("CLOSE", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         )
@@ -1057,19 +1053,19 @@ fun BitVoidHubScreen(
     if (showDirectChatDialog) {
         val fieldColors = OutlinedTextFieldDefaults.colors(
             focusedBorderColor = VoidCyan,
-            unfocusedBorderColor = VoidBorder,
+            unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
             focusedLabelColor = VoidCyan,
-            unfocusedLabelColor = VoidTextSecondary,
-            focusedTextColor = VoidTextPrimary,
-            unfocusedTextColor = VoidTextPrimary,
+            unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+            unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
             cursorColor = VoidCyan
         )
 
         AlertDialog(
             onDismissRequest = { showDirectChatDialog = false },
-            containerColor = VoidSurface,
+            containerColor = MaterialTheme.colorScheme.surface,
             titleContentColor = VoidCyan,
-            textContentColor = VoidTextPrimary,
+            textContentColor = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.testTag("direct_chat_dialog"),
             title = {
                 Text(
@@ -1083,8 +1079,8 @@ fun BitVoidHubScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(10.dp))
-                            .background(VoidObsidian)
-                            .border(1.dp, VoidBorder, RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.background)
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp))
                             .padding(horizontal = 10.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -1098,7 +1094,7 @@ fun BitVoidHubScreen(
                             Text(
                                 text = "@$myUsername",
                                 style = MaterialTheme.typography.titleSmall,
-                                color = VoidTextPrimary,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -1133,7 +1129,7 @@ fun BitVoidHubScreen(
                                 Box(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(999.dp))
-                                        .background(VoidObsidian)
+                                        .background(MaterialTheme.colorScheme.background)
                                         .border(1.dp, VoidCyan.copy(alpha = 0.55f), RoundedCornerShape(999.dp))
                                         .clickable {
                                             targetUsernameInput = peer
@@ -1178,7 +1174,7 @@ fun BitVoidHubScreen(
                     enabled = !isOpeningDirectChat,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = VoidMint,
-                        contentColor = VoidObsidian
+                        contentColor = MaterialTheme.colorScheme.background
                     ),
                     modifier = Modifier
                         .height(48.dp)
@@ -1199,7 +1195,7 @@ fun BitVoidHubScreen(
                     onClick = { showDirectChatDialog = false },
                     modifier = Modifier.height(48.dp)
                 ) {
-                    Text("CANCEL", color = VoidTextSecondary)
+                    Text("CANCEL", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         )
@@ -1244,19 +1240,19 @@ fun BitVoidHubScreen(
     if (showPrivateUnlockDialog) {
         val fieldColors = OutlinedTextFieldDefaults.colors(
             focusedBorderColor = VoidAmber,
-            unfocusedBorderColor = VoidBorder,
+            unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
             focusedLabelColor = VoidAmber,
-            unfocusedLabelColor = VoidTextSecondary,
-            focusedTextColor = VoidTextPrimary,
-            unfocusedTextColor = VoidTextPrimary,
+            unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+            unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
             cursorColor = VoidAmber
         )
 
         AlertDialog(
             onDismissRequest = { showPrivateUnlockDialog = false },
-            containerColor = VoidSurface,
+            containerColor = MaterialTheme.colorScheme.surface,
             titleContentColor = VoidAmber,
-            textContentColor = VoidTextPrimary,
+            textContentColor = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.testTag("private_id_prompt_dialog"),
             title = {
                 Text(
@@ -1270,7 +1266,7 @@ fun BitVoidHubScreen(
                     Text(
                         text = "Enter the Private Channel ID (and optional key) to open its chat space.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = VoidTextSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     OutlinedTextField(
                         value = privateIdInput,
@@ -1322,7 +1318,7 @@ fun BitVoidHubScreen(
                     enabled = !isJoiningChannel,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = VoidMint,
-                        contentColor = VoidObsidian
+                        contentColor = MaterialTheme.colorScheme.background
                     ),
                     modifier = Modifier
                         .height(48.dp)
@@ -1339,7 +1335,7 @@ fun BitVoidHubScreen(
                     onClick = { showPrivateUnlockDialog = false },
                     modifier = Modifier.height(48.dp)
                 ) {
-                    Text("CANCEL", color = VoidTextSecondary)
+                    Text("CANCEL", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         )
@@ -1366,7 +1362,7 @@ private fun HubLiveClassRow(
     val accent = if (liveClass.isHidden) VoidAmber else VoidCyan
     Card(
         onClick = onClick,
-        colors = CardDefaults.cardColors(containerColor = VoidSurface),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, accent.copy(alpha = 0.65f)),
         shape = RoundedCornerShape(14.dp),
         modifier = Modifier
@@ -1400,7 +1396,7 @@ private fun HubLiveClassRow(
                 Text(
                     text = liveClass.name,
                     style = MaterialTheme.typography.titleMedium,
-                    color = VoidTextPrimary,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -1453,8 +1449,8 @@ private fun HubChannelRow(
     var confirmDelete by remember { mutableStateOf(false) }
     Card(
         onClick = onClick,
-        colors = CardDefaults.cardColors(containerColor = VoidSurface),
-        border = BorderStroke(1.dp, VoidBorder),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         shape = RoundedCornerShape(14.dp),
         modifier = Modifier
             .fillMaxWidth()
@@ -1496,7 +1492,7 @@ private fun HubChannelRow(
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleMedium,
-                    color = VoidTextPrimary,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -1504,7 +1500,7 @@ private fun HubChannelRow(
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.labelSmall,
-                    color = VoidTextSecondary,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -1521,17 +1517,17 @@ private fun HubChannelRow(
                         Icon(
                             imageVector = Icons.Filled.MoreVert,
                             contentDescription = "Options for $title",
-                            tint = VoidTextPrimary
+                            tint = MaterialTheme.colorScheme.onSurface
                         )
                     }
                     DropdownMenu(
                         expanded = menuExpanded,
                         onDismissRequest = { menuExpanded = false },
-                        containerColor = VoidSurface
+                        containerColor = MaterialTheme.colorScheme.surface
                     ) {
                         if (!isPublic && !channelId.isNullOrBlank()) {
                             DropdownMenuItem(
-                                text = { Text("Copy channel ID", color = VoidTextPrimary) },
+                                text = { Text("Copy channel ID", color = MaterialTheme.colorScheme.onSurface) },
                                 leadingIcon = {
                                     Icon(Icons.Filled.ContentCopy, contentDescription = null, tint = VoidMint)
                                 },
@@ -1541,10 +1537,10 @@ private fun HubChannelRow(
                                 },
                                 modifier = Modifier.testTag("${testTag}_copy_id")
                             )
-                            HorizontalDivider(color = VoidBorder)
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         }
                         DropdownMenuItem(
-                            text = { Text("Edit channel", color = VoidTextPrimary) },
+                            text = { Text("Edit channel", color = MaterialTheme.colorScheme.onSurface) },
                             leadingIcon = {
                                 Icon(Icons.Filled.Edit, contentDescription = null, tint = VoidCyan)
                             },
@@ -1571,7 +1567,7 @@ private fun HubChannelRow(
                 Icon(
                     imageVector = Icons.Filled.ChevronRight,
                     contentDescription = "Open channel",
-                    tint = VoidTextSecondary
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
@@ -1580,12 +1576,12 @@ private fun HubChannelRow(
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
-            containerColor = VoidSurface,
+            containerColor = MaterialTheme.colorScheme.surface,
             title = { Text("DELETE CHANNEL?", color = VoidCrimson) },
             text = {
                 Text(
                     "Delete '$title' and close it for every participant? This cannot be undone.",
-                    color = VoidTextPrimary
+                    color = MaterialTheme.colorScheme.onSurface
                 )
             },
             confirmButton = {
@@ -1596,13 +1592,13 @@ private fun HubChannelRow(
                     },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = VoidCrimson,
-                        contentColor = VoidTextPrimary
+                        contentColor = MaterialTheme.colorScheme.onSurface
                     )
                 ) { Text("DELETE") }
             },
             dismissButton = {
                 TextButton(onClick = { confirmDelete = false }) {
-                    Text("CANCEL", color = VoidTextSecondary)
+                    Text("CANCEL", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         )
@@ -1618,7 +1614,7 @@ private fun HubDirectChatRow(
 ) {
     Card(
         onClick = onClick,
-        colors = CardDefaults.cardColors(containerColor = VoidSurface),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, VoidMint.copy(alpha = 0.45f)),
         shape = RoundedCornerShape(14.dp),
         modifier = Modifier
@@ -1652,7 +1648,7 @@ private fun HubDirectChatRow(
                 Text(
                     text = "@$peerUsername",
                     style = MaterialTheme.typography.titleMedium,
-                    color = VoidTextPrimary,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -1660,7 +1656,7 @@ private fun HubDirectChatRow(
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.labelSmall,
-                    color = VoidTextSecondary,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -1768,17 +1764,36 @@ private fun WhatsAppDirectChatSpace(
 
     val isInDirectCall = callUiState.isInRoom(session.dmId)
     val remoteCallStatus = callUiState.activeDirectCallStatus?.takeIf { it.roomId == session.dmId }
+    val showAudioCallScreen = isInDirectCall ||
+        remoteCallStatus?.directCallPhase == DirectCallPhase.RINGING ||
+        remoteCallStatus?.directCallPhase == DirectCallPhase.ACCEPTED
+
+    if (showAudioCallScreen) {
+        BitVoidAudioCallScreen(
+            peerUsername = session.peerUsername,
+            callUiState = callUiState,
+            remoteStatus = remoteCallStatus,
+            onAnswer = { launchDirectVoiceCallWithPermission(accepting = true) },
+            onReject = { callActions.onDeclineDirectCall(session.dmId, session.token) },
+            onCancel = { callActions.onCancelDirectCall(session.dmId, session.token) },
+            onToggleMute = callActions.onToggleMicMute,
+            onToggleSpeaker = callActions.onToggleSpeakerphone,
+            onEndCall = callActions.onLeaveSession,
+            modifier = modifier
+        )
+        return
+    }
 
     Column(
         modifier = modifier
             .fillMaxSize()
             .imePadding()
-            .background(Color(0xFF0A0E14))
+            .background(MaterialTheme.colorScheme.background)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(VoidSurface)
+                .background(MaterialTheme.colorScheme.surface)
                 .padding(horizontal = 6.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -1792,7 +1807,7 @@ private fun WhatsAppDirectChatSpace(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Back to Hub",
-                    tint = VoidTextPrimary
+                    tint = MaterialTheme.colorScheme.onSurface
                 )
             }
 
@@ -1816,7 +1831,7 @@ private fun WhatsAppDirectChatSpace(
                 Text(
                     text = "@${session.peerUsername}",
                     style = MaterialTheme.typography.titleMedium,
-                    color = VoidTextPrimary,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -1846,7 +1861,7 @@ private fun WhatsAppDirectChatSpace(
                 )
             }
         }
-        HorizontalDivider(thickness = 1.dp, color = VoidBorder)
+        HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
 
         if (isInDirectCall) {
             DirectCallStagePanel(
@@ -1854,7 +1869,7 @@ private fun WhatsAppDirectChatSpace(
                 callUiState = callUiState,
                 callActions = callActions
             )
-            HorizontalDivider(thickness = 1.dp, color = VoidBorder)
+            HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
         } else if (remoteCallStatus?.directCallPhase == DirectCallPhase.RINGING &&
             remoteCallStatus.isIncoming
         ) {
@@ -1880,7 +1895,7 @@ private fun WhatsAppDirectChatSpace(
                     Text(
                         text = "@${remoteCallStatus.callerUsername} is calling. Media will not connect until you accept.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = VoidTextPrimary
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         OutlinedButton(
@@ -1900,7 +1915,7 @@ private fun WhatsAppDirectChatSpace(
                             },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = VoidMint,
-                                contentColor = VoidObsidian
+                                contentColor = MaterialTheme.colorScheme.background
                             ),
                             modifier = Modifier
                                 .weight(1f)
@@ -1910,7 +1925,7 @@ private fun WhatsAppDirectChatSpace(
                     }
                 }
             }
-            HorizontalDivider(thickness = 1.dp, color = VoidBorder)
+            HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
         } else if (remoteCallStatus?.directCallPhase == DirectCallPhase.RINGING &&
             remoteCallStatus.isOutgoing
         ) {
@@ -1933,7 +1948,7 @@ private fun WhatsAppDirectChatSpace(
                         Text("RINGING @${session.peerUsername}…", color = VoidCyan, fontWeight = FontWeight.Bold)
                         Text(
                             "Voice call invitation",
-                            color = VoidTextSecondary,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall
                         )
                     }
@@ -1943,7 +1958,7 @@ private fun WhatsAppDirectChatSpace(
                     ) { Text("CANCEL", color = VoidCrimson) }
                 }
             }
-            HorizontalDivider(thickness = 1.dp, color = VoidBorder)
+            HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
         } else if (remoteCallStatus?.directCallPhase == DirectCallPhase.ACCEPTED) {
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF0E1B18)),
@@ -1961,7 +1976,7 @@ private fun WhatsAppDirectChatSpace(
                     modifier = Modifier.padding(14.dp)
                 )
             }
-            HorizontalDivider(thickness = 1.dp, color = VoidBorder)
+            HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
         }
 
         LazyColumn(
@@ -1980,14 +1995,14 @@ private fun WhatsAppDirectChatSpace(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(12.dp))
-                            .background(VoidSurface)
-                            .border(1.dp, VoidBorder, RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
                             .padding(horizontal = 14.dp, vertical = 8.dp)
                     ) {
                         Text(
                             text = "Direct 1-on-1 chat with @${session.peerUsername} (you: @${session.myUsername})",
                             style = MaterialTheme.typography.labelSmall,
-                            color = VoidTextSecondary
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -2004,7 +2019,7 @@ private fun WhatsAppDirectChatSpace(
                         Text(
                             text = "No messages yet. Say hello to @${session.peerUsername}.",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = VoidTextSecondary
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -2023,11 +2038,11 @@ private fun WhatsAppDirectChatSpace(
             }
         }
 
-        HorizontalDivider(thickness = 1.dp, color = VoidBorder)
+        HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(VoidSurface)
+                .background(MaterialTheme.colorScheme.surface)
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -2039,8 +2054,8 @@ private fun WhatsAppDirectChatSpace(
                     }
                 },
                 shape = CircleShape,
-                color = VoidObsidian,
-                border = BorderStroke(1.dp, if (isUploadingFile) VoidMint else VoidBorder),
+                color = MaterialTheme.colorScheme.background,
+                border = BorderStroke(1.dp, if (isUploadingFile) VoidMint else MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier
                     .size(48.dp)
                     .testTag("hub_dm_attach_button")
@@ -2076,11 +2091,11 @@ private fun WhatsAppDirectChatSpace(
                 shape = RoundedCornerShape(24.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = VoidMint,
-                    unfocusedBorderColor = VoidBorder,
-                    focusedContainerColor = VoidObsidian,
-                    unfocusedContainerColor = VoidObsidian,
-                    focusedTextColor = VoidTextPrimary,
-                    unfocusedTextColor = VoidTextPrimary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+                    focusedContainerColor = MaterialTheme.colorScheme.background,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.background,
+                    focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                    unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
                     cursorColor = VoidMint
                 ),
                 modifier = Modifier
@@ -2093,6 +2108,8 @@ private fun WhatsAppDirectChatSpace(
                     if (trimmed.isNotEmpty()) {
                         onSendMessage(trimmed)
                         draft = ""
+                    } else {
+                        launchDirectVoiceCallWithPermission()
                     }
                 },
                 shape = CircleShape,
@@ -2103,9 +2120,17 @@ private fun WhatsAppDirectChatSpace(
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "Send direct message",
-                        tint = VoidObsidian,
+                        imageVector = if (draft.isBlank()) {
+                            Icons.Filled.Mic
+                        } else {
+                            Icons.AutoMirrored.Filled.Send
+                        },
+                        contentDescription = if (draft.isBlank()) {
+                            "Start audio call"
+                        } else {
+                            "Send direct message"
+                        },
+                        tint = MaterialTheme.colorScheme.background,
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -2154,13 +2179,13 @@ private fun WhatsAppChannelChatSpace(
         modifier = modifier
             .fillMaxSize()
             .imePadding()
-            .background(Color(0xFF0A0E14))
+            .background(MaterialTheme.colorScheme.background)
     ) {
         // WhatsApp-style Top Channel Bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(VoidSurface)
+                .background(MaterialTheme.colorScheme.surface)
                 .padding(horizontal = 6.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -2174,7 +2199,7 @@ private fun WhatsAppChannelChatSpace(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Back to Hub channels",
-                    tint = VoidTextPrimary
+                    tint = MaterialTheme.colorScheme.onSurface
                 )
             }
 
@@ -2207,7 +2232,7 @@ private fun WhatsAppChannelChatSpace(
                 Text(
                     text = session.name,
                     style = MaterialTheme.typography.titleMedium,
-                    color = VoidTextPrimary,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -2234,18 +2259,18 @@ private fun WhatsAppChannelChatSpace(
                 Icon(
                     imageVector = Icons.Filled.VideoLibrary,
                     contentDescription = "Toggle channel media (${session.mediaList.size})",
-                    tint = if (showMediaDrawer || session.mediaList.isNotEmpty()) VoidMint else VoidTextSecondary
+                    tint = if (showMediaDrawer || session.mediaList.isNotEmpty()) VoidMint else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
-        HorizontalDivider(thickness = 1.dp, color = VoidBorder)
+        HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
 
         // Collapsible Channel Media Drawer with Inline ExoPlayer
         AnimatedVisibility(visible = showMediaDrawer || activePlaybackItem != null) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(VoidSurfaceElevated)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
                     .padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -2268,7 +2293,7 @@ private fun WhatsAppChannelChatSpace(
                         Text(
                             text = "No videos or files assigned to this channel yet.",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = VoidTextSecondary
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     } else {
                         Column(
@@ -2282,8 +2307,8 @@ private fun WhatsAppChannelChatSpace(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clip(RoundedCornerShape(10.dp))
-                                        .background(VoidObsidian)
-                                        .border(1.dp, VoidBorder, RoundedCornerShape(10.dp))
+                                        .background(MaterialTheme.colorScheme.background)
+                                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp))
                                         .clickable { activePlaybackItem = item }
                                         .padding(horizontal = 10.dp, vertical = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically,
@@ -2298,7 +2323,7 @@ private fun WhatsAppChannelChatSpace(
                                     Text(
                                         text = item.title,
                                         style = MaterialTheme.typography.bodyMedium,
-                                        color = VoidTextPrimary,
+                                        color = MaterialTheme.colorScheme.onSurface,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f)
@@ -2313,7 +2338,7 @@ private fun WhatsAppChannelChatSpace(
                         }
                     }
                 }
-                HorizontalDivider(thickness = 1.dp, color = VoidBorder)
+                HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
             }
         }
 
@@ -2334,8 +2359,8 @@ private fun WhatsAppChannelChatSpace(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(12.dp))
-                            .background(VoidSurface)
-                            .border(1.dp, VoidBorder, RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
                             .padding(horizontal = 14.dp, vertical = 8.dp)
                     ) {
                         Text(
@@ -2345,7 +2370,7 @@ private fun WhatsAppChannelChatSpace(
                                 "${session.name} · Private ID-locked chat space (you: ${session.callsign})"
                             },
                             style = MaterialTheme.typography.labelSmall,
-                            color = VoidTextSecondary
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -2362,7 +2387,7 @@ private fun WhatsAppChannelChatSpace(
                         Text(
                             text = "No messages yet. Say hello to start this channel conversation.",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = VoidTextSecondary
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -2386,11 +2411,11 @@ private fun WhatsAppChannelChatSpace(
         }
 
         // Sticky Bottom Composer
-        HorizontalDivider(thickness = 1.dp, color = VoidBorder)
+        HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(VoidSurface)
+                .background(MaterialTheme.colorScheme.surface)
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -2402,8 +2427,8 @@ private fun WhatsAppChannelChatSpace(
                     }
                 },
                 shape = CircleShape,
-                color = VoidObsidian,
-                border = BorderStroke(1.dp, if (isUploadingFile) VoidMint else VoidBorder),
+                color = MaterialTheme.colorScheme.background,
+                border = BorderStroke(1.dp, if (isUploadingFile) VoidMint else MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier
                     .size(48.dp)
                     .testTag("hub_chat_attach_button")
@@ -2439,11 +2464,11 @@ private fun WhatsAppChannelChatSpace(
                 shape = RoundedCornerShape(24.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = VoidMint,
-                    unfocusedBorderColor = VoidBorder,
-                    focusedContainerColor = VoidObsidian,
-                    unfocusedContainerColor = VoidObsidian,
-                    focusedTextColor = VoidTextPrimary,
-                    unfocusedTextColor = VoidTextPrimary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+                    focusedContainerColor = MaterialTheme.colorScheme.background,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.background,
+                    focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                    unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
                     cursorColor = VoidMint
                 ),
                 modifier = Modifier
@@ -2468,7 +2493,7 @@ private fun WhatsAppChannelChatSpace(
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.Send,
                         contentDescription = "Send message",
-                        tint = VoidObsidian,
+                        tint = MaterialTheme.colorScheme.background,
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -2510,8 +2535,8 @@ private fun WhatsAppMessageBubble(
     } else {
         RoundedCornerShape(topStart = 4.dp, topEnd = 14.dp, bottomStart = 14.dp, bottomEnd = 14.dp)
     }
-    val bubbleBg = if (isMine) Color(0xFF0C3325) else VoidSurface
-    val bubbleBorder = if (isMine) VoidMint.copy(alpha = 0.45f) else VoidBorder
+    val bubbleBg = if (isMine) Color(0xFF0C3325) else MaterialTheme.colorScheme.surface
+    val bubbleBorder = if (isMine) VoidMint.copy(alpha = 0.45f) else MaterialTheme.colorScheme.outlineVariant
 
     Box(
         modifier = Modifier.fillMaxWidth(),
@@ -2543,7 +2568,7 @@ private fun WhatsAppMessageBubble(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(10.dp))
-                        .background(VoidObsidian.copy(alpha = 0.85f))
+                        .background(MaterialTheme.colorScheme.background.copy(alpha = 0.85f))
                         .border(1.dp, VoidCyan.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
                         .clickable { onOpenAttachment(att) }
                         .padding(horizontal = 10.dp, vertical = 8.dp)
@@ -2569,7 +2594,7 @@ private fun WhatsAppMessageBubble(
                         Text(
                             text = att.name,
                             style = MaterialTheme.typography.bodyMedium,
-                            color = VoidTextPrimary,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.SemiBold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -2577,7 +2602,7 @@ private fun WhatsAppMessageBubble(
                         Text(
                             text = formatAttachmentSize(att.size),
                             style = MaterialTheme.typography.labelSmall,
-                            color = VoidTextSecondary,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1
                         )
                     }
@@ -2596,7 +2621,7 @@ private fun WhatsAppMessageBubble(
                 Text(
                     text = message.text,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = VoidTextPrimary
+                    color = MaterialTheme.colorScheme.onSurface
                 )
             }
             Spacer(modifier = Modifier.height(3.dp))
@@ -2608,13 +2633,24 @@ private fun WhatsAppMessageBubble(
                 Text(
                     text = message.time,
                     style = MaterialTheme.typography.labelSmall,
-                    color = VoidTextSecondary
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 if (isMine) {
                     Text(
-                        text = "✓✓",
+                        text = when (message.deliveryState) {
+                            MessageDeliveryState.PENDING -> "◷"
+                            MessageDeliveryState.SENT -> "✓"
+                            MessageDeliveryState.DELIVERED -> "✓✓"
+                            MessageDeliveryState.READ -> "✓✓"
+                            MessageDeliveryState.FAILED -> "!"
+                        },
                         style = MaterialTheme.typography.labelSmall,
-                        color = VoidMint,
+                        color = when (message.deliveryState) {
+                            MessageDeliveryState.READ -> VoidCyan
+                            MessageDeliveryState.FAILED -> VoidCrimson
+                            MessageDeliveryState.PENDING -> MaterialTheme.colorScheme.onSurfaceVariant
+                            else -> VoidMint
+                        },
                         fontWeight = FontWeight.Bold
                     )
                 }

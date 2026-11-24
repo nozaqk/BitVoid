@@ -4,7 +4,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -38,6 +40,28 @@ val JetBrainsMonoFontFamily = FontFamily(
     Font(R.font.jetbrains_mono, FontWeight.Normal),
     Font(R.font.jetbrains_mono, FontWeight.Medium),
     Font(R.font.jetbrains_mono, FontWeight.Bold)
+)
+
+private val BitVoidLightColorScheme = lightColorScheme(
+    primary = Color(0xFF087F5B),
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFFD8F7EA),
+    onPrimaryContainer = Color(0xFF073B2B),
+    secondary = Color(0xFF087EA4),
+    onSecondary = Color.White,
+    secondaryContainer = Color(0xFFD5F2FC),
+    onSecondaryContainer = Color(0xFF063848),
+    tertiary = Color(0xFF9A5B00),
+    background = Color(0xFFF6F8FA),
+    onBackground = Color(0xFF17212B),
+    surface = Color.White,
+    onSurface = Color(0xFF17212B),
+    surfaceVariant = Color(0xFFEDF1F4),
+    onSurfaceVariant = Color(0xFF5B6670),
+    outline = Color(0xFFB9C2CA),
+    outlineVariant = Color(0xFFDDE3E8),
+    error = Color(0xFFBA1A1A),
+    onError = Color.White
 )
 
 private val BitVoidDarkColorScheme = darkColorScheme(
@@ -137,9 +161,12 @@ val BitVoidShapes = Shapes(
 )
 
 @Composable
-fun BitVoidTheme(content: @Composable () -> Unit) {
+fun BitVoidTheme(
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    content: @Composable () -> Unit
+) {
     MaterialTheme(
-        colorScheme = BitVoidDarkColorScheme,
+        colorScheme = if (darkTheme) BitVoidDarkColorScheme else BitVoidLightColorScheme,
         typography = BitVoidTypography,
         shapes = BitVoidShapes,
         content = content

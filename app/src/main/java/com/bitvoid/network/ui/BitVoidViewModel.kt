@@ -13,6 +13,11 @@ import com.bitvoid.network.call.DirectCallPhase
 import com.bitvoid.network.call.ParticipantRole
 import com.bitvoid.network.call.SignalingPeer
 import com.bitvoid.network.call.SignalingSessionMode
+import com.bitvoid.network.backend.BitVoidBackendConfig
+import com.bitvoid.network.backend.BitVoidBackendConnectionManager
+import com.bitvoid.network.backend.BitVoidBackendPhase
+import com.bitvoid.network.backend.BitVoidBackendState
+import com.bitvoid.network.backend.BitVoidBackendType
 import com.bitvoid.network.channel.BitVoidChannel
 import com.bitvoid.network.channel.BitVoidChannelManager
 import com.bitvoid.network.client.BitVoidClientManager
@@ -70,6 +75,9 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     private val appContext = application.applicationContext
     private val clientManager = BitVoidClientManager(appContext)
     private val clientRepository = BitVoidClientRepositoryProvider.repository
+    private val backendConnectionManager = BitVoidBackendConnectionManager(appContext)
+    val backendState: StateFlow<BitVoidBackendState> = backendConnectionManager.state
+    val backendConfig: StateFlow<BitVoidBackendConfig> = backendConnectionManager.config
     private val hardwareIntegrationDelegate = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         BitVoidHardwareIntegration(appContext)
     }
@@ -126,6 +134,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     val publicMediaError: StateFlow<String?> = clientRepository.publicMediaError
 
     val clientChannels: StateFlow<List<RemoteChannelSummary>> = clientRepository.channels
+    val cachedConversationPreviews = clientRepository.cachedConversationPreviews
     val liveClasses: StateFlow<List<RemoteLiveClassSummary>> = clientRepository.liveClasses
     val isLoadingChannels: StateFlow<Boolean> = clientRepository.isLoadingChannels
     val channelsError: StateFlow<String?> = clientRepository.channelsError
@@ -141,6 +150,10 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     val directWsStatus: StateFlow<ClientWsStatus> = clientRepository.directWsStatus
     val isOpeningDirectChat: StateFlow<Boolean> = clientRepository.isOpeningDirectChat
     val directChatError: StateFlow<String?> = clientRepository.directChatError
+
+    private val _unreadCounts = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val unreadCounts: StateFlow<Map<String, Int>> = _unreadCounts.asStateFlow()
+
     val isUploadingChatFile: StateFlow<Boolean> = clientRepository.isUploadingFile
     val fileUploadError: StateFlow<String?> = clientRepository.fileUploadError
 
@@ -248,6 +261,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, BitVoidCallUiState())
 
     private var customClientUrlPinned = false
+    private var lastAutomaticBackendUrl: String? = null
     private var autoGatewayStartInProgress = false
     private var lastAutoGatewayAttemptMs = 0L
     private var lastAutomaticWifiScanMs = 0L
@@ -265,6 +279,43 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         )
         BitVoidDirectChatManager.refreshConversationsForUser(_myUsername.value)
         loadSavedNetworkPreferences()
+        clientRepository.configureCloudBaseUrl(backendConfig.value.cloudServerUrl)
+        callManager.configureCloudBaseUrl(backendConfig.value.cloudServerUrl)
+        backendConnectionManager.start(
+            scope = viewModelScope,
+            discoverCampusBackend = { configuredLocalUrl ->
+                val current = clientState.value
+                if (current.targetPortalUrl != configuredLocalUrl &&
+                    BitVoidClientManager.normalizeLocalPortalUrl(configuredLocalUrl) != null
+                ) {
+                    BitVoidNodeStateHolder.updateClientState {
+                        it.copy(targetPortalUrl = configuredLocalUrl)
+                    }
+                }
+                val campus = clientManager.discoverAndLinkSilently()
+                if (campus == null) clientManager.releaseNetworkBindingForCloud()
+                campus
+            },
+            onBackendSelected = { type, baseUrl ->
+                handleAutomaticBackendSelection(type, baseUrl)
+            }
+        )
+        viewModelScope.launch {
+            clientRepository.incomingMessages.collect { event ->
+                val conversationId = event.message.channelId
+                val isOpen = when (event) {
+                    is ClientIncomingMessageEvent.Channel ->
+                        activeChannelSession.value?.channelId == conversationId
+                    is ClientIncomingMessageEvent.Direct ->
+                        activeDirectSession.value?.dmId == conversationId
+                }
+                if (!isOpen && !event.message.sender.equals(_myUsername.value, ignoreCase = true)) {
+                    _unreadCounts.value = _unreadCounts.value.toMutableMap().apply {
+                        this[conversationId] = (this[conversationId] ?: 0) + 1
+                    }
+                }
+            }
+        }
         viewModelScope.launch {
             var wasMonitoringMessages = false
             clientRepository.hasNotificationSubscriptions.collect { hasSubscriptions ->
@@ -372,14 +423,9 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             // automatically without stopping gateway sharing.
             delay(1_500L)
             while (isActive) {
-                if (clientState.value.connectionStatus != ClientConnectionStatus.CONNECTING &&
-                    !clientState.value.isScanning
-                ) {
-                    val gateway = clientManager.discoverAndLinkSilently()
-                    if (gateway == null && _selectedMode.value == NodeMode.CLIENT) {
-                        ensureAutomaticGatewayOnCurrentWifi()
-                    }
-                }
+                // Backend selection is owned by BitVoidBackendConnectionManager. This loop only
+                // refreshes Android's visible Wi-Fi names for diagnostics; it never starts a phone
+                // server or blocks the conversation interface.
                 val now = System.currentTimeMillis()
                 val shouldMonitorLocalLinks = _selectedMode.value == NodeMode.CLIENT ||
                     hostState.value.isServerRunning
@@ -482,6 +528,103 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             }
         }
         refreshVaultFiles()
+    }
+
+    private suspend fun handleAutomaticBackendSelection(
+        type: BitVoidBackendType,
+        baseUrl: String?
+    ) {
+        if (type == BitVoidBackendType.OFFLINE || baseUrl.isNullOrBlank()) {
+            if (backendState.value.phase == BitVoidBackendPhase.OFFLINE) {
+                BitVoidNodeStateHolder.updateClientState { current ->
+                    current.copy(
+                        connectionStatus = ClientConnectionStatus.DISCONNECTED,
+                        statusMessage = "Offline mode · cached conversations remain available",
+                        errorMessage = null
+                    )
+                }
+            }
+            return
+        }
+
+        val normalized = baseUrl.trimEnd('/')
+        if (type == BitVoidBackendType.CLOUD) {
+            clientManager.releaseNetworkBindingForCloud()
+            clientRepository.configureCloudBaseUrl(backendConfig.value.cloudServerUrl)
+            callManager.configureCloudBaseUrl(backendConfig.value.cloudServerUrl)
+            BitVoidNodeStateHolder.updateClientState { current ->
+                current.copy(
+                    connectionStatus = ClientConnectionStatus.CONNECTED,
+                    connectedSsid = null,
+                    linkedNodeUrls = listOf(normalized),
+                    targetPortalUrl = normalized,
+                    statusMessage = "Connected automatically to BitVoid cloud",
+                    errorMessage = null
+                )
+            }
+        }
+
+        if (normalized == lastAutomaticBackendUrl &&
+            clientRepository.gatewayBaseUrl.value == normalized
+        ) {
+            clientRepository.flushPendingMessages()
+            return
+        }
+
+        val priorDirect = activeDirectSession.value
+        val priorChannel = activeChannelSession.value
+        clientRepository.setGatewayBaseUrl(normalized) ?: return
+        lastAutomaticBackendUrl = normalized
+
+        clientRepository.registerUsername(
+            _myUsername.value,
+            discoverable = _isUserIdDiscoverable.value
+        )
+        clientRepository.fetchChannels(normalized, username = _myUsername.value)
+        clientRepository.fetchKnownUsers(normalized)
+        clientRepository.fetchLiveClasses(_myUsername.value, normalized)
+        clientRepository.fetchPublicMedia(normalized)
+
+        // Session tokens are backend-scoped. Reopen the same conversation after a safe switch;
+        // message IDs make merged history idempotent and queued messages retain their IDs.
+        when {
+            priorDirect != null -> clientRepository.openDirectChat(
+                myUsername = _myUsername.value,
+                targetUsername = priorDirect.peerUsername,
+                urlOverride = normalized
+            )
+            priorChannel != null && !priorChannel.isLiveClassRoom -> clientRepository.joinChannel(
+                rawChannelId = priorChannel.channelId,
+                urlOverride = normalized,
+                username = _myUsername.value
+            )
+        }
+        clientRepository.flushPendingMessages()
+    }
+
+    fun updateBackendSettings(localServerUrl: String, cloudServerUrl: String): Result<Unit> {
+        return backendConnectionManager.updateConfig(localServerUrl, cloudServerUrl)
+            .map {
+                clientRepository.configureCloudBaseUrl(it.cloudServerUrl)
+                callManager.configureCloudBaseUrl(it.cloudServerUrl)
+            }
+    }
+
+    fun refreshMessagingData() {
+        backendConnectionManager.requestRefresh()
+        val base = backendState.value.baseUrl
+        if (base != null) {
+            refreshClientChannels(base)
+            refreshLiveClasses(base)
+            viewModelScope.launch {
+                clientRepository.fetchKnownUsers(base)
+                clientRepository.flushPendingMessages()
+            }
+        }
+    }
+
+    fun markConversationRead(conversationId: String) {
+        _unreadCounts.value = _unreadCounts.value - conversationId
     }
 
     private fun loadSavedNetworkPreferences() {
@@ -1029,15 +1172,10 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private suspend fun ensureLocalGatewayReadyIfNeeded() {
-        if (!hostState.value.isServerRunning &&
-            clientState.value.connectionStatus != ClientConnectionStatus.CONNECTED
-        ) {
-            BitVoidForegroundService.startServerOnly(appContext)
-            var attempts = 0
-            while ((!hostState.value.isServerRunning || hostState.value.gatewayIp.isBlank()) && attempts < 40) {
-                delay(80)
-                attempts++
-            }
+        // Legacy call sites keep this name, but normal messaging must never start a phone server or
+        // block navigation. Ask the automatic selector for an immediate background retry instead.
+        if (!backendState.value.isConnected) {
+            backendConnectionManager.requestRefresh()
         }
     }
 
@@ -1415,6 +1553,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     }
 
     override fun onCleared() {
+        backendConnectionManager.close()
         callManager.release()
         // The process-wide repository is owned by the foreground service while a conversation is
         // joined, so dismissing the Activity must not close its WebSockets or release the Wi-Fi

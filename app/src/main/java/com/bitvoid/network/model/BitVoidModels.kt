@@ -8,9 +8,9 @@ enum class NodeMode {
 }
 
 enum class AppBottomTab(val label: String) {
-    HOME("Home"),
-    HUB("Hub"),
-    PCHAT("P.Chat"),
+    HOME("Chats"),
+    HUB("Channels"),
+    PCHAT("People"),
     SETTINGS("Settings")
 }
 

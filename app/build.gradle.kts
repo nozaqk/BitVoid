@@ -11,8 +11,16 @@ android {
     applicationId = "com.bitvoid.network"
     minSdk = 26
     targetSdk = 36
-    versionCode = 7
-    versionName = "1.4.2"
+    versionCode = 8
+    versionName = "1.5.0"
+
+    val configuredCloudUrl = providers.gradleProperty("BITVOID_CLOUD_BASE_URL")
+      .orElse(providers.environmentVariable("BITVOID_CLOUD_BASE_URL"))
+      .orElse("")
+      .get()
+      .replace("\\", "\\\\")
+      .replace("\"", "\\\"")
+    buildConfigField("String", "BITVOID_CLOUD_BASE_URL", "\"$configuredCloudUrl\"")
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

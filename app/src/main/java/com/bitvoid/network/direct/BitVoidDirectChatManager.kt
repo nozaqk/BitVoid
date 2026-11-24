@@ -269,12 +269,23 @@ object BitVoidDirectChatManager {
         dmId: String,
         senderUsername: String,
         rawText: String,
-        attachment: BitVoidMediaItem? = null
+        attachment: BitVoidMediaItem? = null,
+        stableMessageId: String? = null,
+        clientTimestampMs: Long? = null
     ): DirectChatMessage? {
         val trimmed = rawText.trim()
         if ((trimmed.isEmpty() && attachment == null) || !threads.containsKey(dmId)) return null
         val safeText = if (trimmed.length > 1000) trimmed.take(1000) else trimmed
-        val now = System.currentTimeMillis()
+        val history = messageHistory.computeIfAbsent(dmId) { CopyOnWriteArrayList() }
+        val requestedId = stableMessageId
+            ?.trim()
+            ?.takeIf { it.length in 8..80 && it.matches(Regex("^[A-Za-z0-9._:-]+$")) }
+        if (requestedId != null) {
+            history.firstOrNull { it.id == requestedId }?.let { return it }
+        }
+        val now = clientTimestampMs
+            ?.takeIf { it in 1..(System.currentTimeMillis() + 60_000L) }
+            ?: System.currentTimeMillis()
         val encodedDm = URLEncoder.encode(dmId, StandardCharsets.UTF_8.name()).replace("+", "%20")
         val encodedMedia = attachment?.let {
             URLEncoder.encode(it.id, StandardCharsets.UTF_8.name()).replace("+", "%20")
@@ -283,7 +294,7 @@ object BitVoidDirectChatManager {
             dmMediaIds.computeIfAbsent(dmId) { ConcurrentHashMap.newKeySet() }.add(attachment.id)
         }
         val message = DirectChatMessage(
-            id = "dmsg_${randomHex(8)}",
+            id = requestedId ?: "dmsg_${randomHex(8)}",
             dmId = dmId,
             senderUsername = senderUsername,
             text = safeText,
@@ -296,7 +307,6 @@ object BitVoidDirectChatManager {
             attachmentUrl = encodedMedia?.let { "/stream/dm/$encodedDm/$it" },
             attachmentDownloadUrl = encodedMedia?.let { "/download/dm/$encodedDm/$it" }
         )
-        val history = messageHistory.computeIfAbsent(dmId) { CopyOnWriteArrayList() }
         history.add(message)
         while (history.size > MAX_MESSAGES_PER_DM) {
             history.removeAt(0)
@@ -341,7 +351,7 @@ object BitVoidDirectChatManager {
         } else {
             ""
         }
-        return """{"id":"${jsonEscape(msg.id)}","dmId":"${jsonEscape(msg.dmId)}","channelId":"${jsonEscape(msg.dmId)}","sender":"${jsonEscape(msg.senderUsername)}","text":"${jsonEscape(msg.text)}","time":"${jsonEscape(msg.timestampLabel)}"$attachmentJson}"""
+        return """{"id":"${jsonEscape(msg.id)}","dmId":"${jsonEscape(msg.dmId)}","channelId":"${jsonEscape(msg.dmId)}","sender":"${jsonEscape(msg.senderUsername)}","text":"${jsonEscape(msg.text)}","time":"${jsonEscape(msg.timestampLabel)}","timestampMs":${msg.timestampMs},"deliveryState":"DELIVERED"$attachmentJson}"""
     }
 
     private fun touchUser(rawUsername: String) {
