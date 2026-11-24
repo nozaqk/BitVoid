@@ -306,8 +306,10 @@ fun BitVoidDashboard(
                     ConversationHomeTelemetry(
                         hostState = hostState,
                         channels = channels,
-                        onToggleHost = { viewModel.toggleHost() },
-                        onOpenGateway = onOpenGateway
+                        onToggleHost = { viewModel.toggleHostGateway() },
+                        onOpenGateway = {
+                            viewModel.openSandboxedBrowser(hostState.networkPortalUrl)
+                        }
                     )
                 }
             } else {
