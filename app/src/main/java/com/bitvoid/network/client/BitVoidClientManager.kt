@@ -16,7 +16,6 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.provider.Settings
 import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -817,13 +816,6 @@ class BitVoidClientManager(private val context: Context) {
                 errorMessage = null
             )
         }
-    }
-
-    fun openSystemWifiSettings() {
-        val intent = Intent(Settings.ACTION_WIFI_SETTINGS).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        appContext.startActivity(intent)
     }
 
     fun release(preserveNetworkBinding: Boolean = false) {

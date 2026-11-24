@@ -50,7 +50,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.bitvoid.network.ui.theme.VoidBorder
 import com.bitvoid.network.ui.theme.VoidCrimson
 import com.bitvoid.network.ui.theme.VoidCyan
 import com.bitvoid.network.ui.theme.VoidMint

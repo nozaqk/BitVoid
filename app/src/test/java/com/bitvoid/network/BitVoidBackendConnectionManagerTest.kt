@@ -3,15 +3,20 @@ package com.bitvoid.network
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.bitvoid.network.backend.BitVoidBackendConnectionManager
+import com.bitvoid.network.backend.BitVoidBackendPhase
 import com.bitvoid.network.backend.BitVoidBackendPrefs
+import com.bitvoid.network.backend.BitVoidBackendState
 import com.bitvoid.network.backend.BitVoidBackendType
 import com.bitvoid.network.client.BitVoidMessageStore
 import com.bitvoid.network.client.ClientChatMessage
 import com.bitvoid.network.client.MessageDeliveryState
 import com.bitvoid.network.direct.BitVoidDirectChatManager
+import com.bitvoid.network.direct.BitVoidUserPrefs
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertSame
 import org.junit.Before
 import org.junit.Test
@@ -55,6 +60,56 @@ class BitVoidBackendConnectionManagerTest {
                 "https://user:password@example.com",
                 allowCleartext = false
             )
+        )
+    }
+
+    @Test
+    fun `production cloud backend is always configured`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val legacyPrefs = context.getSharedPreferences(
+            "bitvoid_backend_preferences",
+            Context.MODE_PRIVATE
+        )
+        legacyPrefs.edit()
+            .putString("campus_server_url", "http://legacy.invalid")
+            .putString("cloud_server_url", "https://legacy.invalid")
+            .commit()
+
+        val config = BitVoidBackendPrefs.load(context)
+
+        assertEquals("http://bitvoid.local", config.localServerUrl)
+        assertEquals("https://bitvoid-cloud-api.onrender.com", config.cloudServerUrl)
+        assertFalse(legacyPrefs.contains("campus_server_url"))
+        assertFalse(legacyPrefs.contains("cloud_server_url"))
+    }
+
+    @Test
+    fun `account access completion persists`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        BitVoidUserPrefs.setAccountAccessComplete(context, false)
+        assertFalse(BitVoidUserPrefs.hasCompletedAccountAccess(context))
+
+        BitVoidUserPrefs.setAccountAccessComplete(context, true)
+        assertTrue(BitVoidUserPrefs.hasCompletedAccountAccess(context))
+
+        BitVoidUserPrefs.setAccountAccessComplete(context, false)
+    }
+
+    @Test
+    fun `connection gate remains closed until a backend is connected`() {
+        assertFalse(BitVoidBackendState().isConnected)
+        assertFalse(
+            BitVoidBackendState(
+                phase = BitVoidBackendPhase.OFFLINE,
+                baseUrl = null
+            ).isConnected
+        )
+        assertTrue(
+            BitVoidBackendState(
+                type = BitVoidBackendType.CLOUD,
+                phase = BitVoidBackendPhase.CONNECTED,
+                baseUrl = "https://bitvoid-cloud-api.onrender.com"
+            ).isConnected
         )
     }
 

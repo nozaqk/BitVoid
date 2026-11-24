@@ -3,7 +3,6 @@ package com.bitvoid.network.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,14 +20,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddComment
 import androidx.compose.material.icons.filled.Campaign
-import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Group
-import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Refresh
@@ -41,10 +37,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -105,7 +98,6 @@ fun BitVoidChatsScreen(
     cachedConversations: List<CachedConversationPreview>,
     knownUsers: List<String>,
     unreadCounts: Map<String, Int>,
-    homeStatusContent: (@Composable () -> Unit)? = null,
     onRefresh: () -> Unit,
     onOpenChannel: (String) -> Unit,
     onOpenDirectChat: (String) -> Unit,
@@ -114,7 +106,6 @@ fun BitVoidChatsScreen(
     onDiscoverChannels: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var searchQuery by rememberSaveable { mutableStateOf("") }
     var showNewMessage by rememberSaveable { mutableStateOf(false) }
     var pullDistance by remember { mutableFloatStateOf(0f) }
     val listState = rememberLazyListState()
@@ -131,7 +122,7 @@ fun BitVoidChatsScreen(
             .distinctBy { it.lowercase(Locale.US) }
     }
     val onlineSet = onlineUsers.mapTo(hashSetOf()) { it.lowercase(Locale.US) }
-    val useRemoteChannels = backendState.isConnected && remoteChannels.isNotEmpty()
+    val useRemoteChannels = backendState.isConnected
     val conversations = remember(
         useRemoteChannels,
         remoteChannels,
@@ -258,13 +249,6 @@ fun BitVoidChatsScreen(
                 .thenBy { it.title.lowercase(Locale.US) }
         )
     }
-    val filtered = remember(conversations, searchQuery) {
-        val query = searchQuery.trim()
-        if (query.isEmpty()) conversations else conversations.filter {
-            it.title.contains(query, ignoreCase = true) ||
-                it.preview.contains(query, ignoreCase = true)
-        }
-    }
 
     Box(
         modifier = modifier
@@ -272,20 +256,6 @@ fun BitVoidChatsScreen(
             .background(MaterialTheme.colorScheme.background)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            BitVoidChatsHeader(
-                myUsername = myUsername,
-                backendState = backendState,
-                searchQuery = searchQuery,
-                onSearchChange = { searchQuery = it },
-                onRefresh = onRefresh
-            )
-
-            homeStatusContent?.let { statusContent ->
-                Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)) {
-                    statusContent()
-                }
-            }
-
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -310,9 +280,9 @@ fun BitVoidChatsScreen(
                 }
             }
 
-            if (filtered.isEmpty()) {
+            if (conversations.isEmpty()) {
                 EmptyConversationState(
-                    isSearching = searchQuery.isNotBlank(),
+                    isSearching = false,
                     isOffline = backendState.type == BitVoidBackendType.OFFLINE,
                     modifier = Modifier.weight(1f)
                 )
@@ -340,7 +310,7 @@ fun BitVoidChatsScreen(
                         },
                     contentPadding = PaddingValues(bottom = 92.dp)
                 ) {
-                    items(filtered, key = { it.stableId }) { item ->
+                    items(conversations, key = { it.stableId }) { item ->
                         TelegramConversationRow(
                             item = item,
                             onClick = {
@@ -401,138 +371,6 @@ fun BitVoidChatsScreen(
                 onDiscoverChannels()
             }
         )
-    }
-}
-
-@Composable
-private fun BitVoidChatsHeader(
-    myUsername: String,
-    backendState: BitVoidBackendState,
-    searchQuery: String,
-    onSearchChange: (String) -> Unit,
-    onRefresh: () -> Unit
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 2.dp,
-        shadowElevation = 2.dp
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 10.dp, top = 12.dp, bottom = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primaryContainer)
-                        .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f), CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "BV",
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.ExtraBold,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                }
-                Spacer(Modifier.width(11.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "BitVoid",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = "@$myUsername",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                BackendConnectionPill(backendState)
-                IconButton(onClick = onRefresh, modifier = Modifier.size(42.dp)) {
-                    Icon(
-                        Icons.Filled.Refresh,
-                        contentDescription = "Refresh conversations",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = onSearchChange,
-                singleLine = true,
-                leadingIcon = {
-                    Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(20.dp))
-                },
-                placeholder = { Text("Search conversations") },
-                shape = RoundedCornerShape(24.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                    focusedBorderColor = MaterialTheme.colorScheme.primary,
-                    unfocusedBorderColor = Color.Transparent
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp)
-                    .testTag("chats_search_field")
-            )
-        }
-    }
-}
-
-@Composable
-fun BackendConnectionPill(state: BitVoidBackendState, modifier: Modifier = Modifier) {
-    val color = when {
-        state.phase == BitVoidBackendPhase.RECONNECTING ||
-            state.phase == BitVoidBackendPhase.DISCOVERING -> MaterialTheme.colorScheme.tertiary
-        state.type == BitVoidBackendType.CAMPUS -> MaterialTheme.colorScheme.primary
-        state.type == BitVoidBackendType.CLOUD -> MaterialTheme.colorScheme.secondary
-        else -> MaterialTheme.colorScheme.error
-    }
-    val icon = when (state.type) {
-        BitVoidBackendType.CAMPUS -> Icons.Filled.Lan
-        BitVoidBackendType.CLOUD -> Icons.Filled.Cloud
-        BitVoidBackendType.OFFLINE -> if (
-            state.phase == BitVoidBackendPhase.DISCOVERING ||
-            state.phase == BitVoidBackendPhase.RECONNECTING
-        ) Icons.Filled.Refresh else Icons.Filled.CloudOff
-    }
-    Surface(
-        shape = RoundedCornerShape(999.dp),
-        color = color.copy(alpha = 0.12f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = 0.45f)),
-        modifier = modifier.testTag("backend_connection_indicator")
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(13.dp))
-            Text(
-                text = when {
-                    state.phase == BitVoidBackendPhase.DISCOVERING -> "CONNECTING"
-                    state.phase == BitVoidBackendPhase.RECONNECTING -> "RECONNECTING"
-                    state.type == BitVoidBackendType.CAMPUS -> "CAMPUS"
-                    state.type == BitVoidBackendType.CLOUD -> "CLOUD"
-                    else -> "OFFLINE"
-                },
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color = color,
-                maxLines = 1
-            )
-        }
     }
 }
 

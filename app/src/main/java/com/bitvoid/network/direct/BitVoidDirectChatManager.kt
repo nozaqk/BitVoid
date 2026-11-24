@@ -55,6 +55,7 @@ object BitVoidUserPrefs {
     private const val PREFS_NAME = "bitvoid_user_identity"
     private const val KEY_USERNAME = "username"
     private const val KEY_DISCOVERABLE = "user_id_discoverable"
+    private const val KEY_ACCESS_COMPLETE = "account_access_complete"
     private val random = SecureRandom()
 
     fun loadOrCreate(context: Context): String {
@@ -78,6 +79,17 @@ object BitVoidUserPrefs {
         context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putBoolean(KEY_DISCOVERABLE, discoverable)
+            .apply()
+    }
+
+    fun hasCompletedAccountAccess(context: Context): Boolean =
+        context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_ACCESS_COMPLETE, false)
+
+    fun setAccountAccessComplete(context: Context, complete: Boolean) {
+        context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_ACCESS_COMPLETE, complete)
             .apply()
     }
 
