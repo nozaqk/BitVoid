@@ -1004,7 +1004,8 @@ class BitVoidLocalServer(
                 it.username.equals(viewer, ignoreCase = true)
             }?.role
             val isOwner = viewerRole == BitVoidSpaceRole.OWNER ||
-                (viewerRole == null && channel.creatorUsername.equals(viewer, ignoreCase = true))
+                (viewerRole == null && viewer.isNotBlank() &&
+                    channel.creatorUsername.equals(viewer, ignoreCase = true))
             val revealId = channel.isPublic || isOwner || viewerRole != null
             return channelSummaryJson(channel, revealId, isOwner, viewerRole)
         }
@@ -1854,6 +1855,9 @@ class BitVoidLocalServer(
                 token = ephemeralToken
             )
 
+        // Consume text request bodies even when authorization fails so a keep-alive connection
+        // cannot carry unread bytes into the next request.
+        val rawBody = readPostBody(session)
         val validated = BitVoidChannelManager.validateToken(authToken, requiredChannelId = channelId)
         if ((!channel.isPublic && validated == null) ||
             (channel.spaceKind != BitVoidSpaceKind.LEGACY_CHAT &&
@@ -1862,7 +1866,6 @@ class BitVoidLocalServer(
             return unauthorizedResponse(ephemeralToken)
         }
 
-        val rawBody = readPostBody(session)
         val bodyJson = runCatching { JSONObject(rawBody) }.getOrNull()
         val text = bodyJson?.optString("text", "") ?: rawBody
         val stableMessageId = bodyJson?.optString("clientMessageId")
