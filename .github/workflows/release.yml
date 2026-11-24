@@ -24,21 +24,29 @@ jobs:
 
       - name: Temporary cloud API contract probe
         run: |
-          set -x
-          base="https://bitvoid-cloud-api.onrender.com"
-          for path in /health /api/v1/health /api/node /api/users /api/v1/auth/me /api/v1/conversations; do
-            curl --silent --show-error --max-time 45 --include "$base$path" || true
-            echo
-          done
-          for path in /api/users/register /api/v1/auth/register /api/v1/auth/login; do
-            curl --silent --show-error --max-time 45 --include \
-              --request OPTIONS "$base$path" || true
-            echo
-            curl --silent --show-error --max-time 45 --include \
-              --request POST --header 'Content-Type: application/json' \
-              --data '{}' "$base$path" || true
-            echo
-          done
+          {
+            set -x
+            base="https://bitvoid-cloud-api.onrender.com"
+            for path in /health /api/v1/health /api/node /api/users /api/v1/auth/me /api/v1/conversations; do
+              curl --silent --show-error --max-time 45 --include "$base$path" || true
+              echo
+            done
+            for path in /api/users/register /api/v1/auth/register /api/v1/auth/login; do
+              curl --silent --show-error --max-time 45 --include \
+                --request OPTIONS "$base$path" || true
+              echo
+              curl --silent --show-error --max-time 45 --include \
+                --request POST --header 'Content-Type: application/json' \
+                --data '{}' "$base$path" || true
+              echo
+            done
+          } > /tmp/cloud-contract.txt 2>&1
+          diagnostic="$(tail -c 3500 /tmp/cloud-contract.txt)"
+          diagnostic="${diagnostic//'%'/'%25'}"
+          diagnostic="${diagnostic//$'\r'/'%0D'}"
+          diagnostic="${diagnostic//$'\n'/'%0A'}"
+          echo "::error title=Temporary cloud API contract::$diagnostic"
+          exit 1
 
       - uses: actions/setup-java@v4
         with:
