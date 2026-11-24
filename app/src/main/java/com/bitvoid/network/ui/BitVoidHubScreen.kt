@@ -567,27 +567,6 @@ fun BitVoidHubScreen(
     var targetUsernameInput by rememberSaveable { mutableStateOf("") }
     var localDmError by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(activeChannelSession) {
-        if (activeChannelSession != null) {
-            showPrivateUnlockDialog = false
-            showJoinClassByIdDialog = false
-            showStartLiveClassDialog = false
-            isStartingLiveClass = false
-            isJoiningClassByCode = false
-            privateIdInput = ""
-            privateKeyInput = ""
-            localDialogError = null
-        }
-    }
-
-    LaunchedEffect(activeDirectSession) {
-        if (activeDirectSession != null) {
-            showDirectChatDialog = false
-            targetUsernameInput = ""
-            localDmError = null
-        }
-    }
-
     val useRemoteList = clientState.connectionStatus == ClientConnectionStatus.CONNECTED
 
     val displayItems = remember(useRemoteList, remoteChannels, hostChannels) {

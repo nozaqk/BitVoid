@@ -503,7 +503,7 @@ class BitVoidClientManager(private val context: Context) {
                     coordinatorUrls = discovery.coordinatorUrls,
                     meshNodeCount = discovery.nodeCount,
                     statusMessage = if (discovery.coordinatorUrls.isEmpty()) {
-                        "No app gateway found on ${link.ssid ?: "the current Wi-Fi"}. Automatic gateway startup is ready."
+                        "No BitVoid server found on ${link.ssid ?: "the current Wi-Fi"}. Cloud fallback will be checked."
                     } else {
                         "${discovery.coordinatorUrls.size} coordinator(s) found; waiting for an app gateway."
                     },
