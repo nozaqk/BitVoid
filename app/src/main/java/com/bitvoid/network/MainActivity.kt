@@ -10,14 +10,9 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import com.bitvoid.network.service.BitVoidForegroundService
@@ -51,9 +46,7 @@ class MainActivity : ComponentActivity() {
 
             fun computeMissingPermissions(): List<String> {
                 val required = buildList {
-                    add(Manifest.permission.ACCESS_FINE_LOCATION)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        add(Manifest.permission.NEARBY_WIFI_DEVICES)
                         add(Manifest.permission.POST_NOTIFICATIONS)
                     }
                 }
@@ -63,29 +56,9 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            var missingPermissions by remember { mutableStateOf(computeMissingPermissions()) }
-
             val permissionLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.RequestMultiplePermissions()
-            ) {
-                missingPermissions = computeMissingPermissions()
-            }
-
-            val openDocumentsLauncher = rememberLauncherForActivityResult(
-                contract = ActivityResultContracts.OpenMultipleDocuments()
-            ) { uris ->
-                if (uris.isNotEmpty()) {
-                    viewModel.importFiles(uris)
-                }
-            }
-
-            val pickVisualMediaLauncher = rememberLauncherForActivityResult(
-                contract = ActivityResultContracts.PickMultipleVisualMedia()
-            ) { uris ->
-                if (uris.isNotEmpty()) {
-                    viewModel.importFiles(uris)
-                }
-            }
+            ) { }
 
             LaunchedEffect(Unit) {
                 val missing = computeMissingPermissions()
@@ -95,26 +68,7 @@ class MainActivity : ComponentActivity() {
             }
 
             BitVoidTheme {
-                BitVoidDashboard(
-                    viewModel = viewModel,
-                    missingPermissions = missingPermissions,
-                    onRequestPermissions = {
-                        val missing = computeMissingPermissions()
-                        if (missing.isNotEmpty()) {
-                            permissionLauncher.launch(missing.toTypedArray())
-                        }
-                    },
-                    onPickDocuments = {
-                        openDocumentsLauncher.launch(arrayOf("*/*"))
-                    },
-                    onPickMedia = {
-                        pickVisualMediaLauncher.launch(
-                            PickVisualMediaRequest(
-                                ActivityResultContracts.PickVisualMedia.ImageAndVideo
-                            )
-                        )
-                    }
-                )
+                BitVoidDashboard(viewModel = viewModel)
             }
         }
 

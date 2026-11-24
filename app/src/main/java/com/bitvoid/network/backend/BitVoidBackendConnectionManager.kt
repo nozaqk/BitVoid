@@ -13,7 +13,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -58,42 +57,22 @@ object BitVoidBackendPrefs {
     private const val KEY_CLOUD_URL = "cloud_server_url"
 
     const val DEFAULT_LOCAL_URL = "http://bitvoid.local"
+    const val DEFAULT_CLOUD_URL = "https://bitvoid-cloud-api.onrender.com"
 
     fun load(context: Context): BitVoidBackendConfig {
-        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val local = normalizeConfiguredUrl(
-            prefs.getString(KEY_LOCAL_URL, DEFAULT_LOCAL_URL).orEmpty(),
-            allowCleartext = true
-        ) ?: DEFAULT_LOCAL_URL
-        val buildCloud = BuildConfig.BITVOID_CLOUD_BASE_URL.trim()
-        val cloud = normalizeConfiguredUrl(
-            prefs.getString(KEY_CLOUD_URL, buildCloud).orEmpty(),
-            allowCleartext = false
-        ).orEmpty()
-        return BitVoidBackendConfig(localServerUrl = local, cloudServerUrl = cloud)
-    }
-
-    fun save(context: Context, localServerUrl: String, cloudServerUrl: String): Result<BitVoidBackendConfig> {
-        val local = normalizeConfiguredUrl(localServerUrl, allowCleartext = true)
-            ?: return Result.failure(
-                IllegalArgumentException("Enter a valid campus URL, such as http://bitvoid.local.")
-            )
-        val cleanCloud = cloudServerUrl.trim()
-        val cloud = if (cleanCloud.isEmpty()) {
-            ""
-        } else {
-            normalizeConfiguredUrl(cleanCloud, allowCleartext = false)
-                ?: return Result.failure(
-                    IllegalArgumentException("The cloud backend must use a valid HTTPS URL.")
-                )
-        }
-        val config = BitVoidBackendConfig(localServerUrl = local, cloudServerUrl = cloud)
+        // Remove endpoint overrides written by older app versions. Backend selection is automatic:
+        // local Wi-Fi discovery first, then the production cloud URL compiled into this build.
         context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
-            .putString(KEY_LOCAL_URL, local)
-            .putString(KEY_CLOUD_URL, cloud)
+            .remove(KEY_LOCAL_URL)
+            .remove(KEY_CLOUD_URL)
             .apply()
-        return Result.success(config)
+        return BitVoidBackendConfig(
+            localServerUrl = DEFAULT_LOCAL_URL,
+            cloudServerUrl = BuildConfig.BITVOID_CLOUD_BASE_URL
+                .trim()
+                .ifBlank { DEFAULT_CLOUD_URL }
+        )
     }
 
     fun normalizeConfiguredUrl(raw: String, allowCleartext: Boolean): String? {
@@ -119,9 +98,10 @@ object BitVoidBackendPrefs {
 }
 
 /**
- * Selects the campus backend first, then the configured Render/cloud backend, without blocking UI.
+ * Selects a BitVoid backend on the current local Wi-Fi first, then the fixed Render cloud backend.
  * A network callback wakes discovery immediately after Wi-Fi/mobile changes. Connected backends are
- * health-checked periodically; failures use capped exponential backoff and never show a setup gate.
+ * health-checked periodically; failures use capped exponential backoff while the UI shows a
+ * full-screen connection gate.
  */
 class BitVoidBackendConnectionManager(context: Context) {
     private val appContext = context.applicationContext
@@ -130,7 +110,7 @@ class BitVoidBackendConnectionManager(context: Context) {
     private val refreshSignal = Channel<Unit>(Channel.CONFLATED)
     private val started = AtomicBoolean(false)
     private var monitorJob: Job? = null
-    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private val networkCallbacks = mutableListOf<ConnectivityManager.NetworkCallback>()
 
     private val _config = MutableStateFlow(BitVoidBackendPrefs.load(appContext))
     val config: StateFlow<BitVoidBackendConfig> = _config.asStateFlow()
@@ -157,7 +137,7 @@ class BitVoidBackendConnectionManager(context: Context) {
                             BitVoidBackendPhase.RECONNECTING
                         },
                         statusLabel = if (firstPass) {
-                            "Finding campus or cloud…"
+                            "Checking local Wi-Fi, then cloud…"
                         } else {
                             "Reconnecting in the background…"
                         },
@@ -170,8 +150,13 @@ class BitVoidBackendConnectionManager(context: Context) {
                     discoverCampusBackend(currentConfig.localServerUrl)
                 }.getOrNull()?.trimEnd('/')
 
-                val hasInternet = hasInternetCapability()
-                val cloudHealthy = currentConfig.cloudServerUrl.isNotBlank() &&
+                // Do not even probe the cloud until local Wi-Fi discovery has failed. Besides
+                // preserving local-first semantics, this avoids delaying a healthy LAN selection
+                // while a sleeping Render instance wakes up.
+                val shouldTryCloud = localUrl.isNullOrBlank()
+                val hasInternet = shouldTryCloud && hasInternetCapability()
+                val cloudHealthy = shouldTryCloud &&
+                    currentConfig.cloudServerUrl.isNotBlank() &&
                     hasInternet &&
                     probeHealth(currentConfig.cloudServerUrl, requireBitVoidIdentity = false)
                 val selection = selectBackend(
@@ -189,7 +174,7 @@ class BitVoidBackendConnectionManager(context: Context) {
                         phase = BitVoidBackendPhase.CONNECTED,
                         baseUrl = selection.second,
                         statusLabel = if (selection.first == BitVoidBackendType.CAMPUS) {
-                            "Connected to campus server"
+                            "Connected through local Wi-Fi"
                         } else {
                             "Connected to cloud"
                         },
@@ -204,11 +189,7 @@ class BitVoidBackendConnectionManager(context: Context) {
                         type = BitVoidBackendType.OFFLINE,
                         phase = BitVoidBackendPhase.OFFLINE,
                         baseUrl = null,
-                        statusLabel = if (currentConfig.cloudServerUrl.isBlank()) {
-                            "Offline · cloud URL is not configured"
-                        } else {
-                            "Offline · messages will send when a server returns"
-                        },
+                        statusLabel = "Connection lost · local Wi-Fi and cloud are unavailable",
                         retryAttempt = attempt,
                         lastCheckedAtMs = now
                     )
@@ -220,14 +201,6 @@ class BitVoidBackendConnectionManager(context: Context) {
         }
     }
 
-    fun updateConfig(localServerUrl: String, cloudServerUrl: String): Result<BitVoidBackendConfig> {
-        return BitVoidBackendPrefs.save(appContext, localServerUrl, cloudServerUrl)
-            .onSuccess {
-                _config.value = it
-                requestRefresh()
-            }
-    }
-
     fun requestRefresh() {
         refreshSignal.trySend(Unit)
     }
@@ -235,10 +208,10 @@ class BitVoidBackendConnectionManager(context: Context) {
     fun close() {
         monitorJob?.cancel()
         monitorJob = null
-        networkCallback?.let { callback ->
+        networkCallbacks.forEach { callback ->
             runCatching { connectivityManager.unregisterNetworkCallback(callback) }
         }
-        networkCallback = null
+        networkCallbacks.clear()
         refreshSignal.close()
     }
 
@@ -253,22 +226,29 @@ class BitVoidBackendConnectionManager(context: Context) {
     }
 
     private fun registerNetworkCallback() {
-        val callback = object : ConnectivityManager.NetworkCallback() {
+        fun callback() = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) = requestRefresh()
             override fun onLost(network: Network) = requestRefresh()
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) =
                 requestRefresh()
         }
-        networkCallback = callback
+
+        // The default callback catches mobile/internet changes. A separate Wi-Fi request also
+        // catches local-only Wi-Fi, which deliberately has no INTERNET capability.
+        val defaultCallback = callback()
+        runCatching {
+            connectivityManager.registerDefaultNetworkCallback(defaultCallback)
+            networkCallbacks += defaultCallback
+        }
+        val wifiCallback = callback()
         runCatching {
             connectivityManager.registerNetworkCallback(
                 NetworkRequest.Builder()
-                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
                     .build(),
-                callback
+                wifiCallback
             )
-        }.onFailure {
-            runCatching { connectivityManager.registerDefaultNetworkCallback(callback) }
+            networkCallbacks += wifiCallback
         }
     }
 
@@ -281,8 +261,8 @@ class BitVoidBackendConnectionManager(context: Context) {
                     connection = URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection
                     connection.requestMethod = "GET"
                     connection.instanceFollowRedirects = false
-                    connection.connectTimeout = if (requireBitVoidIdentity) 900 else 3_500
-                    connection.readTimeout = if (requireBitVoidIdentity) 1_100 else 4_500
+                    connection.connectTimeout = if (requireBitVoidIdentity) 900 else 8_000
+                    connection.readTimeout = if (requireBitVoidIdentity) 1_100 else 30_000
                     connection.setRequestProperty("Accept", "application/json")
                     connection.setRequestProperty("User-Agent", "BitVoid-Android/2.0")
                     val healthy = connection.responseCode in 200..299

@@ -1,21 +1,13 @@
 package com.bitvoid.network.ui
 
-import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.webkit.WebView
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,14 +15,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -42,36 +30,21 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.OpenInBrowser
-import androidx.compose.material.icons.filled.PhotoLibrary
-import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Shield
-import androidx.compose.material.icons.filled.Speed
-import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material.icons.filled.WifiTethering
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -82,8 +55,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -92,72 +63,48 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bitvoid.network.channel.BitVoidChannel
 import com.bitvoid.network.client.BitVoidClientManager
 import com.bitvoid.network.media.BitVoidMediaItem
 import com.bitvoid.network.model.AppBottomTab
-import com.bitvoid.network.model.AuditLogEntry
-import com.bitvoid.network.model.BitVoidNetworkConfig
 import com.bitvoid.network.model.ClientState
 import com.bitvoid.network.model.HostState
-import com.bitvoid.network.model.HotspotStatus
-import com.bitvoid.network.model.NodeMode
 import com.bitvoid.network.ui.theme.VoidAmber
 import com.bitvoid.network.ui.theme.VoidBorder
 import com.bitvoid.network.ui.theme.VoidCrimson
 import com.bitvoid.network.ui.theme.VoidCyan
 import com.bitvoid.network.ui.theme.VoidMint
-import com.bitvoid.network.ui.theme.VoidMintContainer
 import com.bitvoid.network.ui.theme.VoidObsidian
 import com.bitvoid.network.ui.theme.VoidSurface
-import com.bitvoid.network.ui.theme.VoidSurfaceElevated
 import com.bitvoid.network.ui.theme.VoidTextPrimary
 import com.bitvoid.network.ui.theme.VoidTextSecondary
 import com.bitvoid.network.R
 import java.util.Locale
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
 fun BitVoidDashboard(
-    viewModel: BitVoidViewModel,
-    missingPermissions: List<String>,
-    onRequestPermissions: () -> Unit,
-    onPickDocuments: () -> Unit,
-    onPickMedia: () -> Unit
+    viewModel: BitVoidViewModel
 ) {
-    val mode by viewModel.selectedMode.collectAsStateWithLifecycle()
     val selectedBottomTab by viewModel.selectedBottomTab.collectAsStateWithLifecycle()
     val backendState by viewModel.backendState.collectAsStateWithLifecycle()
-    val backendConfig by viewModel.backendConfig.collectAsStateWithLifecycle()
     val unreadCounts by viewModel.unreadCounts.collectAsStateWithLifecycle()
     val hostState by viewModel.hostState.collectAsStateWithLifecycle()
-    val auditLogs by viewModel.auditLogs.collectAsStateWithLifecycle()
-    val nodeConnectionLogs by viewModel.nodeConnectionLogs.collectAsStateWithLifecycle()
     val clientState by viewModel.clientState.collectAsStateWithLifecycle()
-    val isImporting by viewModel.isImportingFiles.collectAsStateWithLifecycle()
     val channels by viewModel.channels.collectAsStateWithLifecycle()
 
     val clientChannels by viewModel.clientChannels.collectAsStateWithLifecycle()
@@ -175,6 +122,9 @@ fun BitVoidDashboard(
 
     val myUsername by viewModel.myUsername.collectAsStateWithLifecycle()
     val isUserIdDiscoverable by viewModel.isUserIdDiscoverable.collectAsStateWithLifecycle()
+    val hasCompletedAccountAccess by viewModel.hasCompletedAccountAccess.collectAsStateWithLifecycle()
+    val isCompletingAccountAccess by viewModel.isCompletingAccountAccess.collectAsStateWithLifecycle()
+    val accountAccessError by viewModel.accountAccessError.collectAsStateWithLifecycle()
     val directConversations by viewModel.directConversations.collectAsStateWithLifecycle()
     val knownUsers by viewModel.knownUsers.collectAsStateWithLifecycle()
     val activeDirectSession by viewModel.activeDirectSession.collectAsStateWithLifecycle()
@@ -186,6 +136,28 @@ fun BitVoidDashboard(
     val fileUploadError by viewModel.fileUploadError.collectAsStateWithLifecycle()
     val callUiState by viewModel.callUiState.collectAsStateWithLifecycle()
     val liveClasses by viewModel.liveClasses.collectAsStateWithLifecycle()
+
+    if (!backendState.isConnected) {
+        BitVoidConnectionGateScreen(
+            state = backendState,
+            onRetry = viewModel::refreshMessagingData,
+            modifier = Modifier.fillMaxSize()
+        )
+        return
+    }
+
+    if (!hasCompletedAccountAccess) {
+        BitVoidAccountAccessScreen(
+            backendState = backendState,
+            suggestedUsername = myUsername,
+            isSubmitting = isCompletingAccountAccess,
+            errorMessage = accountAccessError,
+            onSubmit = viewModel::completeAccountAccess,
+            onClearError = viewModel::clearAccountAccessError,
+            modifier = Modifier.fillMaxSize()
+        )
+        return
+    }
 
     val callActions = remember(viewModel) {
         BitVoidCallActions(
@@ -226,9 +198,6 @@ fun BitVoidDashboard(
     var showCreateBroadcastDialog by rememberSaveable { mutableStateOf(false) }
     var showDiscoverChannelsDialog by rememberSaveable { mutableStateOf(false) }
     var editingChannelId by rememberSaveable { mutableStateOf<String?>(null) }
-    var showProtocolDialog by rememberSaveable { mutableStateOf(false) }
-    var showQrDialog by rememberSaveable { mutableStateOf(false) }
-    var showNodeAccessDialog by rememberSaveable { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
@@ -249,29 +218,13 @@ fun BitVoidDashboard(
         }
     }
 
-    val clientHubContent: @Composable () -> Unit = {
-        BitVoidClientHubContent(
-            connectionLogs = nodeConnectionLogs,
-            onClearConnectionLogs = { viewModel.clearNodeConnectionLogs() },
-            onClose = { viewModel.selectMode(NodeMode.HOST) }
-        )
-    }
-
     val settingsIdentityContent: @Composable () -> Unit = {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            SettingsUserIdentityCard(
-                username = myUsername,
-                isDiscoverable = isUserIdDiscoverable,
-                onSetDiscoverable = { viewModel.setUserIdDiscoverable(it) },
-                onCopyUsername = ::copyToClipboard
-            )
-            BackendConnectionSettingsCard(
-                state = backendState,
-                config = backendConfig,
-                onSave = viewModel::updateBackendSettings,
-                onRefresh = viewModel::refreshMessagingData
-            )
-        }
+        SettingsUserIdentityCard(
+            username = myUsername,
+            isDiscoverable = isUserIdDiscoverable,
+            onSetDiscoverable = { viewModel.setUserIdDiscoverable(it) },
+            onCopyUsername = ::copyToClipboard
+        )
     }
 
     val pChatScreenContent: @Composable () -> Unit = {
@@ -308,20 +261,6 @@ fun BitVoidDashboard(
             cachedConversations = cachedConversationPreviews,
             knownUsers = knownUsers,
             unreadCounts = unreadCounts,
-            homeStatusContent = if (mode == NodeMode.HOST) {
-                {
-                    ConversationHomeTelemetry(
-                        hostState = hostState,
-                        channels = channels,
-                        onToggleHost = { viewModel.toggleHostGateway() },
-                        onOpenGateway = {
-                            viewModel.openSandboxedBrowser(hostState.networkPortalUrl)
-                        }
-                    )
-                }
-            } else {
-                null
-            },
             onRefresh = viewModel::refreshMessagingData,
             onOpenChannel = { channelId ->
                 viewModel.markConversationRead(channelId)
@@ -439,9 +378,6 @@ fun BitVoidDashboard(
                     callUiState.callState != com.bitvoid.network.call.BitVoidCallState.IDLE))) ||
             (selectedBottomTab == AppBottomTab.PCHAT && activeDirectSession != null)
 
-    BackHandler(enabled = selectedBottomTab == AppBottomTab.HOME && mode == NodeMode.CLIENT) {
-        viewModel.selectMode(NodeMode.HOST)
-    }
     BackHandler(
         enabled = selectedBottomTab != AppBottomTab.HOME && !isInsideActiveConversation
     ) {
@@ -479,90 +415,15 @@ fun BitVoidDashboard(
                 ) {
                     WideDashboardContent(
                         selectedBottomTab = selectedBottomTab,
-                        mode = mode,
-                        hostState = hostState,
-                        channels = channels,
-                        auditLogs = auditLogs,
-                        isImporting = isImporting,
-                        missingPermissionsCount = missingPermissions.size,
-                        onSaveBroadcastCredentials = { ssid, pass ->
-                            viewModel.updateBroadcastSettings(ssid, pass)
-                        },
-                        onBroadcastSaved = { msg ->
-                            coroutineScope.launch { snackbarHostState.showSnackbar(msg) }
-                        },
-                        onRequestPermissions = onRequestPermissions,
-                        onToggleHost = { viewModel.toggleHostGateway() },
-                        onOpenGateway = {
-                            viewModel.openSandboxedBrowser(hostState.networkPortalUrl)
-                        },
-                        onOpenProtocolDialog = { showProtocolDialog = true },
-                        onOpenQrDialog = { showQrDialog = true },
-                        onOpenNodeAccess = { showNodeAccessDialog = true },
-                        onOpenWifiSettings = { viewModel.openSystemWifiSettings() },
-                        onOpenHotspotSettings = { viewModel.openHotspotTetherSettings() },
-                        onPickDocuments = onPickDocuments,
-                        onPickMedia = onPickMedia,
-                        onToggleVideoPublic = { id, isPublic ->
-                            viewModel.setVideoPublic(id, isPublic)
-                        },
-                        onToggleMediaChannel = { channelId, mediaId ->
-                            viewModel.toggleMediaInChannel(channelId, mediaId)
-                        },
-                        onDeleteFile = { viewModel.deleteFile(it) },
-                        onClearLogs = { viewModel.clearAuditLogs() },
-                        clientHubContent = clientHubContent,
                         chatsScreenContent = chatsScreenContent,
                         hubScreenContent = hubScreenContent,
                         pChatScreenContent = pChatScreenContent,
-                        settingsIdentityContent = settingsIdentityContent,
-                        onOpenClientNode = {
-                            viewModel.selectMode(NodeMode.CLIENT)
-                            viewModel.selectBottomTab(AppBottomTab.HOME)
-                        }
+                        settingsIdentityContent = settingsIdentityContent
                     )
                 }
             } else {
                 CompactDashboardContent(
                     selectedBottomTab = selectedBottomTab,
-                    mode = mode,
-                    hostState = hostState,
-                    channels = channels,
-                    auditLogs = auditLogs,
-                    clientState = clientState,
-                    isImporting = isImporting,
-                    missingPermissionsCount = missingPermissions.size,
-                    onSaveBroadcastCredentials = { ssid, pass ->
-                        viewModel.updateBroadcastSettings(ssid, pass)
-                    },
-                    onBroadcastSaved = { msg ->
-                        coroutineScope.launch { snackbarHostState.showSnackbar(msg) }
-                    },
-                    onRequestPermissions = onRequestPermissions,
-                    onOpenClientNode = {
-                        viewModel.selectMode(NodeMode.CLIENT)
-                        viewModel.selectBottomTab(AppBottomTab.HOME)
-                    },
-                    onToggleHost = { viewModel.toggleHostGateway() },
-                    onOpenGateway = {
-                        viewModel.openSandboxedBrowser(hostState.networkPortalUrl)
-                    },
-                    onOpenProtocolDialog = { showProtocolDialog = true },
-                    onOpenQrDialog = { showQrDialog = true },
-                    onOpenNodeAccess = { showNodeAccessDialog = true },
-                    onOpenWifiSettings = { viewModel.openSystemWifiSettings() },
-                    onOpenHotspotSettings = { viewModel.openHotspotTetherSettings() },
-                    onPickDocuments = onPickDocuments,
-                    onPickMedia = onPickMedia,
-                    onToggleVideoPublic = { id, isPublic ->
-                        viewModel.setVideoPublic(id, isPublic)
-                    },
-                    onToggleMediaChannel = { channelId, mediaId ->
-                        viewModel.toggleMediaInChannel(channelId, mediaId)
-                    },
-                    onDeleteFile = { viewModel.deleteFile(it) },
-                    onClearLogs = { viewModel.clearAuditLogs() },
-                    clientHubContent = clientHubContent,
                     chatsScreenContent = chatsScreenContent,
                     hubScreenContent = hubScreenContent,
                     pChatScreenContent = pChatScreenContent,
@@ -574,29 +435,6 @@ fun BitVoidDashboard(
                 )
             }
         }
-    }
-
-    if (showProtocolDialog) {
-        HostNetworkProtocolDialog(
-            hostState = hostState,
-            onDismiss = { showProtocolDialog = false }
-        )
-    }
-
-    if (showQrDialog) {
-        HostQrCodeDialog(
-            hostState = hostState,
-            onCopy = ::copyToClipboard,
-            onDismiss = { showQrDialog = false }
-        )
-    }
-
-    if (showNodeAccessDialog) {
-        HostNodeAccessDialog(
-            hostState = hostState,
-            onCopy = ::copyToClipboard,
-            onDismiss = { showNodeAccessDialog = false }
-        )
     }
 
     if (showCreateGroupDialog) {
@@ -718,31 +556,6 @@ fun BitVoidDashboard(
 @Composable
 private fun CompactDashboardContent(
     selectedBottomTab: AppBottomTab,
-    mode: NodeMode,
-    hostState: HostState,
-    channels: List<BitVoidChannel>,
-    auditLogs: List<AuditLogEntry>,
-    clientState: ClientState,
-    isImporting: Boolean,
-    missingPermissionsCount: Int,
-    onSaveBroadcastCredentials: (String, String) -> Result<Unit>,
-    onBroadcastSaved: (String) -> Unit,
-    onRequestPermissions: () -> Unit,
-    onOpenClientNode: () -> Unit,
-    onToggleHost: () -> Unit,
-    onOpenGateway: () -> Unit,
-    onOpenProtocolDialog: () -> Unit,
-    onOpenQrDialog: () -> Unit,
-    onOpenNodeAccess: () -> Unit,
-    onOpenWifiSettings: () -> Unit,
-    onOpenHotspotSettings: () -> Unit,
-    onPickDocuments: () -> Unit,
-    onPickMedia: () -> Unit,
-    onToggleVideoPublic: (String, Boolean) -> Unit,
-    onToggleMediaChannel: (String, String) -> Unit,
-    onDeleteFile: (String) -> Unit,
-    onClearLogs: () -> Unit,
-    clientHubContent: @Composable () -> Unit,
     chatsScreenContent: @Composable () -> Unit,
     hubScreenContent: @Composable () -> Unit,
     pChatScreenContent: @Composable () -> Unit,
@@ -768,8 +581,6 @@ private fun CompactDashboardContent(
         return
     }
 
-    var showAuditLogs by rememberSaveable { mutableStateOf(false) }
-
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp),
@@ -788,33 +599,6 @@ private fun CompactDashboardContent(
                         settingsIdentityContent()
                     }
                 }
-                item(key = "settings_cards") {
-                    Box(modifier = Modifier.padding(horizontal = 16.dp)) {
-                        SettingsAutonomousCard(
-                            hostState = hostState,
-                            missingPermissionsCount = missingPermissionsCount,
-                            onSaveBroadcastCredentials = onSaveBroadcastCredentials,
-                            onBroadcastSaved = onBroadcastSaved,
-                            onRequestPermissions = onRequestPermissions,
-                            onOpenProtocolDialog = onOpenProtocolDialog,
-                            onOpenQrDialog = onOpenQrDialog,
-                            onOpenNodeAccess = onOpenNodeAccess,
-                            onOpenClientNode = onOpenClientNode,
-                            onOpenWifiSettings = onOpenWifiSettings,
-                            onOpenHotspotSettings = onOpenHotspotSettings
-                        )
-                    }
-                }
-                item(key = "settings_audit_logs") {
-                    Box(modifier = Modifier.padding(horizontal = 16.dp)) {
-                        AuditLogPanel(
-                            logs = auditLogs,
-                            expanded = showAuditLogs,
-                            onToggleExpand = { showAuditLogs = !showAuditLogs },
-                            onClearLogs = onClearLogs
-                        )
-                    }
-                }
             }
         }
     }
@@ -823,37 +607,11 @@ private fun CompactDashboardContent(
 @Composable
 private fun WideDashboardContent(
     selectedBottomTab: AppBottomTab,
-    mode: NodeMode,
-    hostState: HostState,
-    channels: List<BitVoidChannel>,
-    auditLogs: List<AuditLogEntry>,
-    isImporting: Boolean,
-    missingPermissionsCount: Int,
-    onSaveBroadcastCredentials: (String, String) -> Result<Unit>,
-    onBroadcastSaved: (String) -> Unit,
-    onRequestPermissions: () -> Unit,
-    onToggleHost: () -> Unit,
-    onOpenGateway: () -> Unit,
-    onOpenProtocolDialog: () -> Unit,
-    onOpenQrDialog: () -> Unit,
-    onOpenNodeAccess: () -> Unit,
-    onOpenWifiSettings: () -> Unit,
-    onOpenHotspotSettings: () -> Unit,
-    onPickDocuments: () -> Unit,
-    onPickMedia: () -> Unit,
-    onToggleVideoPublic: (String, Boolean) -> Unit,
-    onToggleMediaChannel: (String, String) -> Unit,
-    onDeleteFile: (String) -> Unit,
-    onClearLogs: () -> Unit,
-    onOpenClientNode: () -> Unit,
-    clientHubContent: @Composable () -> Unit,
     chatsScreenContent: @Composable () -> Unit,
     hubScreenContent: @Composable () -> Unit,
     pChatScreenContent: @Composable () -> Unit,
     settingsIdentityContent: @Composable () -> Unit
 ) {
-    var showAuditLogs by rememberSaveable { mutableStateOf(true) }
-
     when (selectedBottomTab) {
         AppBottomTab.HOME -> {
             Box(modifier = Modifier.fillMaxSize()) {
@@ -902,1250 +660,11 @@ private fun WideDashboardContent(
                 item {
                     settingsIdentityContent()
                 }
-                item {
-                    SettingsAutonomousCard(
-                        hostState = hostState,
-                        missingPermissionsCount = missingPermissionsCount,
-                        onSaveBroadcastCredentials = onSaveBroadcastCredentials,
-                        onBroadcastSaved = onBroadcastSaved,
-                        onRequestPermissions = onRequestPermissions,
-                        onOpenProtocolDialog = onOpenProtocolDialog,
-                        onOpenQrDialog = onOpenQrDialog,
-                        onOpenNodeAccess = onOpenNodeAccess,
-                        onOpenClientNode = onOpenClientNode,
-                        onOpenWifiSettings = onOpenWifiSettings,
-                        onOpenHotspotSettings = onOpenHotspotSettings
-                    )
-                }
-                item {
-                    AuditLogPanel(
-                        logs = auditLogs,
-                        expanded = showAuditLogs,
-                        onToggleExpand = { showAuditLogs = !showAuditLogs },
-                        onClearLogs = onClearLogs
-                    )
-                }
             }
         }
     }
 }
 
-@Composable
-private fun ConversationHomeTelemetry(
-    hostState: HostState,
-    channels: List<BitVoidChannel>,
-    onToggleHost: () -> Unit,
-    onOpenGateway: () -> Unit
-) {
-    val isRunning = hostState.status == HotspotStatus.ACTIVE ||
-        hostState.status == HotspotStatus.SERVER_ONLY
-    val bytesPerSecond = rememberGatewayBytesPerSecond(
-        totalBytes = hostState.bytesServed,
-        isRunning = isRunning
-    )
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("host_telemetry_card"),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        shape = RoundedCornerShape(16.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = if (isRunning) "Gateway telemetry live" else "Gateway is ready to start",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = "${hostState.connectedNodesCount} nodes · " +
-                            "${countConnectedUsers(channels)} users · ${channels.size} channels · " +
-                            formatGatewaySpeed(bytesPerSecond),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.testTag("gateway_overview_card")
-                    )
-                }
-                IconButton(
-                    onClick = onOpenGateway,
-                    enabled = hostState.hasClientGatewayAddress
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.OpenInBrowser,
-                        contentDescription = "Open gateway portal",
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                }
-                IconButton(onClick = onToggleHost) {
-                    Icon(
-                        imageVector = Icons.Filled.PowerSettingsNew,
-                        contentDescription = if (isRunning) "Stop host" else "Start host",
-                        tint = if (isRunning) VoidCrimson else MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
-            Text(
-                text = "${hostState.publicCount} public broadcasts · " +
-                    formatBytes(hostState.bytesServed) + " served · no identifying request logs",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-    }
-}
-
-@Composable
-private fun HostPowerControlCard(
-    hostState: HostState,
-    onToggleHost: () -> Unit
-) {
-    val isActive = hostState.status == HotspotStatus.ACTIVE ||
-        hostState.status == HotspotStatus.SERVER_ONLY
-    val isStarting = hostState.status == HotspotStatus.STARTING
-
-    val infiniteTransition = rememberInfiniteTransition(label = "nodePulse")
-    val pulseProgress by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1800, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "pulseScale"
-    )
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = VoidSurface),
-        border = BorderStroke(
-            width = 1.dp,
-            color = if (isActive) VoidMint.copy(alpha = 0.65f) else VoidBorder
-        ),
-        shape = RoundedCornerShape(16.dp)
-    ) {
-        Box(modifier = Modifier.fillMaxWidth()) {
-            Image(
-                painter = painterResource(id = R.drawable.img_void_node_banner_1794598540599),
-                contentDescription = stringResource(R.string.cd_node_banner),
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .matchParentSize()
-                    .alpha(if (isActive) 0.28f else 0.14f)
-            )
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(
-                                VoidObsidian.copy(alpha = 0.45f),
-                                VoidSurface.copy(alpha = 0.92f)
-                            )
-                        )
-                    )
-            )
-
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                // Live Public Broadcast Pill
-                StatusChip(
-                    label = if (hostState.publicCount > 0) {
-                        "LIVE BROADCAST: ${hostState.publicCount} PUBLIC STREAM(S)"
-                    } else {
-                        "0 PUBLIC STREAMS · ALL PRIVATE"
-                    },
-                    accentColor = if (hostState.publicCount > 0 && isActive) VoidMint else VoidAmber
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Large Tactical Power Core Button
-                Box(
-                    modifier = Modifier.size(136.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (isActive || isStarting) {
-                        Canvas(modifier = Modifier.fillMaxSize()) {
-                            val maxRadius = size.minDimension / 2f
-                            drawCircle(
-                                color = VoidMint.copy(alpha = (1f - pulseProgress) * 0.45f),
-                                radius = maxRadius * (0.65f + pulseProgress * 0.35f),
-                                style = Stroke(width = 3.dp.toPx())
-                            )
-                        }
-                    }
-
-                    Surface(
-                        onClick = onToggleHost,
-                        shape = CircleShape,
-                        color = if (isActive) VoidMint else VoidSurfaceElevated,
-                        border = BorderStroke(
-                            width = 2.dp,
-                            color = if (isActive) VoidMint else VoidMint.copy(alpha = 0.5f)
-                        ),
-                        modifier = Modifier
-                            .size(96.dp)
-                            .testTag("host_power_toggle")
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            if (isStarting) {
-                                CircularProgressIndicator(
-                                    color = VoidMint,
-                                    strokeWidth = 3.dp,
-                                    modifier = Modifier.size(34.dp)
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Filled.PowerSettingsNew,
-                                    contentDescription = stringResource(R.string.cd_power_toggle),
-                                    tint = if (isActive) VoidObsidian else VoidMint,
-                                    modifier = Modifier.size(40.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Text(
-                    text = when {
-                        hostState.status == HotspotStatus.ACTIVE ->
-                            "PASSWORD-PROTECTED ENGINE & PORTAL LIVE"
-                        hostState.status == HotspotStatus.SERVER_ONLY ->
-                            "HTTP VAULT ONLINE (0.0.0.0:${hostState.port})"
-                        hostState.status == HotspotStatus.STARTING ->
-                            "BOOTING BITVOID HOST ENGINE..."
-                        hostState.status == HotspotStatus.ERROR ->
-                            "HOST ENGINE STANDBY"
-                        else -> "READY TO START BITVOID HOST ENGINE"
-                    },
-                    style = MaterialTheme.typography.titleMedium,
-                    color = when (hostState.status) {
-                        HotspotStatus.ACTIVE, HotspotStatus.SERVER_ONLY -> VoidMint
-                        HotspotStatus.ERROR -> VoidCrimson
-                        else -> VoidTextPrimary
-                    }
-                )
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                Surface(
-                    shape = RoundedCornerShape(999.dp),
-                    color = VoidCyan.copy(alpha = 0.14f),
-                    border = BorderStroke(1.dp, VoidCyan.copy(alpha = 0.65f)),
-                    modifier = Modifier.testTag("host_security_status_badge")
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Lock,
-                            contentDescription = null,
-                            tint = VoidCyan,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Text(
-                            text = hostState.securityLabel,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = VoidCyan,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-
-                hostState.errorMessage?.let { err ->
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text(
-                        text = err,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = VoidCrimson
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun GatewayOverviewCard(
-    hostState: HostState,
-    channels: List<BitVoidChannel>,
-    onOpenGateway: () -> Unit
-) {
-    val isRunning = hostState.status == HotspotStatus.ACTIVE ||
-        hostState.status == HotspotStatus.SERVER_ONLY
-    val bytesPerSecond = rememberGatewayBytesPerSecond(
-        totalBytes = hostState.bytesServed,
-        isRunning = isRunning
-    )
-    val connectedUsers = countConnectedUsers(channels)
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("gateway_overview_card"),
-        colors = CardDefaults.cardColors(containerColor = VoidSurface),
-        border = BorderStroke(1.dp, VoidBorder),
-        shape = RoundedCornerShape(14.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Speed,
-                        contentDescription = null,
-                        tint = VoidMint,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "GATEWAY CONNECTION STATUS",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = VoidMint
-                    )
-                }
-                IconButton(
-                    onClick = onOpenGateway,
-                    enabled = hostState.hasClientGatewayAddress,
-                    modifier = Modifier
-                        .size(36.dp)
-                        .testTag("open_gateway_portal_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.OpenInBrowser,
-                        contentDescription = "Open gateway portal",
-                        tint = if (hostState.hasClientGatewayAddress) VoidCyan else VoidTextSecondary,
-                        modifier = Modifier.size(19.dp)
-                    )
-                }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                TelemetryTile(
-                    label = "APP NODES",
-                    value = hostState.connectedNodesCount.toString(),
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("gateway_nodes_count")
-                )
-                TelemetryTile(
-                    label = "USERS CONNECTED",
-                    value = connectedUsers.toString(),
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("gateway_users_count")
-                )
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                TelemetryTile(
-                    label = "CHANNELS",
-                    value = channels.size.toString(),
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("gateway_channels_count")
-                )
-                TelemetryTile(
-                    label = "GATEWAY SPEED",
-                    value = formatGatewaySpeed(bytesPerSecond),
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("gateway_speed_value")
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun rememberGatewayBytesPerSecond(totalBytes: Long, isRunning: Boolean): Long {
-    val latestTotalBytes by rememberUpdatedState(totalBytes)
-    var bytesPerSecond by remember { mutableStateOf(0L) }
-
-    LaunchedEffect(isRunning) {
-        if (!isRunning) {
-            bytesPerSecond = 0L
-            return@LaunchedEffect
-        }
-
-        var previousBytes = latestTotalBytes
-        var previousNanos = System.nanoTime()
-        while (true) {
-            delay(1_000L)
-            val currentBytes = latestTotalBytes
-            val currentNanos = System.nanoTime()
-            bytesPerSecond = calculateGatewayBytesPerSecond(
-                previousBytes = previousBytes,
-                currentBytes = currentBytes,
-                elapsedNanos = currentNanos - previousNanos
-            )
-            previousBytes = currentBytes
-            previousNanos = currentNanos
-        }
-    }
-    return bytesPerSecond
-}
-
-internal fun countConnectedUsers(channels: List<BitVoidChannel>): Int =
-    channels.asSequence()
-        .flatMap { it.activeParticipants.asSequence() }
-        .filter { it.isWebSocketConnected }
-        .map { it.callsign.trim().lowercase(Locale.ROOT) }
-        .filter { it.isNotEmpty() }
-        .distinct()
-        .count()
-
-internal fun calculateGatewayBytesPerSecond(
-    previousBytes: Long,
-    currentBytes: Long,
-    elapsedNanos: Long
-): Long {
-    if (elapsedNanos <= 0L || currentBytes <= previousBytes) return 0L
-    val elapsedSeconds = elapsedNanos.toDouble() / 1_000_000_000.0
-    return ((currentBytes - previousBytes).toDouble() / elapsedSeconds)
-        .toLong()
-        .coerceAtLeast(0L)
-}
-
-internal fun formatGatewaySpeed(bytesPerSecond: Long): String {
-    val bitsPerSecond = bytesPerSecond.coerceAtLeast(0L).toDouble() * 8.0
-    return when {
-        bitsPerSecond >= 1_000_000_000.0 ->
-            String.format(Locale.US, "%.1f Gb/s", bitsPerSecond / 1_000_000_000.0)
-        bitsPerSecond >= 1_000_000.0 ->
-            String.format(Locale.US, "%.1f Mb/s", bitsPerSecond / 1_000_000.0)
-        bitsPerSecond >= 1_000.0 ->
-            String.format(Locale.US, "%.1f Kb/s", bitsPerSecond / 1_000.0)
-        else -> "${bitsPerSecond.toLong()} b/s"
-    }
-}
-
-@Composable
-private fun HostNodeAccessDialog(
-    hostState: HostState,
-    onCopy: (String, String) -> Unit,
-    onDismiss: () -> Unit
-) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth(0.94f)
-                .fillMaxHeight(0.9f)
-                .widthIn(max = 680.dp)
-                .testTag("node_access_dialog"),
-            shape = RoundedCornerShape(18.dp),
-            color = VoidObsidian,
-            border = BorderStroke(1.dp, VoidMint.copy(alpha = 0.6f))
-        ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 18.dp, top = 10.dp, end = 6.dp, bottom = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "HOST CONNECTION DETAILS",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = VoidMint,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "Share only with devices joining this local node",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = VoidTextSecondary
-                        )
-                    }
-                    IconButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.testTag("close_node_access_dialog")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Close,
-                            contentDescription = "Close node access details",
-                            tint = VoidTextPrimary
-                        )
-                    }
-                }
-                HorizontalDivider(color = VoidBorder)
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
-                        .padding(12.dp)
-                ) {
-                    HostCredentialsCard(
-                        hostState = hostState,
-                        onCopy = onCopy
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun HostCredentialsCard(
-    hostState: HostState,
-    onCopy: (String, String) -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = VoidSurface),
-        border = BorderStroke(1.dp, VoidBorder),
-        shape = RoundedCornerShape(14.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "NODE ACCESS & INSTANT JOIN",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = VoidCyan
-                )
-                StatusChip(
-                    label = when {
-                        hostState.isSecureServerRunning -> "HTTPS :${hostState.securePort} UP"
-                        hostState.isServerRunning -> "HTTP :${hostState.port} UP"
-                        else -> "PORTAL STANDBY"
-                    },
-                    accentColor = if (hostState.isServerRunning) VoidMint else VoidTextSecondary
-                )
-            }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(VoidCyan.copy(alpha = 0.1f))
-                    .border(1.dp, VoidCyan.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Lock,
-                    contentDescription = null,
-                    tint = VoidCyan,
-                    modifier = Modifier.size(16.dp)
-                )
-                Text(
-                    text = hostState.securityLabel,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = VoidCyan,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            CredentialRow(
-                label = "VISIBLE SSID (WPA2-PSK)",
-                value = if (hostState.ssid.isNotBlank()) {
-                    hostState.ssid
-                } else {
-                    "${hostState.effectiveSsid} (ready)"
-                },
-                canCopy = true,
-                valueColor = VoidCyan,
-                onCopy = { onCopy("SSID", hostState.effectiveSsid) }
-            )
-
-            val displayPassphrase = hostState.passphrase
-                .takeIf { it.isNotBlank() && !it.startsWith("Managed by") }
-                ?: hostState.configuredPassphrase
-                    .ifBlank { BitVoidNetworkConfig.DEFAULT_WPA2_PASSPHRASE }
-            CredentialRow(
-                label = "WPA2 PASSPHRASE",
-                value = displayPassphrase,
-                canCopy = displayPassphrase.isNotBlank(),
-                valueColor = VoidMint,
-                onCopy = { onCopy("Hotspot Passphrase", displayPassphrase) }
-            )
-
-            val clientGatewayReady = hostState.hasClientGatewayAddress
-            CredentialRow(
-                label = "DIRECT IP PORTAL (RELIABLE FALLBACK)",
-                value = if (clientGatewayReady) {
-                    hostState.networkPortalUrl
-                } else {
-                    "Gateway IPv4 pending — enable/connect the hotspot"
-                },
-                canCopy = clientGatewayReady,
-                valueColor = if (clientGatewayReady) VoidMint else VoidAmber,
-                onCopy = { onCopy("Direct Portal URL", hostState.networkPortalUrl) }
-            )
-
-            if (clientGatewayReady && hostState.effectivePortalUrl != hostState.networkPortalUrl) {
-                CredentialRow(
-                    label = "FRIENDLY mDNS PORTAL (IF .LOCAL IS SUPPORTED)",
-                    value = hostState.effectivePortalUrl,
-                    canCopy = true,
-                    valueColor = VoidCyan,
-                    onCopy = { onCopy("Friendly Portal URL", hostState.effectivePortalUrl) }
-                )
-            }
-
-            if (hostState.isSecureServerRunning) {
-                CredentialRow(
-                    label = "DIRECT SECURE VOICE / LIVE CLASS PORTAL",
-                    value = if (clientGatewayReady) {
-                        hostState.secureNetworkPortalUrl
-                    } else {
-                        "Gateway IPv4 pending — secure portal not shareable yet"
-                    },
-                    canCopy = clientGatewayReady,
-                    valueColor = if (clientGatewayReady) VoidCyan else VoidAmber,
-                    onCopy = { onCopy("Direct Secure Portal URL", hostState.secureNetworkPortalUrl) }
-                )
-                if (clientGatewayReady && hostState.securePortalUrl != hostState.secureNetworkPortalUrl) {
-                    CredentialRow(
-                        label = "FRIENDLY SECURE PORTAL (IF .LOCAL IS SUPPORTED)",
-                        value = hostState.securePortalUrl,
-                        canCopy = true,
-                        valueColor = VoidCyan,
-                        onCopy = { onCopy("Friendly Secure Portal URL", hostState.securePortalUrl) }
-                    )
-                }
-                CredentialRow(
-                    label = "ONE-TIME CERTIFICATE SETUP (DIRECT IP)",
-                    value = if (clientGatewayReady) {
-                        "${hostState.networkPortalUrl}/secure-setup"
-                    } else {
-                        "Gateway IPv4 pending — setup link not shareable yet"
-                    },
-                    canCopy = clientGatewayReady,
-                    valueColor = VoidAmber,
-                    onCopy = {
-                        onCopy(
-                            "Secure Browser Setup",
-                            "${hostState.networkPortalUrl}/secure-setup"
-                        )
-                    }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun CredentialRow(
-    label: String,
-    value: String,
-    canCopy: Boolean,
-    valueColor: Color = VoidTextPrimary,
-    onCopy: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(VoidObsidian)
-            .border(1.dp, VoidBorder, RoundedCornerShape(8.dp))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = VoidTextSecondary
-            )
-            Text(
-                text = value,
-                style = MaterialTheme.typography.labelLarge,
-                color = valueColor,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-        if (canCopy) {
-            IconButton(
-                onClick = onCopy,
-                modifier = Modifier.size(48.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.ContentCopy,
-                    contentDescription = stringResource(R.string.cd_copy_value),
-                    tint = VoidMint,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun PrivacyTelemetryCard(hostState: HostState) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = VoidSurface),
-        border = BorderStroke(1.dp, VoidBorder),
-        shape = RoundedCornerShape(14.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Filled.Shield,
-                    contentDescription = null,
-                    tint = VoidMint,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "ANONYMIZATION & TRAFFIC PADDING",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = VoidMint
-                )
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                TelemetryTile(
-                    label = "EPHEMERAL SESS",
-                    value = hostState.activeSessionsCount.toString(),
-                    modifier = Modifier.weight(1f)
-                )
-                TelemetryTile(
-                    label = "HEADERS STRIPPED",
-                    value = hostState.strippedHeadersTotal.toString(),
-                    modifier = Modifier.weight(1f)
-                )
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                TelemetryTile(
-                    label = "4KB PADDED RESP",
-                    value = hostState.paddedResponsesCount.toString(),
-                    modifier = Modifier.weight(1f)
-                )
-                TelemetryTile(
-                    label = "BYTES SERVED",
-                    value = formatBytes(hostState.bytesServed),
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun TelemetryTile(
-    label: String,
-    value: String,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(VoidObsidian)
-            .border(1.dp, VoidBorder, RoundedCornerShape(8.dp))
-            .padding(10.dp)
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = VoidTextSecondary,
-            maxLines = 1
-        )
-        Spacer(modifier = Modifier.height(2.dp))
-        Text(
-            text = value,
-            style = MaterialTheme.typography.titleMedium,
-            color = VoidCyan,
-            maxLines = 1
-        )
-    }
-}
-
-@Composable
-private fun SharedVaultHeaderCard(
-    totalCount: Int,
-    publicCount: Int,
-    isImporting: Boolean,
-    onPickDocuments: () -> Unit,
-    onPickMedia: () -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = VoidSurface),
-        border = BorderStroke(1.dp, VoidBorder),
-        shape = RoundedCornerShape(14.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.FolderOpen,
-                        contentDescription = null,
-                        tint = VoidMint,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "VAULT ($totalCount)",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = VoidTextPrimary
-                    )
-                }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    StatusChip(
-                        label = if (publicCount > 0) "$publicCount PUBLIC" else "0 PUBLIC",
-                        accentColor = if (publicCount > 0) VoidMint else VoidTextSecondary
-                    )
-                    if (isImporting) {
-                        CircularProgressIndicator(
-                            color = VoidMint,
-                            strokeWidth = 2.dp,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Button(
-                    onClick = onPickMedia,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = VoidMint,
-                        contentColor = VoidObsidian
-                    ),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp)
-                        .testTag("pick_media_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.PhotoLibrary,
-                        contentDescription = null,
-                        modifier = Modifier.size(17.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("VIDEO / PHOTO", style = MaterialTheme.typography.labelMedium)
-                }
-
-                OutlinedButton(
-                    onClick = onPickDocuments,
-                    border = BorderStroke(1.dp, VoidMint.copy(alpha = 0.6f)),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = VoidMint),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp)
-                        .testTag("pick_files_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Add,
-                        contentDescription = null,
-                        modifier = Modifier.size(17.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("ANY FILE", style = MaterialTheme.typography.labelMedium)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun EmptyVaultCard() {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = VoidSurface.copy(alpha = 0.6f)),
-        border = BorderStroke(1.dp, VoidBorder),
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Icon(
-                imageVector = Icons.Filled.FolderOpen,
-                contentDescription = null,
-                tint = VoidTextSecondary,
-                modifier = Modifier.size(32.dp)
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "No shared payloads in BitVoid_Shared",
-                style = MaterialTheme.typography.titleMedium,
-                color = VoidTextPrimary
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Import MP4 videos, audio tracks, images, or archives to stream via HTTP 206 byte-ranges to connected peers.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = VoidTextSecondary
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun SharedFileRowCard(
-    item: BitVoidMediaItem,
-    channels: List<BitVoidChannel>,
-    onTogglePublic: (Boolean) -> Unit,
-    onToggleChannelAssignment: (String) -> Unit,
-    onDelete: () -> Unit
-) {
-    val accent = if (item.isPublic) VoidMint else VoidTextSecondary
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = VoidSurface),
-        border = BorderStroke(
-            width = 1.dp,
-            color = if (item.isPublic) VoidMint.copy(alpha = 0.65f) else VoidBorder
-        ),
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 12.dp, top = 10.dp, bottom = 10.dp, end = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (item.isPublic) VoidMintContainer else VoidObsidian)
-                        .border(1.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(6.dp))
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        text = item.category.badge,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = accent
-                    )
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = item.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = VoidTextPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = "${formatBytes(item.size)} · ${item.mimeType}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = VoidTextSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                IconButton(
-                    onClick = onDelete,
-                    modifier = Modifier.size(48.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Delete,
-                        contentDescription = stringResource(R.string.cd_delete_file),
-                        tint = VoidCrimson
-                    )
-                }
-            }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(VoidObsidian)
-                    .border(
-                        1.dp,
-                        if (item.isPublic) VoidMint.copy(alpha = 0.4f) else VoidBorder,
-                        RoundedCornerShape(8.dp)
-                    )
-                    .padding(horizontal = 12.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = if (item.isPublic) Icons.Filled.Public else Icons.Filled.VisibilityOff,
-                        contentDescription = null,
-                        tint = if (item.isPublic) VoidMint else VoidAmber,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Text(
-                        text = if (item.isPublic) "[ PUBLIC · BROADCASTING ]" else "[ PRIVATE · CHANNEL / 403 ]",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (item.isPublic) VoidMint else VoidAmber
-                    )
-                }
-                Switch(
-                    checked = item.isPublic,
-                    onCheckedChange = onTogglePublic,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = VoidObsidian,
-                        checkedTrackColor = VoidMint,
-                        uncheckedThumbColor = VoidTextSecondary,
-                        uncheckedTrackColor = VoidSurfaceElevated,
-                        uncheckedBorderColor = VoidBorder
-                    ),
-                    modifier = Modifier.testTag("visibility_switch_${item.id}")
-                )
-            }
-
-            if (channels.isNotEmpty()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(end = 6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = "ASSIGN TO CHANNELS",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = VoidCyan
-                    )
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        channels.forEach { channel ->
-                            val isAssigned = channel.mediaList.any { it.id == item.id }
-                            val chipAccent = when {
-                                isAssigned && channel.isPublic -> VoidMint
-                                isAssigned -> VoidAmber
-                                else -> VoidTextSecondary
-                            }
-                            Row(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(999.dp))
-                                    .background(
-                                        if (isAssigned) chipAccent.copy(alpha = 0.14f) else VoidObsidian
-                                    )
-                                    .border(
-                                        1.dp,
-                                        if (isAssigned) chipAccent else VoidBorder,
-                                        RoundedCornerShape(999.dp)
-                                    )
-                                    .clickable { onToggleChannelAssignment(channel.channelId) }
-                                    .padding(horizontal = 10.dp, vertical = 6.dp)
-                                    .testTag("assign_${item.id}_${channel.channelId}"),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Text(
-                                    text = if (isAssigned) "✓ #${channel.name}" else "+ #${channel.name}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = chipAccent
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AuditLogPanel(
-    logs: List<AuditLogEntry>,
-    expanded: Boolean,
-    onToggleExpand: () -> Unit,
-    onClearLogs: () -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = VoidSurface),
-        border = BorderStroke(1.dp, VoidBorder),
-        shape = RoundedCornerShape(14.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onToggleExpand)
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Filled.Terminal,
-                        contentDescription = null,
-                        tint = VoidCyan,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "EPHEMERAL SESSION LOG (${logs.size})",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = VoidCyan
-                    )
-                }
-                Text(
-                    text = if (expanded) "HIDE" else "SHOW",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = VoidMint
-                )
-            }
-
-            AnimatedVisibility(visible = expanded) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "IP/MAC addresses are discarded; tokens rotate per request.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = VoidTextSecondary,
-                            modifier = Modifier.weight(1f)
-                        )
-                        if (logs.isNotEmpty()) {
-                            TextButton(onClick = onClearLogs) {
-                                Text(
-                                    text = "PURGE",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = VoidCrimson
-                                )
-                            }
-                        }
-                    }
-
-                    if (logs.isEmpty()) {
-                        Text(
-                            text = "No HTTP transactions recorded yet.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = VoidTextSecondary
-                        )
-                    } else {
-                        logs.take(12).forEach { entry ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(VoidObsidian)
-                                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "${entry.ephemeralToken} · ${entry.method} ${entry.sanitizedPath}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = VoidMint,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = "${entry.timestampLabel} · HTTP ${entry.statusCode} · ${entry.strippedHeaderCount} hdrs stripped",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = VoidTextSecondary
-                                    )
-                                }
-                                Text(
-                                    text = formatBytes(entry.paddedSizeBytes),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = VoidCyan
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@SuppressLint("SetJavaScriptEnabled")
 @Composable
 private fun SandboxedPortalBrowserScreen(
     clientState: ClientState,
@@ -2305,29 +824,6 @@ private fun SandboxedPortalBrowserScreen(
         }
     }
 }
-
-@Composable
-private fun StatusChip(
-    label: String,
-    accentColor: Color
-) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(accentColor.copy(alpha = 0.12f))
-            .border(1.dp, accentColor.copy(alpha = 0.55f), RoundedCornerShape(999.dp))
-            .padding(horizontal = 10.dp, vertical = 4.dp)
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = accentColor,
-            fontWeight = FontWeight.Bold
-        )
-    }
-}
-
-
 
 @Composable
 private fun ChannelEditorDialog(

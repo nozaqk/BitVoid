@@ -1,13 +1,10 @@
 package com.bitvoid.network.ui
 
 import android.app.Application
-import android.content.ComponentName
-import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Base64
-import android.provider.Settings
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.bitvoid.network.call.BitVoidCallManager
@@ -39,30 +36,20 @@ import com.bitvoid.network.client.RemoteLiveClassSummary
 import com.bitvoid.network.client.RemoteMediaItem
 import com.bitvoid.network.client.RemoteSpaceDetails
 import com.bitvoid.network.client.RemoteSpaceInvitation
-import com.bitvoid.network.connection.BitVoidConnectionPhase
-import com.bitvoid.network.connection.BitVoidConnectionState
-import com.bitvoid.network.connection.BitVoidHardwareIntegration
-import com.bitvoid.network.connection.BitVoidNodeClient
 import com.bitvoid.network.direct.BitVoidDirectChatManager
 import com.bitvoid.network.direct.BitVoidUserPrefs
 import com.bitvoid.network.direct.DirectConversationSummary
 import com.bitvoid.network.media.BitVoidMediaManager
 import com.bitvoid.network.model.AppBottomTab
-import com.bitvoid.network.model.AuditLogEntry
-import com.bitvoid.network.model.BitVoidNetworkConfig
-import com.bitvoid.network.model.BitVoidNetworkPrefs
 import com.bitvoid.network.model.ClientConnectionStatus
 import com.bitvoid.network.model.ClientState
 import com.bitvoid.network.model.HostState
 import com.bitvoid.network.model.HotspotStatus
 import com.bitvoid.network.model.NodeConnectionEventType
-import com.bitvoid.network.model.NodeMode
 import com.bitvoid.network.service.BitVoidForegroundService
 import com.bitvoid.network.service.BitVoidNodeStateHolder
 import java.io.ByteArrayOutputStream
-import java.nio.charset.StandardCharsets
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -75,8 +62,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private const val MESH_REFRESH_INTERVAL_MS = 15_000L
-private const val AUTOMATIC_WIFI_SCAN_INTERVAL_MS = 60_000L
-private const val AUTO_GATEWAY_RETRY_INTERVAL_MS = 30_000L
 
 class BitVoidViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -84,31 +69,9 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     private val clientManager = BitVoidClientManager(appContext)
     private val clientRepository = BitVoidClientRepositoryProvider.repository
     private val backendConnectionManager = BitVoidBackendConnectionManager(appContext)
+    private val callManager = BitVoidCallManager(appContext)
     val backendState: StateFlow<BitVoidBackendState> = backendConnectionManager.state
     val backendConfig: StateFlow<BitVoidBackendConfig> = backendConnectionManager.config
-    private val hardwareIntegrationDelegate = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
-        BitVoidHardwareIntegration(appContext)
-    }
-    private val callManager = BitVoidCallManager(appContext)
-
-    private val _hardwareConnectionState = MutableStateFlow(
-        BitVoidConnectionState(
-            statusMessage = "Hardware integration is optional. Open Node Log to monitor discovery."
-        )
-    )
-    val hardwareConnectionState: StateFlow<BitVoidConnectionState> =
-        _hardwareConnectionState.asStateFlow()
-    val hardwareNodeClient: BitVoidNodeClient?
-        get() = if (hardwareIntegrationDelegate.isInitialized()) {
-            hardwareIntegrationDelegate.value.nodeClient
-        } else {
-            null
-        }
-    private var hardwareStateJob: Job? = null
-
-    private val _selectedMode = MutableStateFlow(NodeMode.HOST)
-    val selectedMode: StateFlow<NodeMode> = _selectedMode.asStateFlow()
-
     private val _selectedBottomTab = MutableStateFlow(AppBottomTab.HOME)
     val selectedBottomTab: StateFlow<AppBottomTab> = _selectedBottomTab.asStateFlow()
 
@@ -121,9 +84,18 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     private val _isUserIdDiscoverable = MutableStateFlow(BitVoidUserPrefs.isDiscoverable(appContext))
     val isUserIdDiscoverable: StateFlow<Boolean> = _isUserIdDiscoverable.asStateFlow()
 
+    private val _hasCompletedAccountAccess = MutableStateFlow(
+        BitVoidUserPrefs.hasCompletedAccountAccess(appContext)
+    )
+    val hasCompletedAccountAccess: StateFlow<Boolean> = _hasCompletedAccountAccess.asStateFlow()
+
+    private val _isCompletingAccountAccess = MutableStateFlow(false)
+    val isCompletingAccountAccess: StateFlow<Boolean> = _isCompletingAccountAccess.asStateFlow()
+
+    private val _accountAccessError = MutableStateFlow<String?>(null)
+    val accountAccessError: StateFlow<String?> = _accountAccessError.asStateFlow()
+
     val hostState: StateFlow<HostState> = BitVoidNodeStateHolder.hostState
-    val auditLogs: StateFlow<List<AuditLogEntry>> = BitVoidNodeStateHolder.auditLogs
-    val nodeConnectionLogs = BitVoidNodeStateHolder.nodeConnectionLogs
     val clientState: StateFlow<ClientState> = BitVoidNodeStateHolder.clientState
     val channels: StateFlow<List<BitVoidChannel>> = BitVoidChannelManager.channelsFlow
     val directConversations: StateFlow<List<DirectConversationSummary>> = BitVoidDirectChatManager.conversationsFlow
@@ -274,9 +246,6 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
 
     private var customClientUrlPinned = false
     private var lastAutomaticBackendUrl: String? = null
-    private var autoGatewayStartInProgress = false
-    private var lastAutoGatewayAttemptMs = 0L
-    private var lastAutomaticWifiScanMs = 0L
 
     init {
         BitVoidNodeStateHolder.appendNodeConnectionLog(
@@ -290,7 +259,6 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             _isUserIdDiscoverable.value
         )
         BitVoidDirectChatManager.refreshConversationsForUser(_myUsername.value)
-        loadSavedNetworkPreferences()
         clientRepository.configureCloudBaseUrl(backendConfig.value.cloudServerUrl)
         callManager.configureCloudBaseUrl(backendConfig.value.cloudServerUrl)
         backendConnectionManager.start(
@@ -418,37 +386,13 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                     val localUrl = hState.networkPortalUrl
                     if (clientGatewayUrl.value != localUrl) {
                         clientRepository.setGatewayBaseUrl(localUrl)
-                        if (_selectedBottomTab.value == AppBottomTab.HUB || _selectedMode.value == NodeMode.CLIENT) {
+                        if (_selectedBottomTab.value == AppBottomTab.HUB) {
                             refreshClientChannels(localUrl)
                             refreshClientPublicMedia(localUrl)
                             refreshLiveClasses(localUrl)
                         }
                     }
                 }
-            }
-        }
-        viewModelScope.launch {
-            // Refresh every BitVoid node over the phone's existing Wi-Fi without asking Android to
-            // switch networks. In Node Log mode, recover a missing mesh by automatically starting
-            // this phone's LAN gateway, then advertise it for every other app to discover. Keep
-            // scanning and listening while this phone hosts the gateway so newly joined peers link
-            // automatically without stopping gateway sharing.
-            delay(1_500L)
-            while (isActive) {
-                // Backend selection is owned by BitVoidBackendConnectionManager. This loop only
-                // refreshes Android's visible Wi-Fi names for diagnostics; it never starts a phone
-                // server or blocks the conversation interface.
-                val now = System.currentTimeMillis()
-                val shouldMonitorLocalLinks = _selectedMode.value == NodeMode.CLIENT ||
-                    hostState.value.isServerRunning
-                if (shouldMonitorLocalLinks &&
-                    !clientState.value.isScanning &&
-                    now - lastAutomaticWifiScanMs >= AUTOMATIC_WIFI_SCAN_INTERVAL_MS
-                ) {
-                    lastAutomaticWifiScanMs = now
-                    clientManager.scanNearbyNetworks()
-                }
-                delay(MESH_REFRESH_INTERVAL_MS)
             }
         }
         viewModelScope.launch {
@@ -614,14 +558,6 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         clientRepository.flushPendingMessages()
     }
 
-    fun updateBackendSettings(localServerUrl: String, cloudServerUrl: String): Result<Unit> {
-        return backendConnectionManager.updateConfig(localServerUrl, cloudServerUrl)
-            .map {
-                clientRepository.configureCloudBaseUrl(it.cloudServerUrl)
-                callManager.configureCloudBaseUrl(it.cloudServerUrl)
-            }
-    }
-
     fun refreshMessagingData() {
         backendConnectionManager.requestRefresh()
         val base = backendState.value.baseUrl
@@ -637,25 +573,6 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
 
     fun markConversationRead(conversationId: String) {
         _unreadCounts.value = _unreadCounts.value - conversationId
-    }
-
-    private fun loadSavedNetworkPreferences() {
-        val saved = BitVoidNetworkPrefs.load(appContext)
-        BitVoidNodeStateHolder.updateHostState { current ->
-            if (current.isEngineLocked) {
-                current.copy(
-                    configuredSsid = saved.ssid,
-                    configuredPassphrase = saved.passphrase
-                )
-            } else {
-                current.copy(
-                    isHiddenSsid = saved.isHiddenSsid,
-                    securityLabel = BitVoidNetworkConfig.WPA2_SECURITY_LABEL,
-                    configuredSsid = saved.ssid,
-                    configuredPassphrase = saved.passphrase
-                )
-            }
-        }
     }
 
     fun openMessageNotification(
@@ -711,110 +628,6 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun selectMode(mode: NodeMode) {
-        _selectedMode.value = mode
-        if (mode == NodeMode.CLIENT) {
-            startHardwareIntegrationIfNeeded()
-            lastAutomaticWifiScanMs = System.currentTimeMillis()
-            clientManager.scanNearbyNetworks()
-            viewModelScope.launch {
-                var scanWaits = 0
-                while (clientState.value.isScanning && scanWaits < 60) {
-                    delay(100L)
-                    scanWaits++
-                }
-                if (_selectedMode.value == NodeMode.CLIENT) {
-                    val gateway = clientManager.discoverAndLinkSilently()
-                    if (gateway == null) ensureAutomaticGatewayOnCurrentWifi()
-                }
-            }
-        }
-    }
-
-    private suspend fun ensureAutomaticGatewayOnCurrentWifi() {
-        val now = System.currentTimeMillis()
-        if (autoGatewayStartInProgress ||
-            clientState.value.currentWifiSsid.isNullOrBlank() ||
-            hostState.value.status == HotspotStatus.STARTING ||
-            hostState.value.isServerRunning ||
-            now - lastAutoGatewayAttemptMs < AUTO_GATEWAY_RETRY_INTERVAL_MS
-        ) {
-            return
-        }
-        autoGatewayStartInProgress = true
-        lastAutoGatewayAttemptMs = now
-        BitVoidNodeStateHolder.appendNodeConnectionLog(
-            NodeConnectionEventType.GATEWAY,
-            "Starting shared app gateway",
-            "No app gateway answered on ${clientState.value.currentWifiSsid}; this phone will share one automatically."
-        )
-        val started = runCatching {
-            BitVoidForegroundService.startServerOnly(appContext)
-        }.isSuccess
-        if (!started) {
-            BitVoidNodeStateHolder.appendNodeConnectionLog(
-                NodeConnectionEventType.ERROR,
-                "Automatic gateway start blocked",
-                "Open Node Log and allow BitVoid's foreground-service notification, then retry.",
-                isError = true
-            )
-            autoGatewayStartInProgress = false
-            return
-        }
-        var gatewayWaits = 0
-        while ((!hostState.value.isServerRunning || hostState.value.gatewayIp.isBlank()) &&
-            hostState.value.status != HotspotStatus.ERROR &&
-            gatewayWaits < 80
-        ) {
-            delay(100L)
-            gatewayWaits++
-        }
-        if (hostState.value.isServerRunning) {
-            clientManager.discoverAndLinkSilently()
-        }
-        autoGatewayStartInProgress = false
-    }
-
-    private fun startHardwareIntegrationIfNeeded(): BitVoidHardwareIntegration? {
-        if (hardwareStateJob != null) return hardwareIntegrationDelegate.value
-        return try {
-            val integration = hardwareIntegrationDelegate.value
-            integration.start()
-            hardwareStateJob = viewModelScope.launch {
-                var previousSignature: String? = null
-                integration.state.collect { state ->
-                    _hardwareConnectionState.value = state
-                    val signature = "${state.phase}|${state.endpoint?.directUrl}|${state.errorMessage}"
-                    if (signature != previousSignature) {
-                        val eventType = when (state.phase) {
-                            BitVoidConnectionPhase.READY -> NodeConnectionEventType.CONNECTED
-                            BitVoidConnectionPhase.ERROR -> NodeConnectionEventType.ERROR
-                            BitVoidConnectionPhase.BINDING -> NodeConnectionEventType.WIFI
-                            BitVoidConnectionPhase.DISCOVERING -> NodeConnectionEventType.DISCOVERY
-                            BitVoidConnectionPhase.WAITING_FOR_WIFI -> NodeConnectionEventType.RETRY
-                            BitVoidConnectionPhase.STOPPED -> NodeConnectionEventType.DISCONNECTED
-                        }
-                        BitVoidNodeStateHolder.appendNodeConnectionLog(
-                            eventType,
-                            "Hardware node ${state.phase.name.lowercase().replace('_', ' ')}",
-                            state.errorMessage ?: state.statusMessage,
-                            isError = state.phase == BitVoidConnectionPhase.ERROR
-                        )
-                        previousSignature = signature
-                    }
-                }
-            }
-            integration
-        } catch (error: Throwable) {
-            _hardwareConnectionState.value = BitVoidConnectionState(
-                phase = BitVoidConnectionPhase.ERROR,
-                statusMessage = "ESP integration is unavailable; phone-hosted sharing still works.",
-                errorMessage = error.message ?: "Unable to initialize optional ESP networking."
-            )
-            null
-        }
-    }
-
     private fun syncGatewayToLocalIfAvailable() {
         val hState = hostState.value
         if (!customClientUrlPinned &&
@@ -823,71 +636,6 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             hState.gatewayIp.isNotBlank()
         ) {
             clientRepository.setGatewayBaseUrl(hState.networkPortalUrl)
-        }
-    }
-
-    fun updateBroadcastSettings(rawSsid: String, rawPassphrase: String): Result<Unit> {
-        val cleanSsid = rawSsid.trim()
-        if (cleanSsid.isEmpty()) {
-            return Result.failure(IllegalArgumentException("Wi-Fi broadcast name (SSID) cannot be empty."))
-        }
-        if (cleanSsid.toByteArray(StandardCharsets.UTF_8).size > 32) {
-            return Result.failure(IllegalArgumentException("Wi-Fi broadcast name must be 32 bytes or fewer."))
-        }
-        val cleanPass = rawPassphrase.trim()
-        if (!BitVoidNetworkConfig.isValidWpa2Passphrase(cleanPass)) {
-            return Result.failure(
-                IllegalArgumentException(
-                    "Wi-Fi password must contain 8 to 63 printable ASCII characters."
-                )
-            )
-        }
-
-        BitVoidNetworkPrefs.saveBroadcastCredentials(appContext, cleanSsid, cleanPass)
-        BitVoidNodeStateHolder.updateHostState { current ->
-            // Saved credentials describe the next custom broadcast. Never overwrite the live
-            // radio credentials here: Android may still be serving an existing LAN/hotspot.
-            current.copy(
-                configuredSsid = cleanSsid,
-                configuredPassphrase = cleanPass
-            )
-        }
-        return Result.success(Unit)
-    }
-
-    fun toggleHostGateway() {
-        val currentState = hostState.value
-        if (currentState.isEngineLocked) {
-            BitVoidForegroundService.stopNode(appContext)
-        } else {
-            BitVoidForegroundService.startHostNode(appContext)
-        }
-    }
-
-    fun startServerOnlyMode() {
-        BitVoidForegroundService.startServerOnly(appContext)
-    }
-
-    fun stopHostNode() {
-        BitVoidForegroundService.stopNode(appContext)
-    }
-
-    fun openHotspotTetherSettings() {
-        val tetherIntent = Intent().apply {
-            component = ComponentName("com.android.settings", "com.android.settings.TetherSettings")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        val wirelessFallback = Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        try {
-            if (tetherIntent.resolveActivity(appContext.packageManager) != null) {
-                appContext.startActivity(tetherIntent)
-            } else {
-                appContext.startActivity(wirelessFallback)
-            }
-        } catch (_: Exception) {
-            appContext.startActivity(wirelessFallback)
         }
     }
 
@@ -1175,10 +923,6 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun clearAuditLogs() {
-        BitVoidNodeStateHolder.clearAuditLogs()
-    }
-
     fun clearNodeConnectionLogs() {
         BitVoidNodeStateHolder.clearNodeConnectionLogs()
         BitVoidNodeStateHolder.appendNodeConnectionLog(
@@ -1189,8 +933,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun scanNearbyNodes() {
-        lastAutomaticWifiScanMs = System.currentTimeMillis()
-        clientManager.scanNearbyNetworks()
+        backendConnectionManager.requestRefresh()
     }
 
     fun connectToGatewayUrl(rawUrl: String) {
@@ -1202,21 +945,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     fun connectToNode(ssid: String) {
         viewModelScope.launch {
             when (clientManager.connectToNode(ssid, reportMissingNode = false)) {
-                ClientNodeConnectResult.NO_NODE -> {
-                    // No gateway is present yet. Host one on the Wi-Fi Android already joined,
-                    // wait for the LAN server to bind, then rescan and link all reachable nodes.
-                    BitVoidForegroundService.startServerOnly(appContext)
-                    var attempts = 0
-                    while (!hostState.value.isServerRunning &&
-                        hostState.value.status != HotspotStatus.ERROR &&
-                        attempts < 60
-                    ) {
-                        delay(100L)
-                        attempts++
-                    }
-                    clientManager.connectToNode(ssid, reportMissingNode = true)
-                }
-
+                ClientNodeConnectResult.NO_NODE -> backendConnectionManager.requestRefresh()
                 ClientNodeConnectResult.CONNECTED,
                 ClientNodeConnectResult.NO_WIFI,
                 ClientNodeConnectResult.WRONG_WIFI -> Unit
@@ -1294,6 +1023,53 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                 username = _myUsername.value
             )
         }
+    }
+
+    fun completeAccountAccess(rawUsername: String) {
+        if (_isCompletingAccountAccess.value) return
+        val normalized = BitVoidUserPrefs.normalizeUsernameOrNull(rawUsername)
+        if (normalized == null) {
+            _accountAccessError.value =
+                "User ID must be 2–24 characters using letters, numbers, '.', '_', or '-'."
+            return
+        }
+        val backendUrl = backendState.value.baseUrl
+        if (!backendState.value.isConnected || backendUrl.isNullOrBlank()) {
+            _accountAccessError.value = "Connection lost. Reconnect before continuing."
+            backendConnectionManager.requestRefresh()
+            return
+        }
+        viewModelScope.launch {
+            _isCompletingAccountAccess.value = true
+            _accountAccessError.value = null
+            val registration = clientRepository.registerUsername(
+                normalized,
+                urlOverride = backendUrl,
+                discoverable = _isUserIdDiscoverable.value
+            )
+            registration.onSuccess { registeredUsername ->
+                BitVoidUserPrefs.saveUsername(appContext, registeredUsername)
+                BitVoidUserPrefs.setAccountAccessComplete(appContext, true)
+                _myUsername.value = registeredUsername
+                _hasCompletedAccountAccess.value = true
+                BitVoidDirectChatManager.registerUser(
+                    registeredUsername,
+                    _isUserIdDiscoverable.value
+                )
+                BitVoidDirectChatManager.refreshConversationsForUser(registeredUsername)
+                clientRepository.fetchChannels(backendUrl, username = registeredUsername)
+                clientRepository.fetchKnownUsers(backendUrl)
+                clientRepository.fetchLiveClasses(registeredUsername, backendUrl)
+            }.onFailure { error ->
+                _accountAccessError.value = error.message
+                    ?: "Unable to access BitVoid with that User ID."
+            }
+            _isCompletingAccountAccess.value = false
+        }
+    }
+
+    fun clearAccountAccessError() {
+        _accountAccessError.value = null
     }
 
     fun updateMyUsername(rawUsername: String): Result<String> {
@@ -1733,14 +1509,6 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun openSystemWifiSettings() {
-        clientManager.openSystemWifiSettings()
-    }
-
-    fun refreshHardwareNodeConnection() {
-        startHardwareIntegrationIfNeeded()?.refresh()
-    }
-
     fun openSandboxedBrowser(urlOverride: String? = null) {
         val targetBase = urlOverride?.let { BitVoidClientManager.normalizeLocalPortalUrl(it) }
             ?: BitVoidClientManager.normalizeLocalPortalUrl(clientState.value.targetPortalUrl)
@@ -1789,10 +1557,6 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             activeDirectSession.value != null ||
                 activeChannelSession.value?.isLiveClassRoom == false
         clientManager.release(preserveNetworkBinding = keepMessageConnection)
-        hardwareStateJob?.cancel()
-        if (hardwareIntegrationDelegate.isInitialized() && !keepMessageConnection) {
-            runCatching { hardwareIntegrationDelegate.value.close() }
-        }
         super.onCleared()
     }
 }

@@ -2,9 +2,9 @@
 
 **BitVoid is an offline-first, local-network communication and media-sharing platform for Android.**
 
-It turns a nearby Android phone or compatible BitVoid gateway into a private local hub. People connected to the same Wi-Fi network can discover the hub, browse shared videos, join private rooms, exchange messages and files, and participate in audio calls or live audio classes — without requiring the public internet, a cloud account, or a third-party messaging server.
+A compatible BitVoid server on the same Wi-Fi can act as a private local hub. People connected to that network can discover the hub, browse shared videos, join private rooms, exchange messages and files, and participate in audio calls or live audio classes without routing local traffic through the public internet.
 
-BitVoid is designed around local ownership: the host controls the content, rooms, participants, and network. The Android application opens directly to its conversation interface, automatically prefers a healthy campus gateway, can fall back to a configured compatible HTTPS deployment, and queues messages on device when neither is available. The app can operate as both a host and a client. The wider project also includes hardware gateway controllers so a dedicated board can eventually provide the central network and server role.
+BitVoid is designed around local ownership: the server controls the content, rooms, participants, and network. The Android application checks the phone's current local Wi-Fi first, falls back automatically to the fixed HTTPS cloud backend, and displays a blocking connection-lost screen when neither is available. The Android client never creates a hotspot or Wi-Fi Direct group. The wider project includes hardware gateway controllers that can provide the local server role.
 
 > **Project status:** The Android application already contains the local hosting, media, rooms, chat, audio-call, Live Class, portal, and mesh-discovery systems described below. The Universal Gateway API v1 and ESP-12E controller are an active hardware-portability implementation. Secure gateway pairing, complete API-v1 support on every controller, and the final automatic Android-to-hardware Wi-Fi onboarding flow are not yet complete. See [Hardware gateway roadmap](#hardware-gateway-and-board-independence).
 
@@ -205,21 +205,9 @@ The Hub is the communication and live-session area:
 - Create or join Live Classes.
 - View participant and microphone state.
 
-### Node Log
-
-Node Log is the local connectivity and diagnostics area:
-
-- View detected Wi-Fi/network information.
-- Review local node discovery and identity checks.
-- See ESP32/Pi coordinator heartbeats and gateway selection.
-- Inspect connection, retry, and error events.
-- Refresh discovery when needed.
-- Use a verified manual local endpoint when automatic discovery fails.
-- View the optional direct hardware connection status where supported.
-
 ### Settings
 
-Settings contains local host and application configuration, including the visible network name and protected network credentials where the Android platform allows the app to configure them. Android system dialogs and restrictions remain authoritative for Wi-Fi operations.
+Settings contains only the current User ID and discovery preference. Backend URLs, hotspot controls, radio diagnostics, gateway controls, and privacy telemetry panels are intentionally absent from the Android app.
 
 ### Browser portal
 
@@ -227,29 +215,23 @@ The browser portal allows devices on the same local network to use supported Bit
 
 ---
 
-## Hosting and connection modes
+## Connection modes
 
-### Android Local Only Hotspot
+### Existing local Wi-Fi
 
-Where supported by the device and Android version, BitVoid requests an Android Local Only Hotspot. Android supplies the hotspot credentials. BitVoid displays the network name and passphrase to the host so they can be shared with invited clients.
+The Android app never creates a hotspot or Wi-Fi Direct group. At startup it first checks the Wi-Fi network the phone has already joined for a compatible BitVoid server. The phone and local server must be able to reach each other; client isolation on the router or access point can prevent communication.
 
-This is a local network; it does not automatically provide internet access.
+### Cloud fallback
 
-### Android Wi-Fi Direct group
-
-BitVoid also attempts a configured protected Wi-Fi Direct group on supported devices. Actual support depends on the Android device, operating system, and vendor implementation.
-
-### Existing system hotspot or Wi-Fi LAN
-
-The project includes support paths for using an already-running system hotspot or a shared local Wi-Fi network. The phone and clients must be able to reach each other; client isolation on the router or access point can prevent communication.
+When no local BitVoid server answers, the app releases any local-network binding and checks `https://bitvoid-cloud-api.onrender.com`. If neither local Wi-Fi nor the cloud backend is available, a full-screen **Connection lost** gate covers the application until automatic discovery succeeds or the user retries.
 
 ### Dedicated hardware access point
 
 The ESP-12E target currently creates a protected Wi-Fi access point with a configured SSID and password. Its default development address is `192.168.4.1`. Its current firmware exposes discovery and health information, not the full application services.
 
-### Connection sharing
+### Joining the local network
 
-The host can share the network name, passphrase when applicable, portal URL, and a standard Wi-Fi QR payload. Android may display its own confirmation prompts when joining a network. The app cannot silently bypass Android's Wi-Fi approval and security controls.
+Users join the local Wi-Fi through Android's normal system controls. BitVoid does not display, change, or distribute Wi-Fi credentials and cannot bypass Android's network approval or security controls.
 
 ---
 
@@ -322,7 +304,7 @@ The embedded service exposes these JSON routes in addition to the existing `/api
 
 The Android-hosted database is `bitvoid_spaces.db`, schema version **1**. It contains normalized `spaces`, `space_members`, `space_invitations`, `space_media`, and `channel_messages` tables with cascading foreign keys. This is the first durable-space schema; upgrading from earlier releases requires no destructive migration because those releases kept channel definitions in process memory. Existing accounts, direct conversations, rooms, and media files are not rewritten. Session tokens and live WebSocket presence are intentionally not persisted and are safely reissued after restart. Future schema versions must use forward-only `SQLiteOpenHelper.onUpgrade` migrations and must not drop conversation or membership data.
 
-SQLite durability is local to the Android host. Campus/cloud synchronization uses the selected backend and existing idempotent message replay, but this repository does not include a multi-node consensus service or production account-authenticated cloud database. Deployments that synchronize one space across independent gateways must provide canonical account identity, revision/conflict policy, and the same authorization contract server-side rather than merging SQLite files.
+SQLite durability is local to the Android host. Local/cloud synchronization uses the selected backend and existing idempotent message replay, but this repository does not include a multi-node consensus service or production account-authenticated cloud database. Deployments that synchronize one space across independent gateways must provide canonical account identity, revision/conflict policy, and the same authorization contract server-side rather than merging SQLite files.
 
 ---
 
@@ -347,21 +329,15 @@ Android discovery can scan the permitted local subnet, exchange coordinator regi
 
 ## Automatic conversations and backend selection
 
-BitVoid loads the **Chats** interface immediately; connectivity checks never block navigation. In the background it uses existing mesh discovery, the configurable campus LAN fallback, and health checks to select a backend in this order:
+On launch, BitVoid blocks the conversation interface while it selects a backend in this order:
 
-1. A healthy discovered or configured campus gateway.
-2. The configured compatible HTTPS Render backend.
-3. Offline mode with queued sending and cached conversation history.
+1. A healthy BitVoid server discovered on the phone's current local Wi-Fi.
+2. The fixed HTTPS cloud backend at `https://bitvoid-cloud-api.onrender.com`.
+3. A full-screen **Connection lost** state when neither endpoint is reachable.
 
-The coordinator responds to Android network changes, releases campus process-network binding before cloud use, reconnects with capped exponential backoff, reopens the active conversation, and replays pending messages. Client UUIDs, original timestamps, `Idempotency-Key`, and server stable-ID checks make REST/WebSocket replay idempotent. The cache stores bounded messages and delivery states, not passwords or backend session tokens.
+Once connected, first-time installations show the Log in / Create account screen before the conversation interface. The coordinator responds to Android network changes, releases local process-network binding before cloud use, reconnects with capped exponential backoff, reopens the active conversation, and replays pending messages. Client UUIDs, original timestamps, `Idempotency-Key`, and server stable-ID checks make REST/WebSocket replay idempotent. The cache stores bounded messages and delivery states, not passwords or backend session tokens.
 
-Set a build-time cloud default without committing credentials:
-
-```bash
-BITVOID_CLOUD_BASE_URL=https://your-bitvoid-service.onrender.com ./gradlew assembleDebug
-```
-
-The value may also be supplied as a Gradle property. Users can edit both endpoints under **Settings → Automatic connection**. Campus configuration accepts HTTP only for private/local hosts; cloud configuration requires HTTPS. This repository does not contain a production Render URL, so cloud fallback stays disabled until a real compatible endpoint is configured.
+The production cloud URL is compiled into the app and is no longer editable from Settings or overridden by legacy saved preferences.
 
 Calls remain audio-only. Internet calls additionally require the cloud service to implement the existing signaling contract and deploy suitable ICE/STUN/TURN infrastructure; the Android repository does not invent or hardcode those credentials.
 
@@ -543,7 +519,7 @@ BitVoid is not a VPN, Tor client, internet anonymity system, or end-to-end cloud
 - Jetpack Compose
 - Material 3
 - Kotlin Coroutines and StateFlow
-- Android Wi-Fi, Wi-Fi Direct, Local Only Hotspot, and network APIs
+- Android ConnectivityManager, local Wi-Fi discovery, and internet network APIs
 - Android foreground services
 - NanoHTTPD and NanoWSD for embedded HTTP/WebSocket hosting
 - OkHttp for client networking
@@ -693,27 +669,15 @@ The ESP-12E example firmware refuses to start with the placeholder password. Thi
 4. For private content, enter the room ID, passkey if configured, and a chat alias.
 5. Use the available media, chat, attachment, call, or classroom features.
 
-### Use Node Log
-
-1. Connect the Android device to the same local network as the other BitVoid nodes.
-2. Open Node Log.
-3. Allow the Wi-Fi/network permissions requested by Android.
-4. Review detected nodes, gateway status, and connection events.
-5. Use the refresh action if an immediate discovery retry is needed.
-6. If discovery cannot find a node, use the manual endpoint only after verifying that it belongs to your local BitVoid network.
-
 ---
 
 ## Network behavior and platform limitations
 
-- Android Local Only Hotspot availability varies by device, Android release, and device policy.
 - Android may require explicit user approval to connect to a protected Wi-Fi network.
-- Android can throttle Wi-Fi scans or restrict nearby-network information depending on permissions and OS version.
-- Multicast DNS and local broadcast discovery may be restricted by routers, access points, or client isolation.
+- Multicast DNS and local discovery may be restricted by routers, access points, or client isolation.
 - Devices on separate isolated SSIDs cannot communicate unless the network infrastructure routes or bridges traffic between them.
-- A local-only hotspot does not automatically provide internet access or route internet traffic through the phone.
-- A normal Android application cannot replace hotspot DHCP/DNS, transparently intercept every connectivity-check domain, or force every vendor captive-portal assistant to open.
-- The app's foreground service can maintain local networking while Android allows it, but an explicit force-stop terminates it.
+- BitVoid does not create a hotspot, configure Wi-Fi credentials, or replace the network's DHCP/DNS services.
+- The app's foreground service can maintain message subscriptions while Android allows it, but an explicit force-stop terminates it.
 - Without a cloud relay, clients cannot receive local messages while disconnected from the host network.
 - The current hardware gateway API rollout is incomplete; the ESP32 and Raspberry Pi controllers still need API-v1 adapters before they are drop-in replacements for the ESP-12E target.
 - ESP-12E resource limits make it unsuitable for the complete media and WebRTC workload.
@@ -725,8 +689,8 @@ The ESP-12E example firmware refuses to start with the placeholder password. Thi
 | Area | Status |
 |---|---|
 | Android native application and Compose UI | Implemented |
-| Conversation-first Chats UI and compact Home telemetry | Implemented |
-| Campus → HTTPS cloud → offline coordinator | Implemented; production cloud URL not bundled |
+| Conversation-first Chats UI without gateway telemetry controls | Implemented |
+| Local Wi-Fi → fixed HTTPS cloud → connection-lost gate | Implemented; production cloud URL bundled |
 | Stable message IDs, deduplication, and durable Android outbox/cache | Implemented |
 | Android-hosted local HTTP/WebSocket server | Implemented |
 | Media import, public/private visibility, and local streaming | Implemented |
@@ -739,7 +703,7 @@ The ESP-12E example firmware refuses to start with the placeholder password. Thi
 | Audio-only WebRTC calls | Implemented |
 | Audio-only Live Classes | Implemented |
 | Browser portal | Implemented |
-| Legacy local mesh identity and Node Log discovery | Implemented |
+| Automatic local mesh identity discovery | Implemented without a user-facing Node Log |
 | ESP-12E Wi-Fi AP and Gateway API v1 discovery starter | Initial implementation added; hardware build/test pending |
 | Android Gateway API v1 metadata parser | Added; full UI/connection integration pending |
 | ESP32 Gateway API v1 adapter | Pending |
@@ -754,15 +718,15 @@ This table describes the repository's intended and implemented scope at the time
 
 Before shipping against a production cloud deployment, run `./gradlew testDebugUnitTest assembleDebug` and complete this two-device matrix with the actual Render URL:
 
-- campus Wi-Fi discovery and configured LAN fallback;
-- outside-campus HTTPS cloud selection and authentication;
-- local failure → cloud, internet failure → campus, and both unavailable → offline;
-- Wi-Fi ↔ mobile transitions and campus recovery preference;
+- local Wi-Fi discovery and same-network server preference;
+- HTTPS cloud selection and account access;
+- local failure → cloud, internet failure → local, and both unavailable → connection-lost gate;
+- Wi-Fi ↔ mobile transitions and local recovery preference;
 - process restart with offline send, replay, stable ordering, and no duplicates;
 - existing channel/direct histories before and after backend switching;
 - two-account incoming, outgoing, accepted, rejected, muted, speaker, and ended audio calls.
 
-Known deployment limitations: the repository contains no production Render URL or cloud credentials; backend authorization sessions are reopened rather than persisted; direct-message and room histories remain memory-only on the embedded server; SQLite space persistence is local to one Android host rather than a cross-node consensus database; and internet WebRTC needs compatible cloud signaling plus deployed STUN/TURN infrastructure.
+Known deployment limitations: the production Render URL is bundled but backend authorization sessions are reopened rather than persisted; direct-message and room histories remain memory-only on the embedded server; SQLite space persistence is local to one Android host rather than a cross-node consensus database; and internet WebRTC needs compatible cloud signaling plus deployed STUN/TURN infrastructure.
 
 ---
 

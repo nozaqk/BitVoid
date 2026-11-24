@@ -588,8 +588,7 @@ fun BitVoidHubScreen(
         }
     }
 
-    val useRemoteList = clientState.connectionStatus == ClientConnectionStatus.CONNECTED &&
-        remoteChannels.isNotEmpty()
+    val useRemoteList = clientState.connectionStatus == ClientConnectionStatus.CONNECTED
 
     val displayItems = remember(useRemoteList, remoteChannels, hostChannels) {
         if (useRemoteList) {
@@ -863,7 +862,7 @@ fun BitVoidHubScreen(
             if (privateChannels.isEmpty()) {
                 item(key = "empty_private") {
                     Text(
-                        text = "No private channels active. Tap + top right to create a Private Channel or enter a Private ID below.",
+                        text = "No private channels active. Tap + to create one or enter a Private Channel ID.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 4.dp)
@@ -909,66 +908,6 @@ fun BitVoidHubScreen(
                 }
             }
 
-            item(key = "enter_private_id_row") {
-                Card(
-                    onClick = {
-                        targetPrivateChannelName = null
-                        privateIdInput = ""
-                        privateKeyInput = ""
-                        localDialogError = null
-                        showPrivateUnlockDialog = true
-                    },
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    border = BorderStroke(1.dp, VoidAmber.copy(alpha = 0.55f)),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("hub_enter_private_id_button")
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(VoidAmber.copy(alpha = 0.14f))
-                                .border(1.dp, VoidAmber, CircleShape),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.VpnKey,
-                                contentDescription = null,
-                                tint = VoidAmber,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Enter Private Channel ID",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = VoidAmber,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = "Unlock any Private or Hidden channel by ID",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Icon(
-                            imageVector = Icons.Filled.ChevronRight,
-                            contentDescription = null,
-                            tint = VoidAmber
-                        )
-                    }
-                }
-            }
-
             item(key = "section_live_classes") {
                 Spacer(modifier = Modifier.height(6.dp))
                 HubSectionHeader(title = "LIVE CLASSES", accent = VoidCyan)
@@ -984,62 +923,6 @@ fun BitVoidHubScreen(
                 )
             }
 
-            item(key = "join_live_class_row") {
-                Card(
-                    onClick = {
-                        callActions.onClearCallError()
-                        showJoinClassByIdDialog = true
-                    },
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    border = BorderStroke(1.dp, VoidCyan.copy(alpha = 0.6f)),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("hub_join_live_class_card")
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(VoidCyan.copy(alpha = 0.14f))
-                                .border(1.dp, VoidCyan, CircleShape),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.School,
-                                contentDescription = null,
-                                tint = VoidCyan,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Join Live Class (Enter ID)",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = VoidCyan,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = "Enter a Class ID (CLS-...) from the same Wi-Fi node to join",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Icon(
-                            imageVector = Icons.Filled.ChevronRight,
-                            contentDescription = null,
-                            tint = VoidCyan
-                        )
-                    }
-                }
-            }
         }
     }
 
@@ -1091,6 +974,31 @@ fun BitVoidHubScreen(
                         onClick = {
                             showPlusChooserDialog = false
                             onOpenDiscoverChannels()
+                        }
+                    )
+                    HubQuickActionCard(
+                        icon = Icons.Filled.VpnKey,
+                        title = "Enter Private Channel ID",
+                        subtitle = "Unlock a Private or Hidden media space",
+                        accent = VoidAmber,
+                        onClick = {
+                            showPlusChooserDialog = false
+                            targetPrivateChannelName = null
+                            privateIdInput = ""
+                            privateKeyInput = ""
+                            localDialogError = null
+                            showPrivateUnlockDialog = true
+                        }
+                    )
+                    HubQuickActionCard(
+                        icon = Icons.Filled.School,
+                        title = "Join Live Class",
+                        subtitle = "Enter a CLS- ID from the connected server",
+                        accent = VoidCyan,
+                        onClick = {
+                            showPlusChooserDialog = false
+                            callActions.onClearCallError()
+                            showJoinClassByIdDialog = true
                         }
                     )
                     Card(

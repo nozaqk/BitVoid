@@ -547,78 +547,6 @@ class BitVoidLocalServerTest {
     }
 
     @Test
-    fun `wifi qr payload always includes WPA password and bitmap`() {
-        val payload = com.bitvoid.network.ui.buildWifiQrPayload(
-            ssid = "BitVoid_Net",
-            passphrase = "ProtectedPass2026"
-        )
-        assertEquals(
-            "WIFI:T:WPA;S:BitVoid_Net;P:ProtectedPass2026;H:false;;",
-            payload
-        )
-        assertFalse(payload.contains("nopass"))
-        val defaultProtectedPayload = com.bitvoid.network.ui.buildWifiQrPayload(
-            ssid = "BitVoid_Net",
-            passphrase = ""
-        )
-        assertEquals(
-            "WIFI:T:WPA;S:BitVoid_Net;P:BitVoid2026;H:false;;",
-            defaultProtectedPayload
-        )
-        assertFalse(defaultProtectedPayload.contains("nopass"))
-        val bitmap = com.bitvoid.network.ui.generateQrImageBitmap(payload, 256)
-        assertNotNull(bitmap)
-        assertEquals(256, bitmap!!.width)
-        assertEquals(256, bitmap.height)
-    }
-
-    @Test
-    fun `network config enforces visible password protected SSID`() {
-        val config = com.bitvoid.network.model.BitVoidNetworkConfig()
-        assertFalse(config.isHiddenSsid)
-        assertTrue(config.passphrase.length >= 8)
-        assertEquals(
-            "SECURITY: WPA2-PSK (VISIBLE SSID)",
-            com.bitvoid.network.model.BitVoidNetworkConfig.WPA2_SECURITY_LABEL
-        )
-
-        var hiddenThrew = false
-        try {
-            com.bitvoid.network.model.BitVoidNetworkConfig(isHiddenSsid = true)
-        } catch (_: IllegalArgumentException) {
-            hiddenThrew = true
-        }
-        assertTrue("Hidden SSID configuration must be rejected", hiddenThrew)
-
-        var shortPasswordThrew = false
-        try {
-            com.bitvoid.network.model.BitVoidNetworkConfig(passphrase = "short")
-        } catch (_: IllegalArgumentException) {
-            shortPasswordThrew = true
-        }
-        assertTrue("Password-free and short-password configurations must be rejected", shortPasswordThrew)
-
-        var nonAsciiPasswordThrew = false
-        try {
-            com.bitvoid.network.model.BitVoidNetworkConfig(passphrase = "pässword1")
-        } catch (_: IllegalArgumentException) {
-            nonAsciiPasswordThrew = true
-        }
-        assertTrue(
-            "Wi-Fi APIs require a printable ASCII WPA2 passphrase",
-            nonAsciiPasswordThrew
-        )
-        assertTrue(
-            com.bitvoid.network.model.BitVoidNetworkConfig.isValidWpa2Passphrase("CustomPass123")
-        )
-
-        val idleHost = com.bitvoid.network.model.HostState()
-        assertFalse(idleHost.isEngineLocked)
-        val runningHost = idleHost.copy(status = com.bitvoid.network.model.HotspotStatus.ACTIVE)
-        assertTrue(runningHost.isEngineLocked)
-    }
-
-    @Test
     fun `sandbox firewall allows RFC1918 and blocks public hosts`() {
         assertTrue(BitVoidClientManager.isPrivateLocalHost("192.168.43.1"))
         assertTrue(BitVoidClientManager.isPrivateLocalHost("127.0.0.1"))
@@ -688,28 +616,6 @@ class BitVoidLocalServerTest {
 
         val normalizedLoopback = BitVoidClientManager.normalizeLocalPortalUrl("http://127.0.0.1:$testPort")
         assertEquals("http://127.0.0.1:$testPort", normalizedLoopback)
-    }
-
-    @Test
-    fun `custom protected wifi credentials persist and legacy open mode is removed`() {
-        context.getSharedPreferences("bitvoid_network_prefs", Context.MODE_PRIVATE)
-            .edit()
-            .putString("security_mode", "OPEN_VISIBLE")
-            .apply()
-        com.bitvoid.network.model.BitVoidNetworkPrefs.saveBroadcastCredentials(
-            context = context,
-            ssid = "MeshOps_Relay",
-            passphrase = "UltraSecretPass2026"
-        )
-
-        val loaded = com.bitvoid.network.model.BitVoidNetworkPrefs.load(context)
-        assertEquals("MeshOps_Relay", loaded.ssid)
-        assertEquals("UltraSecretPass2026", loaded.passphrase)
-        assertFalse(loaded.isHiddenSsid)
-        assertFalse(
-            context.getSharedPreferences("bitvoid_network_prefs", Context.MODE_PRIVATE)
-                .contains("security_mode")
-        )
     }
 
     @Test
@@ -1020,19 +926,6 @@ class BitVoidLocalServerTest {
     }
 
     @Test
-    fun `formatWifiDirectNetworkName preserves configured ssid and enforces 32 byte limit`() {
-        val formatted = com.bitvoid.network.model.BitVoidNetworkConfig.formatWifiDirectNetworkName("MeshOps_Relay")
-        assertEquals("DIRECT-BV-MeshOps_Relay", formatted)
-
-        val alreadyPrefixed = com.bitvoid.network.model.BitVoidNetworkConfig.formatWifiDirectNetworkName("DIRECT-AB-Custom")
-        assertEquals("DIRECT-AB-Custom", alreadyPrefixed)
-
-        val oversized = com.bitvoid.network.model.BitVoidNetworkConfig.formatWifiDirectNetworkName("A_Very_Long_Network_Name_Exceeding_32_Bytes")
-        assertTrue(oversized.startsWith("DIRECT-BV-"))
-        assertTrue(oversized.toByteArray(StandardCharsets.UTF_8).size <= 32)
-    }
-
-    @Test
     fun `resolvePortalUrlAfterConnect preserves friendly hostname for public access`() {
         assertEquals(
             "http://bitvoid.local",
@@ -1231,15 +1124,6 @@ class BitVoidLocalServerTest {
             aliceRepo.release()
             bobRepo.release()
         }
-    }
-
-    @Test
-    fun `wifi qr payload uses WPA when OS passphrase is present`() {
-        val payload = com.bitvoid.network.ui.buildWifiQrPayload(
-            ssid = "DIRECT-BV-BitVoid_Net",
-            passphrase = "OSPASS1234"
-        )
-        assertEquals("WIFI:T:WPA;S:DIRECT-BV-BitVoid_Net;P:OSPASS1234;H:false;;", payload)
     }
 
     @Test

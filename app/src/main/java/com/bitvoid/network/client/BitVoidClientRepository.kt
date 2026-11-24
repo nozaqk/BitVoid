@@ -1603,13 +1603,15 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
         username: String,
         urlOverride: String? = null,
         discoverable: Boolean = true
-    ) {
-        val clean = username.trim()
-        if (clean.isEmpty()) return
+    ): Result<String> {
+        val clean = username.trim().removePrefix("@")
+        if (clean.isEmpty()) {
+            return Result.failure(IllegalArgumentException("Enter a User ID."))
+        }
         val targetBase = (urlOverride?.let { setGatewayBaseUrl(it) } ?: _gatewayBaseUrl.value)
             .trimEnd('/')
-        withContext(Dispatchers.IO) {
-            try {
+        return withContext(Dispatchers.IO) {
+            runCatching {
                 val payload = JSONObject()
                     .put("username", clean)
                     .put("discoverable", discoverable)
@@ -1618,26 +1620,31 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
                     .url("$targetBase/api/users/register")
                     .post(payload.toRequestBody(JSON_MEDIA_TYPE))
                 if (identityToken.isNotBlank() && identityBaseUrl == targetBase &&
-                    identityUsername.equals(clean.removePrefix("@"), ignoreCase = true)
+                    identityUsername.equals(clean, ignoreCase = true)
                 ) {
                     requestBuilder.header("X-BitVoid-Identity-Token", identityToken)
                 }
                 okHttpClient.newCall(requestBuilder.build()).execute().use { resp ->
-                    if (resp.isSuccessful) {
-                        val json = JSONObject(resp.body?.string().orEmpty())
-                        val issuedIdentityToken = json.optString("identityToken")
-                        if (issuedIdentityToken.isNotBlank()) {
-                            identityToken = issuedIdentityToken
-                            identityUsername = json.optString("username", clean).trim().removePrefix("@")
-                            identityBaseUrl = targetBase
-                        }
-                        val arr = json.optJSONArray("users")
-                        if (arr != null) {
-                            _knownUsers.value = parseStringArray(arr)
-                        }
+                    val responseBody = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful) {
+                        val detail = runCatching { JSONObject(responseBody).optString("detail") }.getOrNull()
+                        throw IllegalStateException(detail?.takeIf { it.isNotBlank() }
+                            ?: "Unable to access this BitVoid server (${resp.code}).")
                     }
+                    val json = JSONObject(responseBody)
+                    val issuedIdentityToken = json.optString("identityToken")
+                    if (issuedIdentityToken.isBlank()) {
+                        throw IllegalStateException("The BitVoid server did not issue an identity session.")
+                    }
+                    identityToken = issuedIdentityToken
+                    identityUsername = json.optString("username", clean).trim().removePrefix("@")
+                    identityBaseUrl = targetBase
+                    val arr = json.optJSONArray("users")
+                    if (arr != null) {
+                        _knownUsers.value = parseStringArray(arr)
+                    }
+                    identityUsername
                 }
-            } catch (_: Exception) {
             }
         }
     }
