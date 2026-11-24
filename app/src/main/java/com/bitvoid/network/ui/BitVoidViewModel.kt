@@ -28,6 +28,7 @@ import com.bitvoid.network.client.ClientChannelSession
 import com.bitvoid.network.client.ClientChatMessage
 import com.bitvoid.network.client.ClientNodeConnectResult
 import com.bitvoid.network.client.ClientDirectSession
+import com.bitvoid.network.client.ClientIncomingMessageEvent
 import com.bitvoid.network.client.ClientWsStatus
 import com.bitvoid.network.client.RemoteChannelSummary
 import com.bitvoid.network.client.RemoteLiveClassSummary
