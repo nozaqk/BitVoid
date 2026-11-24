@@ -28,6 +28,7 @@ BitVoid is designed around local ownership: the server controls the content, roo
 - [Architecture](#architecture)
 - [Hardware gateway and board independence](#hardware-gateway-and-board-independence)
 - [Security and privacy model](#security-and-privacy-model)
+- [Anonymous authentication design](#anonymous-authentication-design)
 - [Technology stack](#technology-stack)
 - [Repository structure](#repository-structure)
 - [Requirements](#requirements)
@@ -509,6 +510,12 @@ Room IDs, passkey verifiers, room tokens, identity/space sessions, direct-messag
 
 BitVoid is not a VPN, Tor client, internet anonymity system, or end-to-end cloud backup service. Its privacy protections apply to the local services and data flows described in this project.
 
+## Anonymous authentication design
+
+A proposed self-custodied account protocol allows users to register with only a pseudonymous username and master passphrase. Secret key generation, passphrase processing, and recovery remain on the device; the server authenticates signed, single-use challenges using a registered public key.
+
+The complete registration, recovery, login, storage, revocation, threat-model, and migration specification is in [Zero-Knowledge Anonymous Authentication](docs/zero-knowledge-anonymous-auth.md). It is a design target and is not yet implemented by the Android client or cloud service. The document also distinguishes password-private public-key authentication from a formal zero-knowledge proof protocol.
+
 ---
 
 ## Technology stack
@@ -691,6 +698,7 @@ The ESP-12E example firmware refuses to start with the placeholder password. Thi
 | Android native application and Compose UI | Implemented |
 | Conversation-first Chats UI without gateway telemetry controls | Implemented |
 | Local Wi-Fi → fixed HTTPS cloud → connection-lost gate | Implemented; production cloud URL bundled |
+| Self-custodied anonymous public-key authentication | Design specified; implementation and cryptographic review pending |
 | Stable message IDs, deduplication, and durable Android outbox/cache | Implemented |
 | Android-hosted local HTTP/WebSocket server | Implemented |
 | Media import, public/private visibility, and local streaming | Implemented |
