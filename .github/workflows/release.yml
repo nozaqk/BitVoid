@@ -61,7 +61,9 @@ jobs:
           validation_status=${PIPESTATUS[0]}
           set -e
           if [ "$validation_status" -ne 0 ]; then
-            # GitHub check annotations are capped at 4 KB; keep the actual Gradle failure tail.
+            # Include JUnit's exact assertion messages before publishing the capped failure tail.
+            find app/build/test-results -type f -name '*.xml' -exec grep -H -A 8 '<failure' {} \; 2>/dev/null | tee -a android-validation.log || true
+            # GitHub check annotations are capped at 4 KB; keep the actual Gradle/JUnit failure tail.
             diagnostic="$(tail -c 3500 android-validation.log)"
             diagnostic="${diagnostic//'%'/'%25'}"
             diagnostic="${diagnostic//$'\r'/'%0D'}"
