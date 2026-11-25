@@ -28,8 +28,6 @@ import java.net.InetAddress
 import java.net.Socket
 import java.net.URL
 import java.nio.charset.StandardCharsets
-import java.security.cert.CertificateFactory
-import java.security.cert.X509Certificate
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
@@ -88,73 +86,14 @@ class BitVoidLocalServerTest {
     }
 
     @Test
-    fun `portal response is 4KB block aligned includes privacy headers and channel endpoints`() {
-        BitVoidChannelManager.ensureDefaultChannel()
-
-        val conn = (URL("http://127.0.0.1:$testPort/").openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            setRequestProperty("User-Agent", "TestTracker/9.9")
-            setRequestProperty("Referer", "https://external.example.com")
-            setRequestProperty("Cookie", "session=leak")
-        }
-
+    fun `local server root exposes API metadata and never serves a website`() {
+        val conn = URL("http://127.0.0.1:" + testPort + "/").openConnection() as HttpURLConnection
         assertEquals(200, conn.responseCode)
-        assertEquals("no-referrer", conn.getHeaderField("Referrer-Policy"))
-        assertEquals("4096", conn.getHeaderField("X-BitVoid-Block-Align"))
-        val sessionToken = conn.getHeaderField("X-BitVoid-Session")
-        assertNotNull(sessionToken)
-        assertTrue(sessionToken!!.startsWith("BV-"))
-
-        val bodyBytes = conn.inputStream.readBytes()
-        assertTrue(bodyBytes.isNotEmpty())
-        assertEquals(0, bodyBytes.size % 4096)
-        val html = String(bodyBytes)
-        assertTrue(html.contains("/api/channels"))
-        assertTrue(html.contains("/api/channels/join"))
-        assertTrue(html.contains("/api/public/media"))
-        assertTrue(html.contains("/ws/chat/"))
-        assertTrue(html.contains("channels-sidebar"))
-        assertTrue(html.contains("menu-toggle-btn"))
-        assertTrue(html.contains("wa-composer"))
-        assertFalse(html.contains("id=\"toggle-media-btn\""))
-        assertTrue(html.contains("id=\"voice-call-btn\""))
-        assertFalse(html.contains("id=\"video-call-btn\""))
-        assertFalse(html.contains("Start video call"))
-        assertTrue(html.contains("/call/invite"))
-        assertTrue(html.contains("access requires trusted HTTPS"))
-        assertTrue(html.contains("id=\"pchat-users-list\""))
-        assertTrue(html.contains("id=\"pchat-add-user-btn\""))
-        assertTrue(html.contains("id=\"pchat-discoverable-toggle\""))
-        assertTrue(html.contains("id=\"pchat-add-dialog\""))
-        assertTrue(html.contains("id=\"create-group-btn\""))
-        assertTrue(html.contains("id=\"create-broadcast-channel-btn\""))
-        assertTrue(html.contains("id=\"discover-channels-btn\""))
-        assertTrue(html.contains("id=\"join-channel-invite-btn\""))
-        assertTrue(html.contains("id=\"space-info-btn\""))
-        assertTrue(html.contains("X-BitVoid-Identity-Token"))
-        assertTrue(html.contains("id=\"portal-access-dialog\""))
-        assertTrue(html.contains("id=\"portal-guest-btn\""))
-        assertTrue(html.contains("id=\"portal-login-btn\""))
-        assertTrue(html.contains("id=\"portal-login-user-id\" class=\"portal-login-input hidden\""))
-        assertTrue(html.contains("id=\"portal-login-back-btn\""))
-        assertTrue(html.contains("Continue as a temporary guest"))
-        assertTrue(html.contains("if (!portalLoginStep)"))
-        assertTrue(html.contains("data.available !== true"))
-        assertTrue(html.contains("portalLoginBtn.textContent = 'LOGIN'"))
-        assertFalse(html.contains("LOGIN @"))
-        assertTrue(html.contains("That User ID is not active on this node or gateway."))
-        assertTrue(html.contains("/api/users/status?username="))
-        assertTrue(html.contains("id=\"live-class-btn\" class=\"btn-ghost hidden\""))
-        assertFalse(html.contains("msg-att-preview"))
-        assertFalse(html.contains("msg-att-img"))
-        assertTrue(html.contains("msg-att-actions"))
-        assertTrue(html.contains("upload-spinner"))
-        assertTrue(html.contains("General Chat"))
-        assertTrue(html.contains("PUBLIC"))
-        assertTrue(html.contains("PRIVATE"))
-        assertFalse(html.contains("DIRECT CHAT (USERNAME ID)"))
-        assertFalse(html.contains("id=\"dm-my-username\""))
-        assertFalse(html.contains("id=\"dm-target-username\""))
+        assertTrue(conn.contentType.startsWith("application/json"))
+        val body = JSONObject(String(conn.inputStream.readBytes(), StandardCharsets.UTF_8))
+        assertEquals("bitvoid-local-api", body.getString("service"))
+        assertEquals("android-app", body.getString("client"))
+        assertEquals("/api", body.getString("api"))
         conn.disconnect()
     }
 
@@ -263,43 +202,6 @@ class BitVoidLocalServerTest {
         val response = BitVoidMdnsResponder.buildAddressResponse(address)
         assertEquals(0x84, response[2].toInt() and 0xFF)
         assertTrue(response.takeLast(4).toByteArray().contentEquals(address.address))
-    }
-
-    @Test
-    fun `secure browser setup exports a valid local root certificate`() {
-        val certConn = URL("http://127.0.0.1:$testPort/bitvoid-local-ca.crt")
-            .openConnection() as HttpURLConnection
-        assertEquals(200, certConn.responseCode)
-        assertEquals("application/x-x509-ca-cert", certConn.contentType)
-        assertTrue(certConn.getHeaderField("Content-Disposition").contains("bitvoid-local-ca.crt"))
-        assertTrue(certConn.getHeaderField("X-BitVoid-CA-SHA256").matches(Regex("([0-9A-F]{2}:){31}[0-9A-F]{2}")))
-        val pemBytes = certConn.inputStream.readBytes()
-        assertTrue(String(pemBytes, StandardCharsets.US_ASCII).startsWith("-----BEGIN CERTIFICATE-----"))
-        val certificate = CertificateFactory.getInstance("X.509")
-            .generateCertificate(pemBytes.inputStream()) as X509Certificate
-        assertTrue(certificate.basicConstraints >= 0)
-        assertTrue(certificate.subjectX500Principal.name.contains("BitVoid Local Root CA"))
-        certConn.disconnect()
-
-        val derConn = URL("http://127.0.0.1:$testPort/bitvoid-local-ca.cer")
-            .openConnection() as HttpURLConnection
-        assertEquals(200, derConn.responseCode)
-        assertEquals("application/pkix-cert", derConn.contentType)
-        assertTrue(derConn.getHeaderField("Content-Disposition").contains("bitvoid-local-ca.cer"))
-        val derCertificate = CertificateFactory.getInstance("X.509")
-            .generateCertificate(derConn.inputStream) as X509Certificate
-        assertTrue(certificate.encoded.contentEquals(derCertificate.encoded))
-        derConn.disconnect()
-
-        val setupConn = URL("http://127.0.0.1:$testPort/secure-setup")
-            .openConnection() as HttpURLConnection
-        assertEquals(200, setupConn.responseCode)
-        val setupHtml = setupConn.inputStream.bufferedReader().readText()
-        assertTrue(setupHtml.contains("Save / install CA (.crt)"))
-        assertTrue(setupHtml.contains("DER fallback (.cer)"))
-        assertTrue(setupHtml.contains("Certificate Trust Settings"))
-        assertTrue(setupHtml.contains("Open secure BitVoid"))
-        setupConn.disconnect()
     }
 
     @Test
@@ -506,21 +408,6 @@ class BitVoidLocalServerTest {
     }
 
     @Test
-    fun `captive portal probes redirect to local broadcast page`() {
-        listOf("/generate_204", "/hotspot-detect.html", "/ncsi.txt").forEach { path ->
-            val conn = (URL("http://127.0.0.1:$testPort$path").openConnection() as HttpURLConnection).apply {
-                instanceFollowRedirects = false
-                requestMethod = "GET"
-            }
-            assertEquals(302, conn.responseCode)
-            val location = conn.getHeaderField("Location")
-            assertNotNull(location)
-            assertTrue(location!!.endsWith("/"))
-            conn.disconnect()
-        }
-    }
-
-    @Test
     fun `os connectivity check domains receive 302 redirect to friendly gateway hostname`() {
         BitVoidNodeStateHolder.updateHostState {
             HostState(
@@ -627,7 +514,7 @@ class BitVoidLocalServerTest {
     }
 
     @Test
-    fun `hidden channels are excluded from directory listings and portal html but unlock by private id`() = runBlocking {
+    fun `hidden channels are excluded from API listings but unlock by private id`() = runBlocking {
         BitVoidChannelManager.ensureDefaultChannel()
         val hiddenRes = BitVoidChannelManager.createChannel(
             rawName = "Ghost Room",
@@ -649,14 +536,6 @@ class BitVoidLocalServerTest {
         listConn.disconnect()
         assertFalse("Hidden channel name must not appear in /api/channels", listBody.contains("Ghost Room"))
         assertFalse("Hidden channel ID must not appear in /api/channels", listBody.contains("CH-GHOST99"))
-
-        // Verify HTML portal sidebar omits hidden channel
-        val portalConn = URL("http://127.0.0.1:$testPort/").openConnection() as HttpURLConnection
-        assertEquals(200, portalConn.responseCode)
-        val portalHtml = String(portalConn.inputStream.readBytes())
-        portalConn.disconnect()
-        assertFalse("Hidden channel must not appear in portal HTML", portalHtml.contains("Ghost Room"))
-        assertFalse("Hidden channel ID must not appear in portal HTML", portalHtml.contains("CH-GHOST99"))
 
         // Verify Hub/client can still enter the hidden channel using its Private Channel ID
         val repo = BitVoidClientRepository()
@@ -960,50 +839,6 @@ class BitVoidLocalServerTest {
     }
 
     @Test
-    fun `captive portal redirect never redirects external probes to 127_0_0_1`() {
-        com.bitvoid.network.service.BitVoidNodeStateHolder.updateHostState { state ->
-            state.copy(
-                gatewayIp = "127.0.0.1",
-                boundEndpoints = listOf("127.0.0.1:$testPort"),
-                port = 8080
-            )
-        }
-        try {
-            Socket("127.0.0.1", testPort).use { socket ->
-                val rawReq = "GET /generate_204 HTTP/1.1\r\nHost: connectivitycheck.gstatic.com\r\nConnection: close\r\n\r\n"
-                socket.getOutputStream().write(rawReq.toByteArray(StandardCharsets.UTF_8))
-                socket.getOutputStream().flush()
-                val headersText = socket.getInputStream().bufferedReader().readLines()
-                    .takeWhile { it.isNotEmpty() }
-                    .joinToString("\n")
-                assertTrue(headersText.contains("302"))
-                assertFalse("Captive portal must never redirect to 127.0.0.1", headersText.contains("127.0.0.1"))
-                assertTrue(headersText.contains("http://bitvoid.local/"))
-            }
-        } finally {
-            com.bitvoid.network.service.BitVoidNodeStateHolder.updateHostState {
-                com.bitvoid.network.model.HostState()
-            }
-        }
-    }
-
-    @Test
-    fun `portal html uses dynamic viewport height left upload button and responsive desktop split layout`() {
-        BitVoidChannelManager.ensureDefaultChannel()
-        val conn = URL("http://127.0.0.1:$testPort/").openConnection() as HttpURLConnection
-        assertEquals(200, conn.responseCode)
-        val html = String(conn.inputStream.readBytes())
-        conn.disconnect()
-
-        assertTrue("Portal should use 100dvh so mobile browser address bar does not hide composer", html.contains("height: 100dvh;"))
-        assertFalse("Portal must not override 100dvh with 100vh", html.contains("height: 100vh;"))
-        assertTrue("Portal should define PC desktop split-pane media query", html.contains("@media (min-width: 900px)"))
-        assertTrue("Portal should wrap workspace in wa-main-pane", html.contains("wa-main-pane"))
-        assertTrue("Portal should include left + upload button", html.contains("id=\"chat-attach-btn\""))
-        assertTrue("Portal should include arbitrary file input", html.contains("id=\"chat-file-input\""))
-    }
-
-    @Test
     fun `channel multipart upload supports arbitrary files with private token isolation`() = runBlocking {
         val prv = BitVoidChannelManager.createChannel(
             rawName = "Docs Vault",
@@ -1132,43 +967,6 @@ class BitVoidLocalServerTest {
             aliceRepo.release()
             bobRepo.release()
         }
-    }
-
-    @Test
-    fun `portal html exposes only audio live class controls and participant stage`() {
-        BitVoidChannelManager.ensureDefaultChannel()
-        val conn = URL("http://127.0.0.1:$testPort/").openConnection() as HttpURLConnection
-        assertEquals(200, conn.responseCode)
-        val permissionsPolicy = conn.getHeaderField("Permissions-Policy").orEmpty()
-        assertTrue(permissionsPolicy.contains("microphone=(self)"))
-        assertFalse(permissionsPolicy.contains("camera="))
-        assertFalse(permissionsPolicy.contains("display-capture="))
-
-        val html = String(conn.inputStream.readBytes(), StandardCharsets.UTF_8)
-        conn.disconnect()
-        assertTrue(html.contains("/ws/signaling"))
-        assertTrue(html.contains("AUDIO CLASS &amp; CALL"))
-        assertTrue(html.contains("rtc-start-class-host-btn"))
-        assertTrue(html.contains("START LIVE AUDIO CLASS (HOST)"))
-        assertTrue(html.contains("START AUDIO CALL"))
-        assertTrue(html.contains("rtc-leave-btn"))
-        assertTrue(html.contains("live-participants-grid"))
-        assertTrue(html.contains("live-participant-card"))
-        assertTrue(html.contains("direct-incoming-controls"))
-        assertTrue(html.contains("meeting-active"))
-        assertTrue(html.contains("activeChannel.channelId === 'general-chat'"))
-        assertTrue(html.contains("joinRtcSession('AUDIO_CALL', 'SPEAKER', true, null, null)"))
-        assertTrue(html.contains("navigator.mediaDevices.getUserMedia({ audio: true })"))
-        assertTrue(html.contains("body: '{}'"))
-        assertFalse(html.contains("rtc-share-screen-btn"))
-        assertFalse(html.contains("rtc-cam-btn"))
-        assertFalse(html.contains("rtc-upload-doc-btn"))
-        assertFalse(html.contains("live-presentation-stage"))
-        assertFalse(html.contains("live-video-grid"))
-        assertFalse(html.contains("isVideoOn"))
-        assertFalse(html.contains("isScreenSharing"))
-        assertFalse(html.contains("withVideo"))
-        assertTrue(html.contains("window.confirm"))
     }
 
     @Test
@@ -1351,18 +1149,6 @@ class BitVoidLocalServerTest {
         ).getOrThrow()
 
         val baseUrl = "http://127.0.0.1:$testPort"
-
-        // 0. Portal HTML exposes the Live Class code pill and join-by-ID inputs
-        val portalConn = URL("$baseUrl/").openConnection() as HttpURLConnection
-        assertEquals(200, portalConn.responseCode)
-        val portalHtml = String(portalConn.inputStream.readBytes(), StandardCharsets.UTF_8)
-        portalConn.disconnect()
-        assertFalse(portalHtml.contains("rtc-upload-doc-btn"))
-        assertFalse(portalHtml.contains("live-presentation-stage"))
-        assertFalse(portalHtml.contains("slide_nav"))
-        assertTrue(portalHtml.contains("live-class-code-pill"))
-        assertTrue(portalHtml.contains("sidebar-class-code-input"))
-        assertTrue(portalHtml.contains("live-join-id-row"))
 
         // 1. Invalid Live Class ID returns 404 before any session starts
         val invalidJoin = (URL("$baseUrl/api/live-class/join").openConnection() as HttpURLConnection).apply {
