@@ -304,7 +304,6 @@ class BitVoidForegroundService : Service() {
                 gatewayHostname = if (friendlyPort != null) BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME else "",
                 gatewayHostnamePort = friendlyPort ?: BitVoidLocalServer.DEFAULT_PORT,
                 boundEndpoints = urlList,
-                isSecureServerRunning = false,
                 uptimeSeconds = 0L,
                 errorMessage = null
             )
@@ -484,7 +483,6 @@ class BitVoidForegroundService : Service() {
                             gatewayHostname = resolvedHostname,
                             gatewayHostnamePort = friendlyPort ?: BitVoidLocalServer.DEFAULT_PORT,
                             boundEndpoints = urlList,
-                            isSecureServerRunning = false,
                             errorMessage = if (resolved == "127.0.0.1") {
                                 "Connect this phone to local Wi-Fi to share the local server."
                             } else null

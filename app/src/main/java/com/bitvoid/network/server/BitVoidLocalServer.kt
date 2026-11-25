@@ -780,10 +780,10 @@ class BitVoidLocalServer(
             put("portalAvailable", true)
             put("gatewayPriority", 100)
             put("hostname", BitVoidMdnsResponder.HOSTNAME)
-            put("portalUrl", hostState.effectivePortalUrl)
+            put("portalUrl", hostState.effectiveApiUrl)
             put(
                 "directPortalUrl",
-                if (hostState.hasClientGatewayAddress) hostState.networkPortalUrl else JSONObject.NULL
+                if (hostState.hasClientGatewayAddress) hostState.networkApiUrl else JSONObject.NULL
             )
             put("port", DEFAULT_PORT)
             put(

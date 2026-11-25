@@ -78,8 +78,6 @@ data class HostState(
     val gatewayHostnamePort: Int = 8080,
     val boundEndpoints: List<String> = emptyList(),
     val port: Int = 8080,
-    val securePort: Int = 8443,
-    val isSecureServerRunning: Boolean = false,
     val sharedFiles: List<BitVoidMediaItem> = emptyList(),
     val activeSessionsCount: Int = 0,
     val connectedNodesCount: Int = 0,
@@ -109,40 +107,25 @@ data class HostState(
             gatewayIp != "127.0.0.1" &&
             gatewayIp != "0.0.0.0"
 
-    val networkPortalUrl: String
+    val networkApiUrl: String
         get() = if (isServerRunning && gatewayIp.isNotBlank()) {
             buildHttpUrl(gatewayIp, port)
         } else {
             buildHttpUrl("192.168.43.1", port)
         }
 
-    val effectivePortalUrl: String
+    val effectiveApiUrl: String
         get() = if (isServerRunning && gatewayHostname.isNotBlank()) {
             buildHttpUrl(gatewayHostname, gatewayHostnamePort)
         } else {
             networkPortalUrl
         }
 
-    val portalUrl: String
+    val apiUrl: String
         get() = if (isServerRunning && gatewayIp.isNotBlank()) {
-            effectivePortalUrl
+            effectiveApiUrl
         } else {
             "— offline —"
-        }
-
-    val secureNetworkPortalUrl: String
-        get() = if (isSecureServerRunning && gatewayIp.isNotBlank()) {
-            "https://$gatewayIp:$securePort"
-        } else {
-            "— secure portal starting —"
-        }
-
-    val securePortalUrl: String
-        get() = if (isSecureServerRunning && gatewayIp.isNotBlank()) {
-            val host = gatewayHostname.ifBlank { gatewayIp }
-            "https://$host:$securePort"
-        } else {
-            "— secure portal starting —"
         }
 
     private fun buildHttpUrl(host: String, targetPort: Int): String {

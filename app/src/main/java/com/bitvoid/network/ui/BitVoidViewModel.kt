@@ -368,7 +368,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                         eventType,
                         "App gateway ${hState.status.name.lowercase().replace('_', ' ')}",
                         hState.errorMessage ?: if (hState.hasClientGatewayAddress) {
-                            hState.networkPortalUrl
+                            hState.networkApiUrl
                         } else {
                             "No client gateway address is currently assigned."
                         },
@@ -969,7 +969,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
 
     fun setClientGatewayUrl(rawUrl: String): Boolean {
         val normalized = clientRepository.setGatewayBaseUrl(rawUrl) ?: return false
-        customClientUrlPinned = normalized != hostState.value.effectivePortalUrl &&
+        customClientUrlPinned = normalized != hostState.value.effectiveApiUrl &&
             normalized != hostState.value.networkPortalUrl &&
             normalized != BitVoidClientRepository.DEFAULT_GATEWAY_URL
         BitVoidNodeStateHolder.updateClientState {
