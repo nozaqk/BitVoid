@@ -556,7 +556,6 @@ class BitVoidForegroundService : Service() {
                 gatewayHostname = "",
                 gatewayHostnamePort = BitVoidLocalServer.DEFAULT_PORT,
                 boundEndpoints = emptyList(),
-                isSecureServerRunning = false,
                 activeSessionsCount = 0,
                 connectedNodesCount = 0,
                 uptimeSeconds = 0L
