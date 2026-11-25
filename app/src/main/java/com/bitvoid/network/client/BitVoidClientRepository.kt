@@ -290,6 +290,12 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
         }
     }
 
+    @Volatile private var accountAuthorizationToken: String = ""
+
+    fun setAccountAuthorizationToken(token: String?) {
+        accountAuthorizationToken = token.orEmpty()
+    }
+
     private val okHttpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
@@ -307,13 +313,16 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
             if (!BitVoidClientManager.isPrivateLocalHost(host) && !allowedRemote) {
                 throw IOException("Blocked unconfigured backend host '$host' by BitVoid firewall.")
             }
-            val sanitized = original.newBuilder()
+            val sanitizedBuilder = original.newBuilder()
                 .header("User-Agent", "BitVoid/1.0 (Isolated)")
                 .header("Cache-Control", "no-store")
                 .removeHeader("Referer")
                 .removeHeader("Cookie")
-                .build()
-            chain.proceed(sanitized)
+            if (accountAuthorizationToken.isNotBlank()) {
+                sanitizedBuilder.header("Authorization", "Bearer $accountAuthorizationToken")
+                sanitizedBuilder.header("X-BitVoid-Identity-Token", accountAuthorizationToken)
+            }
+            chain.proceed(sanitizedBuilder.build())
         }
         .build()
 
