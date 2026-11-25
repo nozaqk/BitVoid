@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -29,7 +30,12 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -112,8 +118,10 @@ fun SettingsUserIdentityCard(
     onSetDiscoverable: (Boolean) -> Unit,
     onCopyUsername: (String, String) -> Unit,
     masterPassphrase: String?,
-    onExportMasterPassphrase: () -> Unit
+    onExportMasterPassphrase: () -> Unit,
+    onLogout: () -> Unit
 ) {
+    var confirmLogout by remember { mutableStateOf(false) }
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -200,6 +208,40 @@ fun SettingsUserIdentityCard(
                 ) {
                     Text("EXPORT RECOVERY PASSPHRASE")
                 }
+                OutlinedButton(
+                    onClick = { confirmLogout = true },
+                    modifier = Modifier.fillMaxWidth().testTag("settings_logout")
+                ) {
+                    Text("LOG OUT AND REMOVE LOCAL SECRETS")
+                }
             }
+    }
+    if (confirmLogout) {
+        AlertDialog(
+            onDismissRequest = { confirmLogout = false },
+            title = { Text("Log out of BitVoid?") },
+            text = {
+                Text(
+                    "This removes the saved session and recovery passphrase from this device. " +
+                        "Export the recovery passphrase first if you need an offline copy."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmLogout = false
+                        onLogout()
+                    },
+                    modifier = Modifier.testTag("settings_logout_confirm")
+                ) {
+                    Text("LOG OUT")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmLogout = false }) {
+                    Text("CANCEL")
+                }
+            }
+        )
     }
 }

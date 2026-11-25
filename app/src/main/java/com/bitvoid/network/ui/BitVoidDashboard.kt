@@ -220,7 +220,8 @@ fun BitVoidDashboard(
             onSetDiscoverable = { viewModel.setUserIdDiscoverable(it) },
             onCopyUsername = ::copyToClipboard,
             masterPassphrase = masterPassphrase,
-            onExportMasterPassphrase = viewModel::exportMasterPassphrase
+            onExportMasterPassphrase = viewModel::exportMasterPassphrase,
+            onLogout = viewModel::logout
         )
     }
 

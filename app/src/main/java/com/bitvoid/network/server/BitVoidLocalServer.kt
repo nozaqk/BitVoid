@@ -82,7 +82,7 @@ class BitVoidLocalServer(
     private val secureRandom = SecureRandom()
     private val nodeActivitySalt = ByteArray(16).also { secureRandom.nextBytes(it) }
     // Volatile, in-memory activity keyed by a process-salted endpoint digest. This counts one app
-    // or browser device once across requests without retaining its local address or identity.
+    // device once across requests without retaining its local address or identity.
     private data class IdentitySession(
         val username: String,
         val issuedAtMs: Long,
@@ -264,15 +264,6 @@ class BitVoidLocalServer(
 
         val response = try {
             when {
-                method == Method.OPTIONS -> {
-                    buildPaddedTextResponse(
-                        status = Response.Status.OK,
-                        mimeType = "text/plain; charset=utf-8",
-                        body = "",
-                        token = ephemeralToken
-                    )
-                }
-
                 // Channel POST endpoints
                 method == Method.POST && rawUri == "/api/channels/join" -> {
                     handleChannelJoin(session, ephemeralToken)
@@ -404,7 +395,7 @@ class BitVoidLocalServer(
                     serveMeshNodes(ephemeralToken, isHead = (method == Method.HEAD))
                 }
 
-                rawUri == "/" || rawUri == "/index.html" -> {
+                rawUri == "/" -> {
                     buildPaddedTextResponse(
                         status = Response.Status.OK,
                         mimeType = "application/json; charset=utf-8",
@@ -2389,17 +2380,7 @@ class BitVoidLocalServer(
         response.addHeader("Cache-Control", "no-store, no-cache, must-revalidate, private")
         response.addHeader("Pragma", "no-cache")
         response.addHeader("Expires", "0")
-        response.addHeader("Referrer-Policy", "no-referrer")
         response.addHeader("X-Content-Type-Options", "nosniff")
-        response.addHeader("X-Frame-Options", "SAMEORIGIN")
-        response.addHeader(
-            "Content-Security-Policy",
-            "default-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; media-src 'self' blob: mediastream:; img-src 'self'; object-src 'none'; frame-ancestors 'none';"
-        )
-        response.addHeader(
-            "Permissions-Policy",
-            "interest-cohort=(), microphone=(self), geolocation=(), usb=()"
-        )
         response.addHeader("X-BitVoid-Session", ephemeralToken)
         response.addHeader("X-BitVoid-Block-Align", CONSTANT_BLOCK_SIZE.toString())
         response.addHeader("X-BitVoid-Pad", generateRandomHeaderPadding())
@@ -2444,10 +2425,6 @@ class BitVoidLocalServer(
             System.arraycopy(paddingBytes, 0, out, raw.size, paddingBytes.size)
         }
     }
-
-    // ───────────────────────────────────────────────────────────────────────────
-    // Responsive Channel-Based Web Portal (/)
-    // ───────────────────────────────────────────────────────────────────────────
 
     private fun servePublicVideosJson(token: String, isHead: Boolean): Response {
         val diskItems = BitVoidMediaManager.refreshFromDisk(context)

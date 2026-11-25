@@ -80,7 +80,12 @@ class BitVoidAccountAuth(private val context: Context) {
     fun savedMasterPassphrase(): String? = decrypt(context.getSharedPreferences("bitvoid_secure_account", 0).getString("master_enc", null))
 
     fun clearSession() {
-        context.getSharedPreferences("bitvoid_secure_account", 0).edit().remove("token_enc").apply()
+        // Logout removes every locally retained account secret, including the recovery key. The
+        // Android Keystore key may remain for future sessions but cannot reveal deleted ciphertext.
+        context.getSharedPreferences("bitvoid_secure_account", Context.MODE_PRIVATE)
+            .edit()
+            .clear()
+            .commit()
     }
 
     private fun encrypt(value: String): String {

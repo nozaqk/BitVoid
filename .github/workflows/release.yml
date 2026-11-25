@@ -45,12 +45,13 @@ jobs:
       - name: Test Raspberry Pi mesh coordinator
         run: python3 -m unittest discover -s controllers/pi/tests -v
 
-      - name: Build ESP32 mesh coordinator firmware
+      - name: Build ESP32 and ESP-12E gateway firmware
         run: |
           python3 -m venv /tmp/bitvoid-platformio
           /tmp/bitvoid-platformio/bin/pip install platformio
           cp controllers/esp32/include/bitvoid_config.example.h controllers/esp32/include/bitvoid_config.h
           /tmp/bitvoid-platformio/bin/python -m platformio run --project-dir controllers/esp32
+          /tmp/bitvoid-platformio/bin/python -m platformio run --project-dir controllers/esp12e
 
       - name: Test and build debug APK
         shell: bash

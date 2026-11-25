@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
@@ -1426,24 +1427,22 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
     }
 
     fun buildAttachmentUrl(pathOrUrl: String, token: String? = null): String {
-        if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
-            return if (!token.isNullOrBlank()) {
-                val encoded = URLEncoder.encode(token, StandardCharsets.UTF_8.name())
-                val separator = if (pathOrUrl.contains('?')) '&' else '?'
-                "$pathOrUrl${separator}token=$encoded"
-            } else {
-                pathOrUrl
-            }
+        val base = _gatewayBaseUrl.value.trimEnd('/').toHttpUrlOrNull() ?: return ""
+        val candidate = when {
+            pathOrUrl.startsWith("http://", ignoreCase = true) ||
+                pathOrUrl.startsWith("https://", ignoreCase = true) ->
+                pathOrUrl.toHttpUrlOrNull()
+            else -> base.resolve(if (pathOrUrl.startsWith('/')) pathOrUrl else "/$pathOrUrl")
+        } ?: return ""
+
+        // Attachment metadata comes from a remote service. Never forward a conversation token to
+        // a different origin if a compromised or outdated server advertises an absolute URL.
+        if (candidate.scheme != base.scheme || candidate.host != base.host || candidate.port != base.port) {
+            return ""
         }
-        val base = _gatewayBaseUrl.value.trimEnd('/')
-        val path = if (pathOrUrl.startsWith("/")) pathOrUrl else "/$pathOrUrl"
-        return if (!token.isNullOrBlank()) {
-            val encoded = URLEncoder.encode(token, StandardCharsets.UTF_8.name())
-            val separator = if (path.contains('?')) '&' else '?'
-            "$base$path${separator}token=$encoded"
-        } else {
-            "$base$path"
-        }
+        return candidate.newBuilder().apply {
+            if (!token.isNullOrBlank()) setQueryParameter("token", token)
+        }.build().toString()
     }
 
     suspend fun uploadFileToChannel(

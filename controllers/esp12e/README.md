@@ -17,8 +17,15 @@ pio run -t upload
 pio device monitor
 ```
 
-5. Connect a phone to the configured SSID and approve Android's Wi-Fi connection prompt if shown.
-6. Open `http://192.168.4.1/api/v1/gateway/info` and `/api/v1/health`.
+5. Connect a phone running BitVoid to the configured SSID and approve Android's Wi-Fi connection prompt if shown.
+6. Verify the headless API from a development machine on the same network:
+
+```sh
+curl --fail http://192.168.4.1/api/v1/gateway/info
+curl --fail http://192.168.4.1/api/v1/health
+```
+
+The firmware does not provide an HTML dashboard, captive portal, or browser interface.
 
 ## Implemented capabilities
 
