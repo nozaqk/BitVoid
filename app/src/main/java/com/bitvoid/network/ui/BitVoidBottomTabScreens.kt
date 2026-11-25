@@ -177,7 +177,8 @@ fun SettingsUserIdentityCard(
                 ),
                 modifier = Modifier.testTag("settings_user_discoverability_switch")
             )
-            Column(
+        }
+        Column(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -200,6 +201,5 @@ fun SettingsUserIdentityCard(
                     Text("EXPORT RECOVERY PASSPHRASE")
                 }
             }
-        }
     }
 }
