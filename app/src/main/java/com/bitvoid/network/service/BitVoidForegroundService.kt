@@ -193,7 +193,9 @@ class BitVoidForegroundService : Service() {
             }
 
             null -> {
-                // A sticky restart only restores a LAN server. BitVoid never creates a hotspot.
+                // A sticky restart restores the foreground listener as well as the local gateway.
+                // Active WebSocket subscriptions still need to be rehydrated by the repository.
+                isMessageMonitoringActive = true
                 isNodeForegroundActive = true
                 if (!promoteToForeground("Connecting BitVoid to the current local Wi-Fi...")) {
                     isNodeForegroundActive = false

@@ -90,7 +90,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     val isUserIdDiscoverable: StateFlow<Boolean> = _isUserIdDiscoverable.asStateFlow()
 
     private val _hasCompletedAccountAccess = MutableStateFlow(
-        BitVoidUserPrefs.hasCompletedAccountAccess(appContext)
+        BitVoidUserPrefs.hasCompletedAccountAccess(appContext) && accountAuth.savedToken() != null
     )
     val hasCompletedAccountAccess: StateFlow<Boolean> = _hasCompletedAccountAccess.asStateFlow()
 
@@ -264,6 +264,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             _isUserIdDiscoverable.value
         )
         BitVoidDirectChatManager.refreshConversationsForUser(_myUsername.value)
+        clientRepository.setAccountAuthorizationToken(accountAuth.savedToken())
         clientRepository.configureCloudBaseUrl(backendConfig.value.cloudServerUrl)
         callManager.configureCloudBaseUrl(backendConfig.value.cloudServerUrl)
         backendConnectionManager.start(
@@ -1071,6 +1072,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
                 accountAuth.saveSession(result.username, result.token, result.masterPassphrase)
+                clientRepository.setAccountAuthorizationToken(result.token)
                 result.masterPassphrase?.let { _masterPassphrase.value = it }
                 BitVoidUserPrefs.saveUsername(appContext, result.username)
                 BitVoidUserPrefs.setAccountAccessComplete(appContext, true)
