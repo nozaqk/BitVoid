@@ -58,7 +58,6 @@ enum class BitVoidDiscoverySource {
     ANDROID_MDNS,
     MULTICAST_DNS,
     NSD_HTTP_SERVICE,
-    CAPTIVE_PORTAL_REDIRECT,
     GATEWAY_FALLBACK
 }
 
@@ -87,21 +86,12 @@ data class BitVoidConnectionState(
     val networkHandle: Long? = null,
     val gatewayAddress: String? = null,
     val endpoint: BitVoidNodeEndpoint? = null,
-    val captivePortalRedirectUrl: String? = null,
     val statusMessage: String = "ESP node integration is stopped.",
     val errorMessage: String? = null
 ) {
     val isReady: Boolean
         get() = phase == BitVoidConnectionPhase.READY && endpoint != null && isProcessBound
 
-    val dashboardUrl: String
-        get() = captivePortalRedirectUrl
-            ?.takeIf { BitVoidConnectionManager.isAllowedLocalUrl(it) }
-            ?: endpoint?.portalUrl
-            ?: BitVoidConnectionManager.NODE_URL
-
-    val dashboardFallbackUrl: String
-        get() = endpoint?.directUrl ?: BitVoidConnectionManager.GATEWAY_URL
 }
 
 /**
@@ -109,7 +99,7 @@ data class BitVoidConnectionState(
  *
  * The manager only binds the Android process when the phone is attached to [NODE_WIFI_SSID]
  * (or when Android redacts the SSID but DHCP reports [NODE_GATEWAY]). This makes every socket,
- * WebView request and native API call stay on the isolated Wi-Fi link instead of escaping over
+ * native API request stay on the isolated Wi-Fi link instead of escaping over
  * cellular data. Call [start] once from an application-scoped owner and [close] on shutdown.
  */
 class BitVoidConnectionManager(
@@ -126,7 +116,6 @@ class BitVoidConnectionManager(
         const val GATEWAY_URL = "http://$NODE_GATEWAY"
         const val CHAT_SERVICE_TYPE = "_http._tcp."
 
-        private const val CAPTIVE_PROBE_PATH = "/generate_204"
         private const val MDNS_PORT = 5353
         private const val DISCOVERY_TIMEOUT_MS = 2_500L
         private val MDNS_GROUP: InetAddress = InetAddress.getByName("224.0.0.251")
@@ -154,12 +143,6 @@ class BitVoidConnectionManager(
         val linkProperties: LinkProperties,
         val gateway: Inet4Address?,
         val expected: Boolean
-    )
-
-    private data class CaptiveProbeResult(
-        val responseCode: Int?,
-        val redirectUrl: String?,
-        val nodeResponded: Boolean
     )
 
     private val appContext = context.applicationContext
@@ -351,7 +334,7 @@ class BitVoidConnectionManager(
             errorMessage = null
         )
 
-        val captiveProbe = probeCaptivePortal(network)
+        val gatewayResponded = probeNodeRoot(network)
         val androidAddress = resolveWithAndroidDns(network)
         val multicastAddress = androidAddress ?: resolveWithMulticastDns(network, linkProperties)
         val nsdEndpoint = if (multicastAddress == null) discoverNsdHttpService() else null
@@ -366,11 +349,7 @@ class BitVoidConnectionManager(
                 source = BitVoidDiscoverySource.MULTICAST_DNS
             )
             nsdEndpoint != null -> nsdEndpoint
-            captiveProbe.redirectUrl?.let(::isAllowedLocalUrl) == true -> BitVoidNodeEndpoint(
-                address = gateway ?: InetAddress.getByName(NODE_GATEWAY) as Inet4Address,
-                source = BitVoidDiscoverySource.CAPTIVE_PORTAL_REDIRECT
-            )
-            captiveProbe.nodeResponded -> BitVoidNodeEndpoint(
+            gatewayResponded -> BitVoidNodeEndpoint(
                 address = gateway ?: InetAddress.getByName(NODE_GATEWAY) as Inet4Address,
                 source = BitVoidDiscoverySource.GATEWAY_FALLBACK
             )
@@ -385,7 +364,6 @@ class BitVoidConnectionManager(
                 phase = BitVoidConnectionPhase.READY,
                 isProcessBound = true,
                 endpoint = endpoint,
-                captivePortalRedirectUrl = captiveProbe.redirectUrl,
                 statusMessage = "$NODE_HOSTNAME ready on ${endpoint.address.hostAddress}:${endpoint.port}",
                 errorMessage = null
             )
@@ -393,10 +371,9 @@ class BitVoidConnectionManager(
             _state.value.copy(
                 phase = BitVoidConnectionPhase.ERROR,
                 endpoint = null,
-                captivePortalRedirectUrl = captiveProbe.redirectUrl,
                 statusMessage = "$NODE_WIFI_SSID is connected, but no verified BitVoid identity answered.",
                 errorMessage = if (endpoint == null) {
-                    "No mDNS A record, DNS-SD HTTP service, captive redirect, or gateway response was received."
+                    "No mDNS A record, DNS-SD HTTP service, or BitVoid gateway API response was received."
                 } else {
                     "The discovered endpoint did not provide a compatible X-BitVoid-Node identity."
                 }
@@ -446,33 +423,7 @@ class BitVoidConnectionManager(
         return raw?.removeSurrounding("\"")?.takeUnless { it == WifiManager.UNKNOWN_SSID }
     }
 
-    private suspend fun probeCaptivePortal(network: Network): CaptiveProbeResult = withContext(Dispatchers.IO) {
-        var connection: HttpURLConnection? = null
-        try {
-            connection = network.openConnection(URL("$GATEWAY_URL$CAPTIVE_PROBE_PATH")) as HttpURLConnection
-            connection.instanceFollowRedirects = false
-            connection.requestMethod = "GET"
-            connection.connectTimeout = 1_500
-            connection.readTimeout = 1_500
-            connection.setRequestProperty("User-Agent", "BitVoid-ESP-Discovery/1.0")
-            connection.setRequestProperty("Connection", "close")
-            val code = connection.responseCode
-            val redirect = connection.getHeaderField("Location")
-                ?.let { raw -> runCatching { URL(URL(GATEWAY_URL), raw).toString() }.getOrNull() }
-                ?.takeIf(::isAllowedLocalUrl)
-            CaptiveProbeResult(
-                responseCode = code,
-                redirectUrl = redirect,
-                nodeResponded = code in 200..399
-            )
-        } catch (_: Exception) {
-            probeNodeRoot(network)
-        } finally {
-            connection?.disconnect()
-        }
-    }
-
-    private fun probeNodeRoot(network: Network): CaptiveProbeResult {
+    private fun probeNodeRoot(network: Network): Boolean {
         var connection: HttpURLConnection? = null
         return try {
             connection = network.openConnection(URL(GATEWAY_URL)) as HttpURLConnection
@@ -480,11 +431,9 @@ class BitVoidConnectionManager(
             connection.requestMethod = "HEAD"
             connection.connectTimeout = 1_200
             connection.readTimeout = 1_200
-            val code = connection.responseCode
-            val redirect = connection.getHeaderField("Location")?.takeIf(::isAllowedLocalUrl)
-            CaptiveProbeResult(code, redirect, code in 200..399)
+            connection.responseCode in 200..299
         } catch (_: Exception) {
-            CaptiveProbeResult(null, null, false)
+            false
         } finally {
             connection?.disconnect()
         }

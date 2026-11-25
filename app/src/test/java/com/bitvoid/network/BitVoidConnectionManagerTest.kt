@@ -45,7 +45,7 @@ class BitVoidConnectionManagerTest {
     }
 
     @Test
-    fun `node endpoint keeps friendly portal and direct transport fallback`() {
+    fun `node endpoint exposes friendly API and direct transport fallback`() {
         val endpoint = BitVoidNodeEndpoint(
             address = InetAddress.getByName("192.168.4.1") as Inet4Address,
             source = BitVoidDiscoverySource.MULTICAST_DNS
@@ -57,7 +57,7 @@ class BitVoidConnectionManagerTest {
     }
 
     @Test
-    fun `captive redirects are restricted to local node addresses`() {
+    fun `local API URLs are restricted to private node addresses`() {
         assertTrue(BitVoidConnectionManager.isAllowedLocalUrl("http://bitvoid.local"))
         assertTrue(BitVoidConnectionManager.isAllowedLocalUrl("http://192.168.4.1/dashboard"))
         assertTrue(BitVoidConnectionManager.isAllowedLocalUrl("http://10.0.0.2/local"))
