@@ -118,8 +118,8 @@ class BitVoidConnectionManager(
 ) : Closeable {
 
     companion object {
-        const val NODE_WIFI_SSID = "BitVoid_Node"
-        const val NODE_HOSTNAME = "bitvoid.local"
+        const val NODE_WIFI_SSID = "BitVoid_Local"
+        const val NODE_HOSTNAME = "esp-server.local"
         const val NODE_GATEWAY = "192.168.4.1"
         const val NODE_PORT = 80
         const val NODE_URL = "http://$NODE_HOSTNAME"
