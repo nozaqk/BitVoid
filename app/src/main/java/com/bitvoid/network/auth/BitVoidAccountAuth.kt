@@ -85,7 +85,7 @@ class BitVoidAccountAuth(private val context: Context) {
         context.getSharedPreferences("bitvoid_secure_account", Context.MODE_PRIVATE)
             .edit()
             .clear()
-            .apply()
+            .commit()
     }
 
     private fun encrypt(value: String): String {
