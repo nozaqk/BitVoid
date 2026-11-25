@@ -273,17 +273,7 @@ class BitVoidHandler(BaseHTTPRequestHandler):
         elif path == "/health":
             self._json({"status": "ok", "nodeId": self.coordinator.node_id})
         elif path == "/":
-            body = (
-                "<!doctype html><meta name=viewport content='width=device-width'>"
-                "<title>BitVoid Pi Coordinator</title><style>body{background:#0d1117;color:#00ff9c;"
-                "font:16px monospace;padding:2rem}</style><h1>BitVoid Pi Coordinator</h1>"
-                "<p>Same-LAN mesh registry online. Open Node Log in the BitVoid app.</p>"
-            ).encode("utf-8")
-            self._headers(200, "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            if self.command != "HEAD":
-                self.wfile.write(body)
+            self._json({"service": SERVICE, "status": "ready", "api": "/api"})
         else:
             self._json({"error": "not_found"}, 404)
 

@@ -210,7 +210,7 @@ class BitVoidNodeClient(
         }
     }
 
-    /** Common synchronization endpoint used by both the native UI and the web dashboard. */
+    /** Common synchronization endpoint used by the native Android UI. */
     suspend fun synchronizeChannels(username: String? = null): BitVoidApiResponse {
         val query = username?.trim()?.takeIf { it.isNotEmpty() }?.let {
             "?username=${encodePathSegment(it.removePrefix("@"))}"

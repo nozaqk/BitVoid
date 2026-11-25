@@ -822,7 +822,7 @@ private fun ChannelEditorDialog(
 
                     if (isHidden) {
                         Text(
-                            text = "Hidden from other users' Hub & Web Portal lists. You will still see and open your own hidden channel; others need its exact Private Channel ID.",
+                            text = "Hidden from other users' Hub lists. You will still see and open your own hidden channel; others need its exact Private Channel ID.",
                             style = MaterialTheme.typography.labelSmall,
                             color = VoidAmber
                         )

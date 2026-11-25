@@ -202,11 +202,7 @@ void configureRoutes() {
     sendJson(200, "{\"status\":\"ok\",\"nodeId\":\"" + escapeJson(nodeId) + "\"}");
   });
   server.on("/", HTTP_GET, []() {
-    sendHeaders();
-    server.send(200, "text/html",
-                "<!doctype html><meta name=viewport content='width=device-width'>"
-                "<style>body{background:#0d1117;color:#00ff9c;font:16px monospace;padding:2rem}</style>"
-                "<h1>BitVoid ESP32 Coordinator</h1><p>Same-LAN registry online. Open Node Log in the app.</p>");
+    sendJson(200, "{\"service\":\"bitvoid\",\"status\":\"ready\",\"api\":\"/api\"}");
   });
   server.onNotFound([]() { sendJson(404, "{\"error\":\"not_found\"}"); });
   const char *headers[] = {"X-BitVoid-Identity"};
