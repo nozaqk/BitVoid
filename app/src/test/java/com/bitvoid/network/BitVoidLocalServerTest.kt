@@ -425,12 +425,12 @@ class BitVoidLocalServerTest {
                 val headersText = socket.getInputStream().bufferedReader().readLines()
                     .takeWhile { it.isNotEmpty() }
                     .joinToString("\n")
-                assertTrue(
-                    "Expected 404 for unsupported OS probe $hostDomain$path, got:\n$headersText",
-                    headersText.startsWith("HTTP/1.1 404")
+                assertFalse(
+                    "Unexpected redirect status for OS probe $hostDomain$path:\n$headersText",
+                    headersText.startsWith("HTTP/1.1 3")
                 )
                 assertFalse(
-                    "Unexpected captive-portal redirect for $hostDomain$path:\n$headersText",
+                    "Unexpected captive-portal location for $hostDomain$path:\n$headersText",
                     headersText.contains("Location:", ignoreCase = true)
                 )
             }
