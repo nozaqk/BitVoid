@@ -25,17 +25,17 @@ class BitVoidAccountAuth(private val context: Context) {
 
     fun register(baseUrl: String, username: String, password: String): BitVoidAuthResult =
         request(baseUrl, "/api/v1/auth/register", JSONObject()
-            .put("username", username).put("password", password), false)
+            .put("username", username).put("password", password))
 
     fun login(baseUrl: String, username: String, password: String): BitVoidAuthResult =
         request(baseUrl, "/api/v1/auth/login", JSONObject()
-            .put("username", username).put("password", password), false)
+            .put("username", username).put("password", password))
 
     fun recover(baseUrl: String, masterPassphrase: String, newPassword: String): BitVoidAuthResult =
         request(baseUrl, "/api/v1/auth/recover", JSONObject()
-            .put("masterPassphrase", masterPassphrase).put("newPassword", newPassword), false)
+            .put("masterPassphrase", masterPassphrase).put("newPassword", newPassword))
 
-    private fun request(baseUrl: String, path: String, payload: JSONObject, authenticated: Boolean): BitVoidAuthResult {
+    private fun request(baseUrl: String, path: String, payload: JSONObject): BitVoidAuthResult {
         val request = Request.Builder()
             .url(baseUrl.trimEnd('/') + path)
             .post(payload.toString().toRequestBody(jsonType))
@@ -48,17 +48,19 @@ class BitVoidAccountAuth(private val context: Context) {
                     ?.takeIf { it.isNotBlank() && it != "null" }
                     ?: "Account request failed (HTTP ${response.code}).")
             }
-            val account = data?.optJSONObject("account")
+            val responseJson = data
+                ?: throw IllegalStateException("The server returned an invalid account response.")
+            val account = responseJson.optJSONObject("account")
                 ?: throw IllegalStateException("The server returned an invalid account response.")
             val username = account.optString("username")
-            val token = data.optString("token")
+            val token = responseJson.optString("token")
             if (username.isBlank() || token.isBlank()) {
                 throw IllegalStateException("The server response is missing the account session.")
             }
             return BitVoidAuthResult(
                 username = username,
                 token = token,
-                masterPassphrase = data.optString("masterPassphrase").takeIf { it.matches(Regex("[0-9a-fA-F]{44}")) }
+                masterPassphrase = responseJson.optString("masterPassphrase").takeIf { it.matches(Regex("[0-9a-fA-F]{44}")) }
             )
         }
     }
