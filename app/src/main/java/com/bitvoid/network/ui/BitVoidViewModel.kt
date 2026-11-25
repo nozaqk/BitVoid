@@ -1108,6 +1108,18 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         _accountAccessError.value = null
     }
 
+    fun logout() {
+        callManager.leaveSession()
+        clientRepository.leaveChannel()
+        clientRepository.leaveDirectChat()
+        clientRepository.setAccountAuthorizationToken(null)
+        accountAuth.clearSession()
+        BitVoidUserPrefs.setAccountAccessComplete(appContext, false)
+        _masterPassphrase.value = null
+        _accountAccessError.value = null
+        _hasCompletedAccountAccess.value = false
+    }
+
     fun updateMyUsername(rawUsername: String): Result<String> {
         val res = BitVoidUserPrefs.saveUsername(appContext, rawUsername)
         res.onSuccess { clean ->

@@ -2,9 +2,7 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include <ArduinoJson.h>
-#include <LittleFS.h>
 #include <ESP8266mDNS.h>
-#include <memory>
 
 #if __has_include("bitvoid_config.h")
 #include "bitvoid_config.h"
@@ -58,7 +56,8 @@ void sendGatewayInfo() {
   protocol["minor"] = 0;
   JsonObject identity = doc.createNestedObject("identity");
   identity["mode"] = protocolIdentity;
-  identity["verified"] = true;
+  identity["verified"] = false;
+  identity["authentication"] = "not-paired";
   JsonArray caps = doc.createNestedArray("capabilities");
   caps.add("wifi-ap");
   caps.add("discovery");
@@ -123,12 +122,12 @@ void setupRoutes() {
     doc.createNestedArray("nodes");
     sendJson(200, doc);
   });
-  server.on("/generate_204", HTTP_GET, []() {
-    server.sendHeader("Location", "http://192.168.4.1/");
-    server.send(302, "text/plain", "");
-  });
   server.on("/", HTTP_GET, []() {
-    server.send(200, "text/plain", "BitVoid ESP-12E gateway is online. API: /api/v1/gateway/info");
+    StaticJsonDocument<160> doc;
+    doc["service"] = "bitvoid-esp12e-gateway";
+    doc["status"] = "ready";
+    doc["api"] = "/api/v1";
+    sendJson(200, doc);
   });
   server.onNotFound([]() {
     StaticJsonDocument<128> doc;
@@ -145,6 +144,11 @@ void setup() {
   if (String(BITVOID_AP_PASSWORD).length() < 8 || String(BITVOID_AP_PASSWORD).length() > 63 ||
       String(BITVOID_AP_PASSWORD) == "CHANGE_ME_12345") {
     Serial.println("ERROR: Set a unique WPA2 password in src/bitvoid_config.h before deployment.");
+    while (true) delay(1000);
+  }
+  if (String(BITVOID_GATEWAY_ID).length() < 8 || String(BITVOID_GATEWAY_ID).length() > 64 ||
+      String(BITVOID_GATEWAY_ID) == "bv-esp12e-change-this-id") {
+    Serial.println("ERROR: Set a unique gateway ID in src/bitvoid_config.h before deployment.");
     while (true) delay(1000);
   }
 

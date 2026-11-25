@@ -1,9 +1,11 @@
 package com.bitvoid.network.ui
 
 import android.Manifest
-import android.content.Intent
+import android.app.DownloadManager
+import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Environment
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -2130,7 +2132,7 @@ private fun WhatsAppDirectChatSpace(
                         onOpenAttachment = { att ->
                             val rawTarget = att.downloadUrl.ifBlank { att.streamUrl }
                             val fullUrl = onBuildAttachmentUrl(rawTarget, session.token)
-                            openAttachmentExternally(context, fullUrl)
+                            downloadAttachment(context, fullUrl, att.name, att.mimeType)
                         }
                     )
                 }
@@ -2545,12 +2547,14 @@ private fun WhatsAppChannelChatSpace(
                         message = msg,
                         isMine = msg.sender == session.callsign,
                         onOpenAttachment = { att ->
-                            // Sent files stay as compact metadata cards. Opening/downloading is
-                            // always an explicit external action; chat never expands file content.
+                            // Sent files stay as compact metadata cards and are downloaded through
+                            // Android's native DownloadManager; chat never renders remote content.
                             val rawTarget = att.downloadUrl.ifBlank { att.streamUrl }
-                            openAttachmentExternally(
+                            downloadAttachment(
                                 context,
-                                onBuildAttachmentUrl(rawTarget, session.token)
+                                onBuildAttachmentUrl(rawTarget, session.token),
+                                att.name,
+                                att.mimeType
                             )
                         }
                     )
@@ -2835,12 +2839,50 @@ private fun formatAttachmentSize(bytes: Long): String {
     return String.format(Locale.US, "%.2f GB", mb / 1024.0)
 }
 
-private fun openAttachmentExternally(context: android.content.Context, url: String) {
+private fun downloadAttachment(
+    context: Context,
+    url: String,
+    suggestedName: String,
+    mimeType: String
+) {
+    if (url.isBlank()) {
+        android.widget.Toast.makeText(
+            context,
+            "The server returned an unsafe attachment address.",
+            android.widget.Toast.LENGTH_LONG
+        ).show()
+        return
+    }
+    val safeName = suggestedName
+        .substringAfterLast('/')
+        .substringAfterLast('\\')
+        .replace(Regex("[^A-Za-z0-9._ -]"), "_")
+        .take(120)
+        .ifBlank { "bitvoid-attachment" }
     try {
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val request = DownloadManager.Request(Uri.parse(url)).apply {
+            setTitle(safeName)
+            setDescription("Downloading BitVoid attachment")
+            setMimeType(mimeType.ifBlank { "application/octet-stream" })
+            setNotificationVisibility(
+                DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
+            )
+            setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, safeName)
+            setAllowedOverMetered(true)
+            setAllowedOverRoaming(false)
         }
-        context.startActivity(intent)
+        val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        manager.enqueue(request)
+        android.widget.Toast.makeText(
+            context,
+            "Downloading $safeName",
+            android.widget.Toast.LENGTH_SHORT
+        ).show()
     } catch (_: Exception) {
+        android.widget.Toast.makeText(
+            context,
+            "Unable to download this attachment.",
+            android.widget.Toast.LENGTH_LONG
+        ).show()
     }
 }

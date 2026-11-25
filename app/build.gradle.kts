@@ -11,8 +11,8 @@ android {
     applicationId = "com.bitvoid.network"
     minSdk = 26
     targetSdk = 36
-    versionCode = 8
-    versionName = "1.5.0"
+    versionCode = 9
+    versionName = "1.5.1"
 
     buildConfigField(
       "String",

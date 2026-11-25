@@ -95,6 +95,18 @@ class BitVoidLocalServerTest {
         assertEquals("android-app", body.getString("client"))
         assertEquals("/api", body.getString("api"))
         conn.disconnect()
+
+        val obsoletePage = URL("http://127.0.0.1:$testPort/index.html")
+            .openConnection() as HttpURLConnection
+        assertEquals(404, obsoletePage.responseCode)
+        obsoletePage.disconnect()
+
+        val browserPreflight = (URL("http://127.0.0.1:$testPort/api/node")
+            .openConnection() as HttpURLConnection).apply {
+            requestMethod = "OPTIONS"
+        }
+        assertEquals(405, browserPreflight.responseCode)
+        browserPreflight.disconnect()
     }
 
     @Test
@@ -358,6 +370,21 @@ class BitVoidLocalServerTest {
             assertEquals(206, rangeStream.responseCode)
             assertEquals("PRIVATE-CHANNEL", String(rangeStream.inputStream.readBytes()))
             rangeStream.disconnect()
+
+            val sameOriginAttachment = repo.buildAttachmentUrl(
+                "http://127.0.0.1:$testPort/download/sample.bin?existing=1",
+                session.token
+            )
+            assertTrue(sameOriginAttachment.startsWith("http://127.0.0.1:$testPort/"))
+            assertTrue(sameOriginAttachment.contains("existing=1"))
+            assertTrue(sameOriginAttachment.contains("token="))
+            assertEquals(
+                "",
+                repo.buildAttachmentUrl(
+                    "https://attacker.example/collect",
+                    session.token
+                )
+            )
 
             var attempts = 0
             while (repo.wsStatus.value != ClientWsStatus.LIVE && attempts < 25) {
