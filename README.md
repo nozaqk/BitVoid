@@ -453,6 +453,8 @@ Gateway identity and stored data do not automatically move with the physical boa
 
 The ESP-12E is based on the ESP8266 and has constrained memory and processing resources. The current firmware is intended to validate the Wi-Fi access point, gateway identity, API discovery, and health flow.
 
+**Using the ESP-12E with the Android app today:** the ESP-12E is only the Wi-Fi access point; it does not host chats or the full BitVoid API. Connect both the Android phone and the computer running `Bitvoid-Server/pc-server` to the ESP access point (default SSID `BitVoid_Local`). Start the PC server on the computer and keep it listening on port `8787`. The Android app now scans local Wi-Fi devices for the BitVoid PC server on port `8787` and verifies its `/api/node` identity. If only the phone is connected, or the PC server is stopped/not connected to the ESP Wi-Fi, the app correctly remains offline. The ESP admin page at `http://192.168.4.1/admin` is only for gateway diagnostics.
+
 It does not currently implement:
 
 - Secure application device pairing and token authentication.
