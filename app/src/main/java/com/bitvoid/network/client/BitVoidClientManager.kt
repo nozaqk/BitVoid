@@ -586,10 +586,12 @@ class BitVoidClientManager(private val context: Context) {
                     }
                 }
                 buildSubnetCandidateHosts(link.localIpv4, link.gatewayHosts).forEach { host ->
+                    add("http://$host:8787")
                     add("http://$host:8080")
                     if (host in link.gatewayHosts) add("http://$host")
                 }
                 if (BitVoidNodeStateHolder.hostState.value.isServerRunning) {
+                    add("http://${link.localIpv4}:8787")
                     add("http://${link.localIpv4}:8080")
                     add("http://${link.localIpv4}")
                 }
@@ -980,7 +982,7 @@ class BitVoidClientManager(private val context: Context) {
             if (parsed.port != -1 || parsed.scheme != "http") return listOf(normalized)
             val host = parsed.host ?: return listOf(normalized)
             val hostLiteral = if (host.contains(':') && !host.startsWith('[')) "[$host]" else host
-            return listOf(normalized, "http://$hostLiteral:8080")
+            return listOf(normalized, "http://$hostLiteral:8787", "http://$hostLiteral:8080")
         }
 
         fun isPrivateLocalHost(host: String): Boolean {
