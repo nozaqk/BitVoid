@@ -401,7 +401,7 @@ class BitVoidLocalServerTest {
     }
 
     @Test
-    fun `os connectivity check domains receive 302 redirect to friendly gateway hostname`() {
+    fun `os connectivity check domains do not trigger obsolete captive portal redirects`() {
         BitVoidNodeStateHolder.updateHostState {
             HostState(
                 status = com.bitvoid.network.model.HotspotStatus.ACTIVE,
@@ -425,10 +425,13 @@ class BitVoidLocalServerTest {
                 val headersText = socket.getInputStream().bufferedReader().readLines()
                     .takeWhile { it.isNotEmpty() }
                     .joinToString("\n")
-                assertTrue("Expected 302 for $hostDomain$path, got:\n$headersText", headersText.contains("302"))
                 assertTrue(
-                    "Expected redirect to http://bitvoid.local/ for $hostDomain, got:\n$headersText",
-                    headersText.contains("http://bitvoid.local/")
+                    "Expected 404 for unsupported OS probe $hostDomain$path, got:\n$headersText",
+                    headersText.startsWith("HTTP/1.1 404")
+                )
+                assertFalse(
+                    "Unexpected captive-portal redirect for $hostDomain$path:\n$headersText",
+                    headersText.contains("Location:", ignoreCase = true)
                 )
             }
         }
@@ -466,8 +469,14 @@ class BitVoidLocalServerTest {
             BitVoidClientManager.normalizeLocalPortalUrl("192.168.50.9:8080/some/page?ignored=1")
         )
         assertEquals(
-            listOf("http://bitvoid.local", "http://bitvoid.local:8080"),
-            BitVoidClientManager.expandLocalPortalCandidates("bitvoid.local")
+            listOf(
+                "http://${BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME}",
+                "http://${BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME}:8787",
+                "http://${BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME}:8080"
+            ),
+            BitVoidClientManager.expandLocalPortalCandidates(
+                BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME
+            )
         )
         assertEquals(
             listOf("http://192.168.50.9:8080"),
