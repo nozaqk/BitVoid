@@ -17,15 +17,16 @@ import org.junit.Test
 class BitVoidConnectionManagerTest {
 
     @Test
-    fun `mdns query asks for bitvoid local A record`() {
+    fun `mdns query asks for configured node hostname A record`() {
         val query = BitVoidMdnsCodec.buildAQuery(BitVoidConnectionManager.NODE_HOSTNAME)
 
         assertEquals(1, unsignedShort(query, 4))
         assertEquals(1, unsignedShort(query, query.size - 4))
         assertEquals(1, unsignedShort(query, query.size - 2))
-        assertTrue(query.toList().windowed(7).any { bytes ->
-            bytes.map { it.toInt().toChar() }.joinToString("") == "bitvoid"
-        })
+        assertTrue(
+            String(query, Charsets.ISO_8859_1)
+                .contains(BitVoidConnectionManager.NODE_HOSTNAME.substringBefore('.'))
+        )
     }
 
     @Test
@@ -41,7 +42,13 @@ class BitVoidConnectionManagerTest {
 
         assertEquals(expected, actual)
         assertNull(BitVoidMdnsCodec.findARecord(response, response.size, "other.local"))
-        assertNull(BitVoidMdnsCodec.findARecord(byteArrayOf(0, 1, 2), 3, "bitvoid.local"))
+        assertNull(
+            BitVoidMdnsCodec.findARecord(
+                byteArrayOf(0, 1, 2),
+                3,
+                BitVoidConnectionManager.NODE_HOSTNAME
+            )
+        )
     }
 
     @Test
@@ -51,14 +58,19 @@ class BitVoidConnectionManagerTest {
             source = BitVoidDiscoverySource.MULTICAST_DNS
         )
 
-        assertEquals("http://bitvoid.local", endpoint.portalUrl)
+        assertEquals(BitVoidConnectionManager.NODE_URL, endpoint.portalUrl)
         assertEquals("http://192.168.4.1", endpoint.directUrl)
-        assertEquals("ws://bitvoid.local:80", endpoint.webSocketBaseUrl)
+        assertEquals(
+            "ws://${BitVoidConnectionManager.NODE_HOSTNAME}:${BitVoidConnectionManager.NODE_PORT}",
+            endpoint.webSocketBaseUrl
+        )
     }
 
     @Test
     fun `local API URLs are restricted to private node addresses`() {
-        assertTrue(BitVoidConnectionManager.isAllowedLocalUrl("http://bitvoid.local"))
+        assertTrue(
+            BitVoidConnectionManager.isAllowedLocalUrl(BitVoidConnectionManager.NODE_URL)
+        )
         assertTrue(BitVoidConnectionManager.isAllowedLocalUrl("http://192.168.4.1/dashboard"))
         assertTrue(BitVoidConnectionManager.isAllowedLocalUrl("http://10.0.0.2/local"))
         assertFalse(BitVoidConnectionManager.isAllowedLocalUrl("https://example.com/login"))
@@ -74,10 +86,13 @@ class BitVoidConnectionManagerTest {
             dns.writeShort(1)
             dns.writeShort(0)
             dns.writeShort(0)
-            dns.writeByte(7)
-            dns.writeBytes("bitvoid")
-            dns.writeByte(5)
-            dns.writeBytes("local")
+            BitVoidConnectionManager.NODE_HOSTNAME
+                .trimEnd('.')
+                .split('.')
+                .forEach { label ->
+                    dns.writeByte(label.toByteArray(Charsets.US_ASCII).size)
+                    dns.writeBytes(label)
+                }
             dns.writeByte(0)
             dns.writeShort(1)
             dns.writeShort(0x8001)
