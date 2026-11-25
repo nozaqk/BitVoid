@@ -24,15 +24,15 @@ class BitVoidAccountAuth(private val context: Context) {
     private val jsonType = "application/json; charset=utf-8".toMediaType()
 
     fun register(baseUrl: String, username: String, password: String): BitVoidAuthResult =
-        request(baseUrl, "/api/v1/auth/register", JSONObject()
+        request(baseUrl, "/api/v1/account/register", JSONObject()
             .put("username", username).put("password", password))
 
     fun login(baseUrl: String, username: String, password: String): BitVoidAuthResult =
-        request(baseUrl, "/api/v1/auth/login", JSONObject()
+        request(baseUrl, "/api/v1/account/login", JSONObject()
             .put("username", username).put("password", password))
 
     fun recover(baseUrl: String, masterPassphrase: String, newPassword: String): BitVoidAuthResult =
-        request(baseUrl, "/api/v1/auth/recover", JSONObject()
+        request(baseUrl, "/api/v1/account/recover", JSONObject()
             .put("masterPassphrase", masterPassphrase).put("newPassword", newPassword))
 
     private fun request(baseUrl: String, path: String, payload: JSONObject): BitVoidAuthResult {
