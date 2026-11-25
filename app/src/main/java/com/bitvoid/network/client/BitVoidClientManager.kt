@@ -16,13 +16,6 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.webkit.CookieManager
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
-import android.webkit.WebSettings
-import android.webkit.WebStorage
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.core.content.ContextCompat
 import com.bitvoid.network.mesh.BitVoidMeshIdentity
 import com.bitvoid.network.mesh.BitVoidMeshNodeDescriptor
@@ -32,7 +25,6 @@ import com.bitvoid.network.model.ClientConnectionStatus
 import com.bitvoid.network.model.DiscoveredNetwork
 import com.bitvoid.network.model.NodeConnectionEventType
 import com.bitvoid.network.service.BitVoidNodeStateHolder
-import java.io.ByteArrayInputStream
 import java.net.HttpURLConnection
 import java.net.Inet4Address
 import java.net.InetAddress
@@ -330,7 +322,6 @@ class BitVoidClientManager(private val context: Context) {
                 linkedNodeUrls = emptyList(),
                 coordinatorUrls = emptyList(),
                 meshNodeCount = 0,
-                isBrowserOpen = false,
                 statusMessage = "Finding every BitVoid node on $activeSsid…",
                 errorMessage = null
             )
@@ -561,7 +552,6 @@ class BitVoidClientManager(private val context: Context) {
                 coordinatorUrls = discovery.coordinatorUrls,
                 meshNodeCount = discovery.nodeCount,
                 targetPortalUrl = sharedGatewayUrl,
-                isBrowserOpen = false,
                 statusMessage = if (silent) {
                     "${discovery.nodeCount} BitVoid mesh node(s) sharing $activeSsid."
                 } else {
@@ -813,7 +803,6 @@ class BitVoidClientManager(private val context: Context) {
                 linkedNodeUrls = emptyList(),
                 coordinatorUrls = emptyList(),
                 meshNodeCount = 0,
-                isBrowserOpen = false,
                 statusMessage = "Node link cleared. The phone remains connected to Wi-Fi.",
                 errorMessage = null
             )
@@ -1002,117 +991,5 @@ class BitVoidClientManager(private val context: Context) {
             }
         }
 
-        @SuppressLint("SetJavaScriptEnabled")
-        fun configureSandboxedWebView(
-            webView: WebView,
-            onRequestEvaluated: (allowed: Boolean) -> Unit,
-            onPageLoaded: (url: String) -> Unit
-        ) {
-            // 1. Disable all cookies & third-party cookies globally for this WebView
-            val cookieManager = CookieManager.getInstance()
-            cookieManager.setAcceptCookie(false)
-            cookieManager.setAcceptThirdPartyCookies(webView, false)
-            cookieManager.removeAllCookies(null)
-            cookieManager.removeSessionCookies(null)
-            cookieManager.flush()
-
-            // 2. Clear any residual storage and enforce memory-only ephemeral mode
-            WebStorage.getInstance().deleteAllData()
-            webView.clearCache(true)
-            webView.clearHistory()
-            webView.clearFormData()
-
-            webView.settings.apply {
-                // Strip device model / OS / WebView build fingerprints
-                userAgentString = SANITIZED_USER_AGENT
-
-                // Enable JS strictly for local RFC1918 portal 3s auto-refresh while killing WebRTC
-                // local IP leak APIs on every page load.
-                javaScriptEnabled = true
-                javaScriptCanOpenWindowsAutomatically = false
-
-                // Memory-only / zero disk persistence
-                cacheMode = WebSettings.LOAD_NO_CACHE
-                domStorageEnabled = false
-                databaseEnabled = false
-                setGeolocationEnabled(false)
-                allowFileAccess = false
-                allowContentAccess = false
-                @Suppress("DEPRECATION")
-                saveFormData = false
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    safeBrowsingEnabled = false
-                }
-                mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                mediaPlaybackRequiresUserGesture = false
-                builtInZoomControls = true
-                displayZoomControls = false
-                useWideViewPort = true
-                loadWithOverviewMode = true
-            }
-
-            webView.webViewClient = object : WebViewClient() {
-                override fun onPageStarted(
-                    view: WebView?,
-                    url: String?,
-                    favicon: android.graphics.Bitmap?
-                ) {
-                    super.onPageStarted(view, url, favicon)
-                    view?.evaluateJavascript(
-                        """
-                        (function(){
-                          try {
-                            window.RTCPeerConnection = undefined;
-                            window.webkitRTCPeerConnection = undefined;
-                            window.mozRTCPeerConnection = undefined;
-                            if (navigator.mediaDevices) {
-                              Object.defineProperty(navigator, 'mediaDevices', { value: undefined });
-                            }
-                          } catch(e) {}
-                        })();
-                        """.trimIndent(),
-                        null
-                    )
-                }
-
-                override fun shouldOverrideUrlLoading(
-                    view: WebView?,
-                    request: WebResourceRequest?
-                ): Boolean {
-                    val host = request?.url?.host.orEmpty()
-                    val allowed = isPrivateLocalHost(host)
-                    onRequestEvaluated(allowed)
-                    return !allowed
-                }
-
-                override fun shouldInterceptRequest(
-                    view: WebView?,
-                    request: WebResourceRequest?
-                ): WebResourceResponse? {
-                    val host = request?.url?.host.orEmpty()
-                    val allowed = isPrivateLocalHost(host)
-                    onRequestEvaluated(allowed)
-                    return if (allowed) {
-                        null // Proceed over bound local network
-                    } else {
-                        WebResourceResponse(
-                            "text/plain",
-                            "utf-8",
-                            403,
-                            "Blocked by BitVoid Zero-Internet Sandbox",
-                            emptyMap(),
-                            ByteArrayInputStream(ByteArray(0))
-                        )
-                    }
-                }
-
-                override fun onPageFinished(view: WebView?, url: String?) {
-                    super.onPageFinished(view, url)
-                    if (url != null) {
-                        onPageLoaded(url)
-                    }
-                }
-            }
-        }
     }
 }

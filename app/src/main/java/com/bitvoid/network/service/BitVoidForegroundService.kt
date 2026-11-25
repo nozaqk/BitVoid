@@ -25,7 +25,6 @@ import com.bitvoid.network.model.HostState
 import com.bitvoid.network.model.HotspotStatus
 import com.bitvoid.network.server.BitVoidLocalServer
 import com.bitvoid.network.server.BitVoidMdnsResponder
-import com.bitvoid.network.server.BitVoidTlsManager
 import com.bitvoid.network.R
 import java.net.Inet4Address
 import java.net.NetworkInterface
@@ -123,9 +122,6 @@ class BitVoidForegroundService : Service() {
     private var friendlyHttpServer: BitVoidLocalServer? = null
     private var friendlyPort80Unavailable = false
     private var mdnsResponder: BitVoidMdnsResponder? = null
-    private var secureLocalServer: BitVoidLocalServer? = null
-    private var secureCertificateHosts: Set<String> = emptySet()
-    private var secureServerError: String? = null
     private lateinit var wifiManager: WifiManager
     private lateinit var notificationManager: NotificationManager
 
@@ -297,7 +293,6 @@ class BitVoidForegroundService : Service() {
         val activeSsid = resolveConnectedWifiSsid() ?: "Connected local Wi-Fi"
         val friendlyPort = ensureFriendlyGateway(resolvedIp)
         val urlList = buildPortalEndpoints(allEndpoints, friendlyPort)
-        val secureReady = ensureSecureServerRunning(allEndpoints)
         BitVoidNodeStateHolder.updateHostState {
             it.copy(
                 status = HotspotStatus.SERVER_ONLY,
@@ -309,14 +304,14 @@ class BitVoidForegroundService : Service() {
                 gatewayHostname = if (friendlyPort != null) BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME else "",
                 gatewayHostnamePort = friendlyPort ?: BitVoidLocalServer.DEFAULT_PORT,
                 boundEndpoints = urlList,
-                isSecureServerRunning = secureReady,
+                isSecureServerRunning = false,
                 uptimeSeconds = 0L,
-                errorMessage = secureServerError
+                errorMessage = null
             )
         }
         startUptimeTicker()
         probeAssignedGatewayIp()
-        updateNotification("Local Vault Online: ${preferredPortalUrl(resolvedIp, friendlyPort)} · HTTPS :${BitVoidTlsManager.SECURE_PORT}")
+        updateNotification("BitVoid local API online: ${preferredPortalUrl(resolvedIp, friendlyPort)}")
     }
 
     private fun ensureHttpServerRunning(): Boolean {
@@ -396,35 +391,6 @@ class BitVoidForegroundService : Service() {
             ?: "http://$ipv4:${BitVoidLocalServer.DEFAULT_PORT}"
     }
 
-    @Synchronized
-    private fun ensureSecureServerRunning(ipv4Hosts: Collection<String>): Boolean {
-        val normalizedHosts = ipv4Hosts.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
-        val current = secureLocalServer
-        if (current != null && current.isAlive && secureCertificateHosts.containsAll(normalizedHosts)) {
-            return true
-        }
-        return try {
-            try {
-                current?.stop()
-            } catch (_: Exception) {
-            }
-            val material = BitVoidTlsManager.createServerMaterial(applicationContext, normalizedHosts)
-            val created = BitVoidLocalServer(applicationContext, BitVoidTlsManager.SECURE_PORT)
-            created.makeSecure(material.socketFactory, null)
-            created.start(0, false)
-            secureLocalServer = created
-            secureCertificateHosts = material.certificateHosts
-            secureServerError = null
-            true
-        } catch (e: Exception) {
-            secureLocalServer = null
-            secureCertificateHosts = emptySet()
-            secureServerError =
-                "Secure browser audio portal could not start: ${e.localizedMessage ?: "TLS error"}"
-            false
-        }
-    }
-
     @Suppress("DEPRECATION")
     private fun resolveConnectedWifiSsid(): String? {
         return try {
@@ -496,7 +462,6 @@ class BitVoidForegroundService : Service() {
                 val combinedIps = (detection.allEndpoints + "127.0.0.1").distinct()
                 val friendlyPort = ensureFriendlyGateway(resolved)
                 val urlList = buildPortalEndpoints(combinedIps, friendlyPort)
-                val secureReady = ensureSecureServerRunning(combinedIps)
                 val resolvedHostname = if (friendlyPort != null) {
                     BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME
                 } else {
@@ -519,16 +484,14 @@ class BitVoidForegroundService : Service() {
                             gatewayHostname = resolvedHostname,
                             gatewayHostnamePort = friendlyPort ?: BitVoidLocalServer.DEFAULT_PORT,
                             boundEndpoints = urlList,
-                            isSecureServerRunning = secureReady,
+                            isSecureServerRunning = false,
                             errorMessage = if (resolved == "127.0.0.1") {
                                 "Connect this phone to local Wi-Fi to share the local server."
-                            } else {
-                                secureServerError
-                            }
+                            } else null
                         )
                     }
                     updateNotification(
-                        "BitVoid local Wi-Fi server · ${preferredPortalUrl(resolved, friendlyPort)}"
+                        "BitVoid local API · ${preferredPortalUrl(resolved, friendlyPort)}"
                     )
                 }
             }
@@ -582,14 +545,6 @@ class BitVoidForegroundService : Service() {
         }
         friendlyHttpServer = null
         mdnsResponder?.stop()
-        try {
-            secureLocalServer?.stop()
-        } catch (_: Exception) {
-        }
-        secureLocalServer = null
-        secureCertificateHosts = emptySet()
-        secureServerError = null
-
         BitVoidNodeStateHolder.updateHostState { state ->
             state.copy(
                 status = HotspotStatus.IDLE,

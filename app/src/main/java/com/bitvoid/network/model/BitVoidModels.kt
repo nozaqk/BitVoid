@@ -170,15 +170,6 @@ enum class ClientConnectionStatus {
     ERROR
 }
 
-data class PrivacyTelemetry(
-    val userAgentStripped: Boolean = true,
-    val webRtcDisabled: Boolean = true,
-    val thirdPartyCookiesDisabled: Boolean = true,
-    val memoryOnlyCache: Boolean = true,
-    val strippedRequestsCount: Int = 0,
-    val blockedExternalRequestsCount: Int = 0
-)
-
 data class ClientState(
     val connectionStatus: ClientConnectionStatus = ClientConnectionStatus.DISCONNECTED,
     val isScanning: Boolean = false,
@@ -191,6 +182,4 @@ data class ClientState(
     val targetPortalUrl: String = "http://${BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME}",
     val statusMessage: String = "Standby — ready to scan or connect to a BitVoid node",
     val errorMessage: String? = null,
-    val isBrowserOpen: Boolean = false,
-    val privacyTelemetry: PrivacyTelemetry = PrivacyTelemetry()
 )

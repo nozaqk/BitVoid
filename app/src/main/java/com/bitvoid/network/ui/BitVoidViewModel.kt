@@ -1545,44 +1545,6 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun openSandboxedBrowser(urlOverride: String? = null) {
-        val targetBase = urlOverride?.let { BitVoidClientManager.normalizeLocalPortalUrl(it) }
-            ?: BitVoidClientManager.normalizeLocalPortalUrl(clientState.value.targetPortalUrl)
-            ?: return
-        clientRepository.setGatewayBaseUrl(targetBase)
-        val targetWithIdentity = Uri.parse(targetBase)
-            .buildUpon()
-            .appendQueryParameter("username", _myUsername.value)
-            .build()
-            .toString()
-        BitVoidNodeStateHolder.updateClientState {
-            it.copy(
-                targetPortalUrl = targetWithIdentity,
-                isBrowserOpen = true,
-                errorMessage = null
-            )
-        }
-    }
-
-    fun closeSandboxedBrowser() {
-        BitVoidNodeStateHolder.updateClientState {
-            it.copy(isBrowserOpen = false)
-        }
-    }
-
-    fun recordSandboxRequest(allowed: Boolean) {
-        BitVoidNodeStateHolder.updateClientState { state ->
-            val current = state.privacyTelemetry
-            state.copy(
-                privacyTelemetry = if (allowed) {
-                    current.copy(strippedRequestsCount = current.strippedRequestsCount + 1)
-                } else {
-                    current.copy(blockedExternalRequestsCount = current.blockedExternalRequestsCount + 1)
-                }
-            )
-        }
-    }
-
     override fun onCleared() {
         backendConnectionManager.close()
         callManager.release()

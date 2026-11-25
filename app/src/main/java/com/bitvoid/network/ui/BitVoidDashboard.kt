@@ -3,7 +3,6 @@ package com.bitvoid.network.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.webkit.WebView
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -33,12 +32,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Public
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -74,11 +70,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bitvoid.network.channel.BitVoidChannel
-import com.bitvoid.network.client.BitVoidClientManager
 import com.bitvoid.network.media.BitVoidMediaItem
 import com.bitvoid.network.model.AppBottomTab
 import com.bitvoid.network.model.ClientState
@@ -361,16 +355,6 @@ fun BitVoidDashboard(
                 viewModel.openListedLiveClass(liveClass)
             }
         )
-    }
-
-    if (clientState.isBrowserOpen) {
-        BackHandler { viewModel.closeSandboxedBrowser() }
-        SandboxedPortalBrowserScreen(
-            clientState = clientState,
-            onClose = { viewModel.closeSandboxedBrowser() },
-            onRequestEvaluated = { allowed -> viewModel.recordSandboxRequest(allowed) }
-        )
-        return
     }
 
     val isInsideActiveConversation =
@@ -664,166 +648,6 @@ private fun WideDashboardContent(
                     settingsIdentityContent()
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun SandboxedPortalBrowserScreen(
-    clientState: ClientState,
-    onClose: () -> Unit,
-    onRequestEvaluated: (Boolean) -> Unit
-) {
-    var webViewRef by remember { mutableStateOf<WebView?>(null) }
-    var currentUrl by remember { mutableStateOf(clientState.targetPortalUrl) }
-
-    Scaffold(
-        containerColor = VoidObsidian,
-        contentWindowInsets = WindowInsets.safeDrawing
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(VoidObsidian)
-                .padding(innerPadding)
-        ) {
-            // Browser Chrome Bar
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(VoidSurface)
-                    .border(1.dp, VoidBorder)
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(
-                    onClick = {
-                        val wv = webViewRef
-                        if (wv != null && wv.canGoBack()) {
-                            wv.goBack()
-                        } else {
-                            onClose()
-                        }
-                    },
-                    modifier = Modifier.size(48.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Navigate back",
-                        tint = VoidTextPrimary
-                    )
-                }
-
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 6.dp)
-                ) {
-                    Text(
-                        text = currentUrl,
-                        style = MaterialTheme.typography.labelLarge,
-                        color = VoidMint,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = "UA STRIPPED · NO WEBRTC · MEMORY-ONLY · RFC1918 FIREWALL",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = VoidCyan,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                IconButton(
-                    onClick = { webViewRef?.reload() },
-                    modifier = Modifier.size(48.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Refresh,
-                        contentDescription = "Reload portal",
-                        tint = VoidCyan
-                    )
-                }
-
-                IconButton(
-                    onClick = {
-                        webViewRef?.apply {
-                            stopLoading()
-                            clearCache(true)
-                            clearHistory()
-                            loadUrl("about:blank")
-                        }
-                        onClose()
-                    },
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("close_sandbox_browser_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Close,
-                        contentDescription = "Close sandboxed browser",
-                        tint = VoidCrimson
-                    )
-                }
-            }
-
-            // Live Firewall & Anonymizer Strip
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFF0A0E14))
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = "LOCAL REQS: ${clientState.privacyTelemetry.strippedRequestsCount}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = VoidMint
-                )
-                Text(
-                    text = "EXT BLOCKED: ${clientState.privacyTelemetry.blockedExternalRequestsCount}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (clientState.privacyTelemetry.blockedExternalRequestsCount > 0) {
-                        VoidAmber
-                    } else {
-                        VoidTextSecondary
-                    }
-                )
-            }
-
-            AndroidView(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .weight(1f),
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        setBackgroundColor(android.graphics.Color.parseColor("#0D1117"))
-                        BitVoidClientManager.configureSandboxedWebView(
-                            webView = this,
-                            onRequestEvaluated = onRequestEvaluated,
-                            onPageLoaded = { loadedUrl -> currentUrl = loadedUrl }
-                        )
-                        tag = clientState.targetPortalUrl
-                        loadUrl(clientState.targetPortalUrl)
-                        webViewRef = this
-                    }
-                },
-                update = { webView ->
-                    val target = clientState.targetPortalUrl
-                    if (target.isNotBlank() && webView.tag != target) {
-                        webView.tag = target
-                        currentUrl = target
-                        webView.loadUrl(target)
-                    }
-                },
-                onRelease = { webView ->
-                    webView.stopLoading()
-                    webView.clearCache(true)
-                    webView.clearHistory()
-                    webView.destroy()
-                }
-            )
         }
     }
 }
