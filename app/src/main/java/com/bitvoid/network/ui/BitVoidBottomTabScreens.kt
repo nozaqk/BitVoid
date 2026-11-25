@@ -25,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -109,7 +110,9 @@ fun SettingsUserIdentityCard(
     username: String,
     isDiscoverable: Boolean,
     onSetDiscoverable: (Boolean) -> Unit,
-    onCopyUsername: (String, String) -> Unit
+    onCopyUsername: (String, String) -> Unit,
+    masterPassphrase: String?,
+    onExportMasterPassphrase: () -> Unit
 ) {
     Card(
         modifier = Modifier
@@ -174,6 +177,29 @@ fun SettingsUserIdentityCard(
                 ),
                 modifier = Modifier.testTag("settings_user_discoverability_switch")
             )
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = if (masterPassphrase != null) "ACCOUNT RECOVERY KEY · AVAILABLE" else "ACCOUNT RECOVERY KEY · NOT AVAILABLE ON THIS DEVICE",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (masterPassphrase != null) VoidMint else VoidTextSecondary,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Your 44-character hexadecimal master passphrase can recover your account and reset its password. Keep an offline copy.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = VoidTextSecondary
+                )
+                OutlinedButton(
+                    onClick = onExportMasterPassphrase,
+                    enabled = masterPassphrase != null,
+                    modifier = Modifier.fillMaxWidth().testTag("settings_export_master_passphrase")
+                ) {
+                    Text("EXPORT RECOVERY PASSPHRASE")
+                }
+            }
         }
     }
 }

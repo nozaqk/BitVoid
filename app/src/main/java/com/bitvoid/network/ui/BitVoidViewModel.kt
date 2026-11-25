@@ -1,12 +1,14 @@
 package com.bitvoid.network.ui
 
 import android.app.Application
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Base64
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.bitvoid.network.auth.BitVoidAccountAuth
 import com.bitvoid.network.call.BitVoidCallManager
 import com.bitvoid.network.call.BitVoidCallState
 import com.bitvoid.network.call.DirectCallPhase
@@ -70,6 +72,9 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     private val clientRepository = BitVoidClientRepositoryProvider.repository
     private val backendConnectionManager = BitVoidBackendConnectionManager(appContext)
     private val callManager = BitVoidCallManager(appContext)
+    private val accountAuth = BitVoidAccountAuth(appContext)
+    private val _masterPassphrase = MutableStateFlow(accountAuth.savedMasterPassphrase())
+    val masterPassphrase: StateFlow<String?> = _masterPassphrase.asStateFlow()
     val backendState: StateFlow<BitVoidBackendState> = backendConnectionManager.state
     val backendConfig: StateFlow<BitVoidBackendConfig> = backendConnectionManager.config
     private val _selectedBottomTab = MutableStateFlow(AppBottomTab.HOME)
@@ -1025,12 +1030,27 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun completeAccountAccess(rawUsername: String) {
+    fun completeAccountAccess(
+        mode: BitVoidAccessMode,
+        rawUsername: String,
+        password: String,
+        masterPassphrase: String,
+        newPassword: String
+    ) {
         if (_isCompletingAccountAccess.value) return
         val normalized = BitVoidUserPrefs.normalizeUsernameOrNull(rawUsername)
-        if (normalized == null) {
-            _accountAccessError.value =
-                "User ID must be 2–24 characters using letters, numbers, '.', '_', or '-'."
+        if (mode != BitVoidAccessMode.RECOVER && normalized == null) {
+            _accountAccessError.value = "Username must be 2–24 characters using letters, numbers, '.', '_', or '-'."
+            return
+        }
+        if (mode != BitVoidAccessMode.RECOVER && password.length < 10) {
+            _accountAccessError.value = "Password must contain at least 10 characters."
+            return
+        }
+        if (mode == BitVoidAccessMode.RECOVER &&
+            (!masterPassphrase.matches(Regex("[0-9a-fA-F]{44}")) || newPassword.length < 10)
+        ) {
+            _accountAccessError.value = "Enter the 44-character hexadecimal master passphrase and a new password of at least 10 characters."
             return
         }
         val backendUrl = backendState.value.baseUrl
@@ -1042,30 +1062,44 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             _isCompletingAccountAccess.value = true
             _accountAccessError.value = null
-            val registration = clientRepository.registerUsername(
-                normalized,
-                urlOverride = backendUrl,
-                discoverable = _isUserIdDiscoverable.value
-            )
-            registration.onSuccess { registeredUsername ->
-                BitVoidUserPrefs.saveUsername(appContext, registeredUsername)
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    when (mode) {
+                        BitVoidAccessMode.CREATE_ACCOUNT -> accountAuth.register(backendUrl, normalized!!, password)
+                        BitVoidAccessMode.LOGIN -> accountAuth.login(backendUrl, normalized!!, password)
+                        BitVoidAccessMode.RECOVER -> accountAuth.recover(backendUrl, masterPassphrase, newPassword)
+                    }
+                }
+                accountAuth.saveSession(result.username, result.token, result.masterPassphrase)
+                result.masterPassphrase?.let { _masterPassphrase.value = it }
+                BitVoidUserPrefs.saveUsername(appContext, result.username)
                 BitVoidUserPrefs.setAccountAccessComplete(appContext, true)
-                _myUsername.value = registeredUsername
+                _myUsername.value = result.username
                 _hasCompletedAccountAccess.value = true
-                BitVoidDirectChatManager.registerUser(
-                    registeredUsername,
-                    _isUserIdDiscoverable.value
-                )
-                BitVoidDirectChatManager.refreshConversationsForUser(registeredUsername)
-                clientRepository.fetchChannels(backendUrl, username = registeredUsername)
+                BitVoidDirectChatManager.registerUser(result.username, _isUserIdDiscoverable.value)
+                BitVoidDirectChatManager.refreshConversationsForUser(result.username)
+                clientRepository.registerUsername(result.username, urlOverride = backendUrl, discoverable = _isUserIdDiscoverable.value)
+                clientRepository.fetchChannels(backendUrl, username = result.username)
                 clientRepository.fetchKnownUsers(backendUrl)
-                clientRepository.fetchLiveClasses(registeredUsername, backendUrl)
-            }.onFailure { error ->
-                _accountAccessError.value = error.message
-                    ?: "Unable to access BitVoid with that User ID."
+                clientRepository.fetchLiveClasses(result.username, backendUrl)
+            } catch (error: Exception) {
+                _accountAccessError.value = error.message ?: "Unable to authenticate with BitVoid."
+            } finally {
+                _isCompletingAccountAccess.value = false
             }
-            _isCompletingAccountAccess.value = false
         }
+    }
+
+    fun exportMasterPassphrase() {
+        val secret = _masterPassphrase.value ?: return
+        val text = "BitVoid account recovery master passphrase\n\nUser ID: @${_myUsername.value}\nMaster passphrase: $secret\n\nKeep this file private. Anyone with this passphrase can reset your account password.\n"
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "BitVoid account recovery key")
+            putExtra(Intent.EXTRA_TEXT, text)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        appContext.startActivity(Intent.createChooser(send, "Save your BitVoid recovery key").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
     fun clearAccountAccessError() {

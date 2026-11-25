@@ -125,6 +125,7 @@ fun BitVoidDashboard(
     val hasCompletedAccountAccess by viewModel.hasCompletedAccountAccess.collectAsStateWithLifecycle()
     val isCompletingAccountAccess by viewModel.isCompletingAccountAccess.collectAsStateWithLifecycle()
     val accountAccessError by viewModel.accountAccessError.collectAsStateWithLifecycle()
+    val masterPassphrase by viewModel.masterPassphrase.collectAsStateWithLifecycle()
     val directConversations by viewModel.directConversations.collectAsStateWithLifecycle()
     val knownUsers by viewModel.knownUsers.collectAsStateWithLifecycle()
     val activeDirectSession by viewModel.activeDirectSession.collectAsStateWithLifecycle()
@@ -223,7 +224,9 @@ fun BitVoidDashboard(
             username = myUsername,
             isDiscoverable = isUserIdDiscoverable,
             onSetDiscoverable = { viewModel.setUserIdDiscoverable(it) },
-            onCopyUsername = ::copyToClipboard
+            onCopyUsername = ::copyToClipboard,
+            masterPassphrase = masterPassphrase,
+            onExportMasterPassphrase = viewModel::exportMasterPassphrase
         )
     }
 
