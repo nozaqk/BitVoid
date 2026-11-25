@@ -375,13 +375,13 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                         isError = hState.status == HotspotStatus.ERROR
                     )
                 }
-                if (hState.hasClientGatewayAddress && hState.networkPortalUrl != previousHostGateway) {
+                if (hState.hasClientGatewayAddress && hState.networkApiUrl != previousHostGateway) {
                     BitVoidNodeStateHolder.appendNodeConnectionLog(
                         NodeConnectionEventType.GATEWAY,
                         "App gateway address assigned",
-                        hState.networkPortalUrl
+                        hState.networkApiUrl
                     )
-                    previousHostGateway = hState.networkPortalUrl
+                    previousHostGateway = hState.networkApiUrl
                 }
                 previousHostStatus = hState.status
                 if (!customClientUrlPinned &&
@@ -389,7 +389,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                     hState.isServerRunning &&
                     hState.gatewayIp.isNotBlank()
                 ) {
-                    val localUrl = hState.networkPortalUrl
+                    val localUrl = hState.networkApiUrl
                     if (clientGatewayUrl.value != localUrl) {
                         clientRepository.setGatewayBaseUrl(localUrl)
                         if (_selectedBottomTab.value == AppBottomTab.HUB) {
@@ -641,7 +641,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             hState.isServerRunning &&
             hState.gatewayIp.isNotBlank()
         ) {
-            clientRepository.setGatewayBaseUrl(hState.networkPortalUrl)
+            clientRepository.setGatewayBaseUrl(hState.networkApiUrl)
         }
     }
 
@@ -970,7 +970,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     fun setClientGatewayUrl(rawUrl: String): Boolean {
         val normalized = clientRepository.setGatewayBaseUrl(rawUrl) ?: return false
         customClientUrlPinned = normalized != hostState.value.effectiveApiUrl &&
-            normalized != hostState.value.networkPortalUrl &&
+            normalized != hostState.value.networkApiUrl &&
             normalized != BitVoidClientRepository.DEFAULT_GATEWAY_URL
         BitVoidNodeStateHolder.updateClientState {
             it.copy(
