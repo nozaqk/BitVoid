@@ -118,7 +118,7 @@ data class HostState(
         get() = if (isServerRunning && gatewayHostname.isNotBlank()) {
             buildHttpUrl(gatewayHostname, gatewayHostnamePort)
         } else {
-            networkPortalUrl
+            networkApiUrl
         }
 
     val apiUrl: String
