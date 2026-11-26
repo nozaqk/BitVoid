@@ -40,6 +40,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,6 +59,7 @@ import com.bitvoid.network.backend.BitVoidBackendState
 import com.bitvoid.network.backend.BitVoidLocalNetworkState
 import java.text.DateFormat
 import java.util.Date
+import kotlinx.coroutines.delay
 
 @Composable
 fun BitVoidLocalApp(viewModel: BitVoidLocalViewModel) {
@@ -73,8 +75,22 @@ fun BitVoidLocalApp(viewModel: BitVoidLocalViewModel) {
     val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
 
+    val localNetworkReady = network.wifiConnected &&
+        network.gatewayOnline &&
+        backend.isConnected
+    var accessTransitionReady by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(localNetworkReady) {
+        if (localNetworkReady) {
+            delay(700)
+            accessTransitionReady = true
+        } else {
+            accessTransitionReady = false
+        }
+    }
+
     when {
-        profile == null && !backend.isConnected -> LocalConnectionScreen(
+        profile == null && !accessTransitionReady -> LocalConnectionScreen(
             backend = backend,
             network = network,
             eventsConnected = eventsConnected,
@@ -125,7 +141,7 @@ private fun LocalConnectionScreen(
         Spacer(Modifier.height(16.dp))
         Text("LOCAL BITVOID", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Text(
-            "Internet and cloud accounts are not required.\\nConnect this phone and the server to the same Wi-Fi.",
+            "Internet and cloud accounts are not required.\nConnect this phone and the Server to the same Wi-Fi.",
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(vertical = 12.dp)
@@ -136,7 +152,7 @@ private fun LocalConnectionScreen(
             eventsConnected = eventsConnected
         )
         Text(
-            "When the local connection is ready, BitVoid automatically continues to account access. You can create a new account or log in to your existing account.",
+            "When Wi-Fi, Gateway, and Server are online, BitVoid automatically continues to local access authorization. Real-time events connect after the Server approves this device.",
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall,

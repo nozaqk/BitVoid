@@ -39,7 +39,7 @@ data class BitVoidBackendState(
     val type: BitVoidBackendType = BitVoidBackendType.OFFLINE,
     val phase: BitVoidBackendPhase = BitVoidBackendPhase.DISCOVERING,
     val baseUrl: String? = null,
-    val statusLabel: String = "Finding the local BitVoid PC server…",
+    val statusLabel: String = "Finding the local BitVoid Server…",
     val retryAttempt: Int = 0,
     val lastCheckedAtMs: Long = 0L
 ) {
@@ -161,8 +161,8 @@ class BitVoidBackendConnectionManager(context: Context) {
                 _state.value = _state.value.copy(
                     phase = if (firstPass) BitVoidBackendPhase.DISCOVERING
                     else BitVoidBackendPhase.RECONNECTING,
-                    statusLabel = if (firstPass) "Discovering the local BitVoid PC server…"
-                    else "Reconnecting to the local PC server…",
+                    statusLabel = if (firstPass) "Discovering the local BitVoid Server…"
+                    else "Reconnecting to the local Server…",
                     retryAttempt = attempt
                 )
 
@@ -176,25 +176,25 @@ class BitVoidBackendConnectionManager(context: Context) {
                         type = BitVoidBackendType.CAMPUS,
                         phase = BitVoidBackendPhase.CONNECTED,
                         baseUrl = localUrl,
-                        statusLabel = "Connected to local PC server",
+                        statusLabel = "Connected to local Server",
                         lastCheckedAtMs = now
                     )
                     onBackendSelected(BitVoidBackendType.CAMPUS, localUrl)
                     firstPass = false
-                    waitForRefreshOrTimeout(CONNECTED_HEALTH_INTERVAL_MS)
+                    waitForRefreshOrTimeout(RETRY_INTERVAL_MS)
                 } else {
                     attempt++
                     _state.value = BitVoidBackendState(
                         type = BitVoidBackendType.OFFLINE,
                         phase = BitVoidBackendPhase.OFFLINE,
                         baseUrl = null,
-                        statusLabel = "Local PC server unavailable · retrying on Wi-Fi",
+                        statusLabel = "Local Server unavailable · retrying automatically",
                         retryAttempt = attempt,
                         lastCheckedAtMs = now
                     )
                     onBackendSelected(BitVoidBackendType.OFFLINE, null)
                     firstPass = false
-                    waitForRefreshOrTimeout(retryDelayMs(attempt))
+                    waitForRefreshOrTimeout(RETRY_INTERVAL_MS)
                 }
             }
         }
@@ -245,13 +245,9 @@ class BitVoidBackendConnectionManager(context: Context) {
     }
 
     companion object {
-        private const val CONNECTED_HEALTH_INTERVAL_MS = 10_000L
-        private const val MAX_RETRY_DELAY_MS = 60_000L
+        private const val RETRY_INTERVAL_MS = 2_500L
 
-        fun retryDelayMs(attempt: Int): Long {
-            val exponent = (attempt - 1).coerceIn(0, 5)
-            return (2_000L shl exponent).coerceAtMost(MAX_RETRY_DELAY_MS)
-        }
+        fun retryDelayMs(attempt: Int): Long = RETRY_INTERVAL_MS
 
         fun selectBackend(
             campusUrl: String?,
