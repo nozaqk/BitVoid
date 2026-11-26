@@ -105,7 +105,7 @@ class BitVoidLocalViewModel(application: Application) : AndroidViewModel(applica
     fun requestPairing(username: String) {
         val cleanUsername = normalizeUsername(username) ?: return
         val baseUrl = backendState.value.baseUrl ?: run {
-            _error.value = "Connect to the local PC server before pairing."
+            _error.value = "Connect to the local server before pairing."
             return
         }
         viewModelScope.launch {
@@ -161,7 +161,7 @@ class BitVoidLocalViewModel(application: Application) : AndroidViewModel(applica
             return
         }
         if (!backendState.value.isConnected) {
-            _error.value = "The PC server must be online to create a conversation."
+            _error.value = "The local server must be online to create a conversation."
             return
         }
         viewModelScope.launch {
