@@ -2,16 +2,20 @@ package com.bitvoid.network.connection
 
 import android.net.Network
 import java.io.Closeable
-import java.io.IOException
 import java.net.Inet4Address
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -21,11 +25,13 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
+import kotlin.random.Random
 
 enum class BitVoidServerConnectionState {
     DISCONNECTED,
     CONNECTING,
     CONNECTED,
+    RECONNECTING,
     ERROR
 }
 
@@ -79,6 +85,7 @@ class BitVoidServerClient(
         }
         .build()
 
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val _connectionState =
         MutableStateFlow(BitVoidServerConnectionState.DISCONNECTED)
     val connectionState: StateFlow<BitVoidServerConnectionState> =
@@ -93,6 +100,14 @@ class BitVoidServerClient(
     @Volatile
     private var eventSocket: WebSocket? = null
 
+    @Volatile
+    private var closed = false
+
+    @Volatile
+    private var manuallyDisconnected = true
+
+    private var reconnectAttempt = 0
+
     init {
         require(serverPort in 1..65535) { "Invalid Server port" }
     }
@@ -100,7 +115,11 @@ class BitVoidServerClient(
     suspend fun get(path: String): BitVoidServerResponse =
         execute(Request.Builder().url(resolveUrl(path)).get().build())
 
-    suspend fun postJson(path: String, json: String, idempotencyKey: String? = null): BitVoidServerResponse {
+    suspend fun postJson(
+        path: String,
+        json: String,
+        idempotencyKey: String? = null
+    ): BitVoidServerResponse {
         val builder = Request.Builder()
             .url(resolveUrl(path))
             .post(json.toRequestBody(JSON_MEDIA_TYPE))
@@ -123,16 +142,33 @@ class BitVoidServerClient(
 
     /** Opens the authenticated Server event stream. Incoming JSON frames are emitted in [events]. */
     fun connectEvents() {
-        eventSocket?.cancel()
-        _connectionState.value = BitVoidServerConnectionState.CONNECTING
+        closed = false
+        manuallyDisconnected = false
+        reconnectAttempt = 0
+        reconnectJob?.cancel()
+        openEventsSocket()
+    }
+
+    private var reconnectJob: kotlinx.coroutines.Job? = null
+
+    private fun openEventsSocket() {
+        if (closed || manuallyDisconnected) return
         val token = tokenProvider()?.takeIf { it.isNotBlank() }
+        if (token == null) {
+            _connectionState.value = BitVoidServerConnectionState.ERROR
+            _eventErrors.tryEmit("A device token is required for the Server event connection")
+            return
+        }
+
+        _connectionState.value = BitVoidServerConnectionState.CONNECTING
         val request = Request.Builder()
             .url("ws://${serverAddress.hostAddress}:$serverPort/api/v1/events")
-            .apply { token?.let { header("Authorization", "Bearer $it") } }
+            .header("Authorization", "Bearer $token")
             .build()
 
         eventSocket = http.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                reconnectAttempt = 0
                 _connectionState.value = BitVoidServerConnectionState.CONNECTED
             }
 
@@ -145,14 +181,36 @@ class BitVoidServerClient(
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                _connectionState.value = BitVoidServerConnectionState.DISCONNECTED
+                if (eventSocket === webSocket) eventSocket = null
+                if (!closed && !manuallyDisconnected) scheduleReconnect()
+                else _connectionState.value = BitVoidServerConnectionState.DISCONNECTED
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                _connectionState.value = BitVoidServerConnectionState.ERROR
-                _eventErrors.tryEmit(t.message ?: "Server event connection failed")
+                if (eventSocket === webSocket) eventSocket = null
+                _eventErrors.tryEmit(
+                    response?.let { "Server event connection rejected: HTTP ${it.code}" }
+                        ?: (t.message ?: "Server event connection failed")
+                )
+                if (response?.code == 401 || closed || manuallyDisconnected) {
+                    _connectionState.value = BitVoidServerConnectionState.ERROR
+                } else {
+                    scheduleReconnect()
+                }
             }
         })
+    }
+
+    private fun scheduleReconnect() {
+        if (closed || manuallyDisconnected) return
+        reconnectJob?.cancel()
+        reconnectJob = scope.launch {
+            val exponential = (1_000L shl reconnectAttempt.coerceAtMost(4)).coerceAtMost(30_000L)
+            reconnectAttempt = (reconnectAttempt + 1).coerceAtMost(5)
+            _connectionState.value = BitVoidServerConnectionState.RECONNECTING
+            delay(exponential + Random.nextLong(0L, 501L))
+            if (!closed && !manuallyDisconnected) openEventsSocket()
+        }
     }
 
     /** Sends a protocol frame such as a subscription or ping to the Server. */
@@ -173,6 +231,9 @@ class BitVoidServerClient(
     }
 
     fun disconnectEvents() {
+        manuallyDisconnected = true
+        reconnectJob?.cancel()
+        reconnectJob = null
         eventSocket?.close(1000, "Client disconnected")
         eventSocket = null
         _connectionState.value = BitVoidServerConnectionState.DISCONNECTED
@@ -190,8 +251,8 @@ class BitVoidServerClient(
         }
 
     private fun resolveUrl(path: String): String {
-        if (path.startsWith("http://") || path.startsWith("https://")) {
-            throw IllegalArgumentException("Only relative BitVoid Server API paths are accepted")
+        require(!path.startsWith("http://") && !path.startsWith("https://")) {
+            "Only relative BitVoid Server API paths are accepted"
         }
         val normalized = if (path.startsWith('/')) path else "/$path"
         require(normalized.startsWith("/api/v1/")) {
@@ -201,7 +262,9 @@ class BitVoidServerClient(
     }
 
     override fun close() {
+        closed = true
         disconnectEvents()
+        scope.cancel()
         http.dispatcher.executorService.shutdown()
         http.connectionPool.evictAll()
     }
