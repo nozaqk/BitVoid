@@ -77,11 +77,8 @@ fun BitVoidLocalApp(viewModel: BitVoidLocalViewModel) {
         profile == null && !backend.isConnected -> LocalConnectionScreen(
             backend = backend,
             network = network,
-            configuredUrl = configuredUrl,
-            error = error,
-            onSaveServer = viewModel::setManualServer,
-            onRetry = viewModel::retryConnection,
-            onClearError = viewModel::clearError
+            eventsConnected = eventsConnected,
+            error = error
         )
         profile == null -> LocalPairingScreen(
             pairing = pairing,
@@ -116,13 +113,9 @@ fun BitVoidLocalApp(viewModel: BitVoidLocalViewModel) {
 private fun LocalConnectionScreen(
     backend: BitVoidBackendState,
     network: BitVoidLocalNetworkState,
-    configuredUrl: String,
-    error: String?,
-    onSaveServer: (String) -> Boolean,
-    onRetry: () -> Unit,
-    onClearError: () -> Unit
+    eventsConnected: Boolean,
+    error: String?
 ) {
-    var manualUrl by rememberSaveable(configuredUrl) { mutableStateOf(configuredUrl) }
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp).testTag("local_connection_screen"),
         verticalArrangement = Arrangement.Center,
@@ -132,36 +125,37 @@ private fun LocalConnectionScreen(
         Spacer(Modifier.height(16.dp))
         Text("LOCAL BITVOID", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Text(
-            "Internet and cloud accounts are not required. Connect this phone and the server to the same Wi-Fi.",
+            "Internet and cloud accounts are not required.\\nConnect this phone and the server to the same Wi-Fi.",
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(vertical = 12.dp)
         )
-        LocalStatusPanel(network = network, backend = backend, eventsConnected = false)
-        Spacer(Modifier.height(16.dp))
-        OutlinedTextField(
-            value = manualUrl,
-            onValueChange = { manualUrl = it; onClearError() },
-            label = { Text("Server address") },
-            supportingText = { Text("Automatic: bitvoid.local:8787 · Manual: SERVER-IP:8787") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth().testTag("manual_server_url")
+        LocalStatusPanel(
+            network = network,
+            backend = backend,
+            eventsConnected = eventsConnected
         )
-        error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp)) }
-        Button(
-            onClick = { if (onSaveServer(manualUrl)) onRetry() },
-            modifier = Modifier.fillMaxWidth().padding(top = 12.dp).testTag("connect_local_server")
-        ) {
-            if (backend.phase == BitVoidBackendPhase.DISCOVERING || backend.phase == BitVoidBackendPhase.RECONNECTING) {
-                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.size(8.dp))
-            }
-            Text("CONNECT TO LOCAL SERVER")
+        Text(
+            "When the local connection is ready, BitVoid automatically continues to account access. You can create a new account or log in to your existing account.",
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 16.dp)
+        )
+        error?.let {
+            Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp))
         }
-        TextButton(onClick = onRetry) {
-            Icon(Icons.Filled.Refresh, null)
-            Spacer(Modifier.size(6.dp))
-            Text("DISCOVER AGAIN")
+        if (backend.phase == BitVoidBackendPhase.DISCOVERING ||
+            backend.phase == BitVoidBackendPhase.RECONNECTING
+        ) {
+            Spacer(Modifier.height(18.dp))
+            CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+            Text(
+                "Searching for the local Server…",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(top = 8.dp)
+            )
         }
     }
 }
@@ -477,14 +471,9 @@ private fun LocalStatusPanel(
     Card(modifier = modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             StatusRow("Wi-Fi", network.wifiConnected, if (network.wifiConnected) "connected" else "unavailable")
-            StatusRow("Server", backend.isConnected, backend.baseUrl ?: "offline")
+            StatusRow("Server", backend.isConnected, if (backend.isConnected) "online" else "offline")
             StatusRow("Gateway", network.gatewayOnline, if (network.gatewayOnline) "online" else "not detected")
             StatusRow("Real-time events", eventsConnected, if (eventsConnected) "connected" else "reconnecting / idle")
-            StatusRow(
-                "Internet",
-                network.internetAvailable,
-                if (network.internetAvailable) "available (not required)" else "unavailable (local BitVoid still works)"
-            )
         }
     }
 }
