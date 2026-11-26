@@ -11,13 +11,12 @@ import com.bitvoid.network.client.BitVoidMessageStore
 import com.bitvoid.network.client.ClientChatMessage
 import com.bitvoid.network.client.MessageDeliveryState
 import com.bitvoid.network.direct.BitVoidDirectChatManager
-import com.bitvoid.network.direct.BitVoidUserPrefs
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -29,6 +28,9 @@ class BitVoidBackendConnectionManagerTest {
     @Before
     fun setUp() {
         BitVoidDirectChatManager.clearAllForTests()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.getSharedPreferences("bitvoid_backend_preferences", Context.MODE_PRIVATE)
+            .edit().clear().commit()
     }
 
     @After
@@ -37,66 +39,55 @@ class BitVoidBackendConnectionManagerTest {
     }
 
     @Test
-    fun `backend URLs require safe schemes and strip trailing slash`() {
+    fun `local URLs default to port 8787 and strip API suffix`() {
         assertEquals(
-            "http://bitvoid.local",
-            BitVoidBackendPrefs.normalizeConfiguredUrl("bitvoid.local/", allowCleartext = true)
+            "http://bitvoid.local:8787",
+            BitVoidBackendPrefs.normalizeConfiguredUrl("bitvoid.local", allowCleartext = true)
         )
         assertEquals(
-            "https://campus-chat.onrender.com",
+            "http://192.168.4.20:8787",
             BitVoidBackendPrefs.normalizeConfiguredUrl(
-                "https://campus-chat.onrender.com/",
-                allowCleartext = false
+                "http://192.168.4.20:8787/api/v1/",
+                allowCleartext = true
             )
         )
         assertNull(
             BitVoidBackendPrefs.normalizeConfiguredUrl(
-                "http://campus-chat.onrender.com",
-                allowCleartext = false
-            )
-        )
-        assertNull(
-            BitVoidBackendPrefs.normalizeConfiguredUrl(
-                "https://user:password@example.com",
-                allowCleartext = false
+                "http://user:password@192.168.4.20:8787",
+                allowCleartext = true
             )
         )
     }
 
     @Test
-    fun `production cloud backend is always configured`() {
+    fun `only local PC targets are allowed`() {
+        assertTrue(BitVoidBackendPrefs.isAllowedLocalServer("http://bitvoid.local:8787"))
+        assertTrue(BitVoidBackendPrefs.isAllowedLocalServer("http://192.168.1.40:8787"))
+        assertTrue(BitVoidBackendPrefs.isAllowedLocalServer("https://10.1.2.3:8787"))
+        assertFalse(BitVoidBackendPrefs.isAllowedLocalServer("https://bitvoid.example.com:8787"))
+        assertFalse(BitVoidBackendPrefs.isAllowedLocalServer("http://8.8.8.8:8787"))
+        assertFalse(BitVoidBackendPrefs.isAllowedLocalServer("http://192.168.1.40:8080"))
+    }
+
+    @Test
+    fun `legacy cloud configuration is erased and never loaded`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val legacyPrefs = context.getSharedPreferences(
-            "bitvoid_backend_preferences",
-            Context.MODE_PRIVATE
-        )
-        legacyPrefs.edit()
+        val prefs = context.getSharedPreferences("bitvoid_backend_preferences", Context.MODE_PRIVATE)
+        prefs.edit()
             .putString("campus_server_url", "http://legacy.invalid")
             .putString("cloud_server_url", "https://legacy.invalid")
             .commit()
 
         val config = BitVoidBackendPrefs.load(context)
 
-        assertEquals("http://bitvoid.local", config.localServerUrl)
-        assertEquals("https://bitvoid-cloud-api.onrender.com", config.cloudServerUrl)
-        assertFalse(legacyPrefs.contains("campus_server_url"))
-        assertFalse(legacyPrefs.contains("cloud_server_url"))
+        assertEquals("http://bitvoid.local:8787", config.localServerUrl)
+        assertEquals("", config.cloudServerUrl)
+        assertFalse(prefs.contains("campus_server_url"))
+        assertFalse(prefs.contains("cloud_server_url"))
     }
 
     @Test
-    fun `account access completion persists`() {
-        val context = ApplicationProvider.getApplicationContext<Context>()
-        BitVoidUserPrefs.setAccountAccessComplete(context, false)
-        assertFalse(BitVoidUserPrefs.hasCompletedAccountAccess(context))
-
-        BitVoidUserPrefs.setAccountAccessComplete(context, true)
-        assertTrue(BitVoidUserPrefs.hasCompletedAccountAccess(context))
-
-        BitVoidUserPrefs.setAccountAccessComplete(context, false)
-    }
-
-    @Test
-    fun `connection gate remains closed until a backend is connected`() {
+    fun `connection gate opens only for a connected local PC`() {
         assertFalse(BitVoidBackendState().isConnected)
         assertFalse(
             BitVoidBackendState(
@@ -106,9 +97,16 @@ class BitVoidBackendConnectionManagerTest {
         )
         assertTrue(
             BitVoidBackendState(
+                type = BitVoidBackendType.CAMPUS,
+                phase = BitVoidBackendPhase.CONNECTED,
+                baseUrl = "http://192.168.1.40:8787"
+            ).isConnected
+        )
+        assertFalse(
+            BitVoidBackendState(
                 type = BitVoidBackendType.CLOUD,
                 phase = BitVoidBackendPhase.CONNECTED,
-                baseUrl = "https://bitvoid-cloud-api.onrender.com"
+                baseUrl = "https://example.com"
             ).isConnected
         )
     }
@@ -122,21 +120,12 @@ class BitVoidBackendConnectionManagerTest {
     }
 
     @Test
-    fun `backend selection prefers campus then cloud then offline`() {
+    fun `backend selection never falls through to cloud`() {
         assertEquals(
-            BitVoidBackendType.CAMPUS to "http://10.20.30.40:8080",
+            BitVoidBackendType.CAMPUS to "http://10.20.30.40:8787",
             BitVoidBackendConnectionManager.selectBackend(
-                campusUrl = "http://10.20.30.40:8080/",
-                cloudUrl = "https://bitvoid.onrender.com",
-                hasInternet = true,
-                cloudHealthy = true
-            )
-        )
-        assertEquals(
-            BitVoidBackendType.CLOUD to "https://bitvoid.onrender.com",
-            BitVoidBackendConnectionManager.selectBackend(
-                campusUrl = null,
-                cloudUrl = "https://bitvoid.onrender.com/",
+                campusUrl = "http://10.20.30.40:8787/",
+                cloudUrl = "https://bitvoid.example.com",
                 hasInternet = true,
                 cloudHealthy = true
             )
@@ -145,9 +134,9 @@ class BitVoidBackendConnectionManagerTest {
             BitVoidBackendType.OFFLINE to null,
             BitVoidBackendConnectionManager.selectBackend(
                 campusUrl = null,
-                cloudUrl = "https://bitvoid.onrender.com",
-                hasInternet = false,
-                cloudHealthy = false
+                cloudUrl = "https://bitvoid.example.com",
+                hasInternet = true,
+                cloudHealthy = true
             )
         )
     }
