@@ -247,6 +247,8 @@ class BitVoidBackendConnectionManager(context: Context) {
     companion object {
         private const val RETRY_INTERVAL_MS = 2_500L
 
+        fun retryDelayMs(attempt: Int): Long = RETRY_INTERVAL_MS
+
         fun selectBackend(
             campusUrl: String?,
             cloudUrl: String = "",
