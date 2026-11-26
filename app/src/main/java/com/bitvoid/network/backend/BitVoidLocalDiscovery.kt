@@ -25,12 +25,12 @@ data class BitVoidLocalNetworkState(
     val wifiConnected: Boolean = false,
     val internetAvailable: Boolean = false,
     val gatewayOnline: Boolean = false,
-    val pcServerOnline: Boolean = false,
-    val pcServerUrl: String? = null,
+    val serverOnline: Boolean = false,
+    val serverUrl: String? = null,
     val status: String = "Waiting for local Wi-Fi"
 )
 
-/** Discovers the PC application server without treating the ESP gateway as that server. */
+/** Discovers the application server without treating the ESP gateway as that server. */
 class BitVoidLocalDiscovery(context: Context) {
     private val appContext = context.applicationContext
     private val connectivityManager =
@@ -86,12 +86,12 @@ class BitVoidLocalDiscovery(context: Context) {
             wifiConnected = true,
             internetAvailable = internet,
             gatewayOnline = gatewayOnline,
-            pcServerOnline = selected != null,
-            pcServerUrl = selected,
+            serverOnline = selected != null,
+            serverUrl = selected,
             status = when {
-                selected != null -> "Local PC server online"
-                gatewayOnline -> "ESP gateway online · waiting for PC server"
-                else -> "Wi-Fi connected · local PC server unavailable"
+                selected != null -> "Local server online"
+                gatewayOnline -> "Gateway online · waiting for server"
+                else -> "Wi-Fi connected · local server unavailable"
             }
         )
         selected
