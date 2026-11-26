@@ -25,8 +25,8 @@ data class BitVoidLocalNetworkState(
     val wifiConnected: Boolean = false,
     val internetAvailable: Boolean = false,
     val gatewayOnline: Boolean = false,
-    val serverOnline: Boolean = false,
-    val serverUrl: String? = null,
+    val pcServerOnline: Boolean = false,
+    val pcServerUrl: String? = null,
     val status: String = "Waiting for local Wi-Fi"
 )
 
@@ -86,8 +86,8 @@ class BitVoidLocalDiscovery(context: Context) {
             wifiConnected = true,
             internetAvailable = internet,
             gatewayOnline = gatewayOnline,
-            serverOnline = selected != null,
-            serverUrl = selected,
+            pcServerOnline = selected != null,
+            pcServerUrl = selected,
             status = when {
                 selected != null -> "Local server online"
                 gatewayOnline -> "Gateway online · waiting for server"
