@@ -4,37 +4,46 @@ BitVoid is a **native Android communication application**. The Android app is th
 
 ## Native Android application
 
-The Jetpack Compose app provides:
-- Account access and recovery
-- Direct messages, groups, and broadcast channels
-- Local media sharing and attachments
-- Audio calls and live audio classes
-- Native gateway discovery and connection status
-- Local-first operation with cloud account/synchronization support
+The Jetpack Compose app provides the native interface for account access, direct and group messaging, broadcast channels, media, audio calls, Live Classes, local discovery, and offline-first synchronization.
 
-## Backend and gateway architecture
+## Network architecture
 
-- **Android app:** the only user-facing frontend.
-- **Embedded Android service:** local REST/WebSocket API for the native app and connected BitVoid app clients.
-- **Server:** optional headless local API service connected through a BitVoid gateway.
-- **Cloud backend:** headless account and synchronization APIs.
-- **Gateways:** headless network devices exposing machine-readable APIs only.
+- **Android app:** the only user-facing client.
+- **Gateway:** provides local Wi-Fi, gateway health, and discovery. It does not store or process BitVoid application data.
+- **Application Server:** a separate headless service. The app connects directly to it over the same local Wi-Fi network.
+- **Cloud services:** optional. Local communication must not depend on internet access.
 
-All user interactions happen inside the Android application. The local API root returns service metadata; it does not serve HTML. Media, chat, calls, and gateway features remain API-driven and use native Android screens.
+The current Gateway hardware test stage uses an ESP-12E access point at `192.168.4.1`. That address belongs to the Gateway, not the application Server. The planned application Server listens on TCP port `8787` and is discovered separately (DNS-SD `_bitvoid-server._tcp`, preferred hostname `bitvoid-server.local`). The app must bind local sockets to the selected Android Wi-Fi Network.
+
+## Communication protocol
+
+The shared API contract is documented in [docs/SERVER-API-V1.md](docs/SERVER-API-V1.md).
+
+- HTTP/REST for pairing, authentication, conversations, messages, channels, Live Classes, and synchronization.
+- Authenticated WebSocket at `/api/v1/events` for real-time events.
+- Bearer device tokens for app authentication.
+- Idempotency keys and client-generated message IDs for safe retries.
+- Durable sync cursors recover events missed while offline.
+
+The Android module includes a direct Server transport client. It is a transport layer, not a claim that the application Server has already been implemented or deployed. Existing Gateway discovery/health code remains separate.
 
 ## Build
 
 Open the repository in Android Studio and build the `app` module, or run:
 
 ```powershell
-.\gradlew.bat :app:assembleDebug
-.\gradlew.bat :app:testDebugUnitTest
+.\\gradlew.bat :app:assembleDebug
+.\\gradlew.bat :app:testDebugUnitTest
 ```
 
 No browser frontend or website build is required.
 
-## Hardware notes
+## Current implementation status
 
-A gateway provides Wi-Fi connectivity and discovery/health services; the BitVoid application server provides messaging and application APIs. Connect the server and Android devices through the same local network. The Android app connects to the API over local Wi-Fi.
+- Gateway firmware and hardware testing: current prerequisite.
+- Shared Server API contract: defined in `docs/SERVER-API-V1.md`.
+- Android direct Server HTTP/WebSocket transport: added, awaiting integration with Server discovery, secure token storage, and feature repositories.
+- Headless application Server: not yet implemented.
+- Physical end-to-end communication: not yet tested.
 
-Keep gateway trust secrets and local configuration files private. Use HTTPS for cloud API traffic. Do not expose local HTTP APIs directly to the public internet.
+See the Gateway repository for firmware setup and hardware test instructions.
