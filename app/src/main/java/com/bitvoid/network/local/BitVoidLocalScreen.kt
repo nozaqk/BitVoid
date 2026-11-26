@@ -132,7 +132,7 @@ private fun LocalConnectionScreen(
         Spacer(Modifier.height(16.dp))
         Text("LOCAL BITVOID", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Text(
-            "Internet and cloud accounts are not required. Connect this phone and the PC server to the same Wi-Fi.",
+            "Internet and cloud accounts are not required. Connect this phone and the server to the same Wi-Fi.",
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(vertical = 12.dp)
@@ -478,7 +478,7 @@ private fun LocalStatusPanel(
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             StatusRow("Wi-Fi", network.wifiConnected, if (network.wifiConnected) "connected" else "unavailable")
             StatusRow("PC server", backend.isConnected, backend.baseUrl ?: "offline")
-            StatusRow("ESP gateway", network.gatewayOnline, if (network.gatewayOnline) "online" else "not detected")
+            StatusRow("Gateway", network.gatewayOnline, if (network.gatewayOnline) "online" else "not detected")
             StatusRow("Real-time events", eventsConnected, if (eventsConnected) "connected" else "reconnecting / idle")
             StatusRow(
                 "Internet",
