@@ -132,7 +132,7 @@ private fun LocalConnectionScreen(
         Spacer(Modifier.height(16.dp))
         Text("LOCAL BITVOID", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Text(
-            "Internet and cloud accounts are not required. Connect this phone and the PC server to the same Wi-Fi.",
+            "Internet and cloud accounts are not required. Connect this phone and the server to the same Wi-Fi.",
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(vertical = 12.dp)
@@ -142,8 +142,8 @@ private fun LocalConnectionScreen(
         OutlinedTextField(
             value = manualUrl,
             onValueChange = { manualUrl = it; onClearError() },
-            label = { Text("PC server address") },
-            supportingText = { Text("Automatic: bitvoid.local:8787 · Manual: PC-LAN-IP:8787") },
+            label = { Text("Server address") },
+            supportingText = { Text("Automatic: bitvoid.local:8787 · Manual: SERVER-IP:8787") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth().testTag("manual_server_url")
         )
@@ -156,7 +156,7 @@ private fun LocalConnectionScreen(
                 CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.size(8.dp))
             }
-            Text("CONNECT TO LOCAL PC")
+            Text("CONNECT TO LOCAL SERVER")
         }
         TextButton(onClick = onRetry) {
             Icon(Icons.Filled.Refresh, null)
@@ -180,10 +180,10 @@ private fun LocalPairingScreen(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Icon(Icons.Filled.Computer, null, modifier = Modifier.size(60.dp), tint = MaterialTheme.colorScheme.primary)
-        Text("PAIR WITH LOCAL PC", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text("PAIR WITH LOCAL SERVER", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text(serverUrl, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(vertical = 6.dp))
         Text(
-            "Request pairing, then give the displayed code to the PC administrator. The PC issues a device token after approval.",
+            "Request pairing, then give the displayed code to the server administrator. The server issues a device token after approval.",
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -284,7 +284,7 @@ private fun LocalMessagingScreen(
             LocalStatusPanel(network, backend, eventsConnected, Modifier.padding(horizontal = 16.dp))
             if (!backend.isConnected) {
                 Text(
-                    "PC server offline · cached messages remain available and new messages will queue.",
+                    "Server offline · cached messages remain available and new messages will queue.",
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(16.dp)
                 )
@@ -354,7 +354,7 @@ private fun LocalMessagingScreen(
         AlertDialog(
             onDismissRequest = { confirmLogout = false },
             title = { Text("Remove local authorization?") },
-            text = { Text("This removes the PC-issued token and cached local messages from this phone.") },
+            text = { Text("This removes the server-issued token and cached local messages from this phone.") },
             confirmButton = { TextButton(onClick = { confirmLogout = false; onLogout() }) { Text("REMOVE") } },
             dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text("CANCEL") } }
         )
@@ -452,7 +452,7 @@ private fun LocalSettingsScreen(
         OutlinedTextField(
             value = serverUrl,
             onValueChange = { serverUrl = it },
-            label = { Text("PC server address") },
+            label = { Text("Server address") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth().padding(top = 16.dp)
         )
@@ -477,8 +477,8 @@ private fun LocalStatusPanel(
     Card(modifier = modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             StatusRow("Wi-Fi", network.wifiConnected, if (network.wifiConnected) "connected" else "unavailable")
-            StatusRow("PC server", backend.isConnected, backend.baseUrl ?: "offline")
-            StatusRow("ESP gateway", network.gatewayOnline, if (network.gatewayOnline) "online" else "not detected")
+            StatusRow("Server", backend.isConnected, backend.baseUrl ?: "offline")
+            StatusRow("Gateway", network.gatewayOnline, if (network.gatewayOnline) "online" else "not detected")
             StatusRow("Real-time events", eventsConnected, if (eventsConnected) "connected" else "reconnecting / idle")
             StatusRow(
                 "Internet",

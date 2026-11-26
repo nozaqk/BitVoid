@@ -95,7 +95,7 @@ data class BitVoidConnectionState(
 }
 
 /**
- * Owns the zero-configuration link to the standalone ESP32 / ESP-12E BitVoid node.
+ * Owns the zero-configuration link to the standalone BitVoid gateway.
  *
  * The manager only binds the Android process when the phone is attached to [NODE_WIFI_SSID]
  * (or when Android redacts the SSID but DHCP reports [NODE_GATEWAY]). This makes every socket,
@@ -109,7 +109,7 @@ class BitVoidConnectionManager(
 
     companion object {
         const val NODE_WIFI_SSID = "BitVoid_Local"
-        const val NODE_HOSTNAME = "esp-server.local"
+        const val NODE_HOSTNAME = "bitvoid-gateway.local"
         const val NODE_GATEWAY = "192.168.4.1"
         const val NODE_PORT = 80
         const val NODE_URL = "http://$NODE_HOSTNAME"
