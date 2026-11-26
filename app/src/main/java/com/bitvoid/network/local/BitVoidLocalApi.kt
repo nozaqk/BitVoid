@@ -173,8 +173,8 @@ class BitVoidLocalApi {
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) =
                 onState(false, reason.takeIf { it.isNotBlank() })
 
-            override fun onFailure(webSocket: WebSocket, error: Throwable, response: Response?) =
-                onState(false, error.message)
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) =
+                onState(false, t.message)
         })
     }
 
