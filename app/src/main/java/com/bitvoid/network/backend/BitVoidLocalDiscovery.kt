@@ -4,7 +4,6 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import java.net.HttpURLConnection
@@ -24,13 +23,12 @@ import kotlin.coroutines.resume
 data class BitVoidLocalNetworkState(
     val wifiConnected: Boolean = false,
     val internetAvailable: Boolean = false,
-    val gatewayOnline: Boolean = false,
     val pcServerOnline: Boolean = false,
     val pcServerUrl: String? = null,
     val status: String = "Waiting for local Wi-Fi"
 )
 
-/** Discovers the application server without treating the ESP gateway as that server. */
+/** Discovers the standalone BitVoid application Server on the current Wi-Fi network. */
 class BitVoidLocalDiscovery(context: Context) {
     private val appContext = context.applicationContext
     private val connectivityManager =
@@ -49,12 +47,6 @@ class BitVoidLocalDiscovery(context: Context) {
         }
         val caps = connectivityManager.getNetworkCapabilities(network)
         val internet = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
-        val gatewayOnline = probeHealth(
-            network,
-            "http://$ESP_GATEWAY_IP",
-            listOf("/api/v1/health", "/health")
-        )
-
         val candidates = linkedSetOf<String>()
         BitVoidBackendPrefs.normalizeConfiguredUrl(configuredUrl, allowCleartext = true)
             ?.removeSuffix("/api/v1")
@@ -85,13 +77,11 @@ class BitVoidLocalDiscovery(context: Context) {
         _state.value = BitVoidLocalNetworkState(
             wifiConnected = true,
             internetAvailable = internet,
-            gatewayOnline = gatewayOnline,
             pcServerOnline = selected != null,
             pcServerUrl = selected,
             status = when {
                 selected != null -> "Local server online"
-                gatewayOnline -> "Gateway online · waiting for server"
-                else -> "Wi-Fi connected · local server unavailable"
+                else -> "Wi-Fi connected · waiting for local Server"
             }
         )
         selected
@@ -203,7 +193,6 @@ class BitVoidLocalDiscovery(context: Context) {
     companion object {
         const val PC_MDNS_HOST = "bitvoid.local"
         const val PC_SERVER_PORT = 8787
-        const val ESP_GATEWAY_IP = "192.168.4.1"
         private const val NSD_SERVICE_TYPE = "_http._tcp."
         private const val NSD_TIMEOUT_MS = 2_500L
         private const val PROBE_CONNECT_TIMEOUT_MS = 1_200

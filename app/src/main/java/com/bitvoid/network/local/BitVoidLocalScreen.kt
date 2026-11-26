@@ -75,9 +75,7 @@ fun BitVoidLocalApp(viewModel: BitVoidLocalViewModel) {
     val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
 
-    val localNetworkReady = network.wifiConnected &&
-        network.gatewayOnline &&
-        backend.isConnected
+    val localNetworkReady = network.wifiConnected && backend.isConnected
     var accessTransitionReady by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(localNetworkReady) {
@@ -152,7 +150,7 @@ private fun LocalConnectionScreen(
             eventsConnected = eventsConnected
         )
         Text(
-            "When Wi-Fi, Gateway, and Server are online, BitVoid automatically continues to local access authorization. Real-time events connect after the Server approves this device.",
+            "When Wi-Fi and the BitVoid Server are connected, the app automatically continues to local access authorization. Real-time events connect after the Server approves this device.",
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall,
@@ -488,7 +486,6 @@ private fun LocalStatusPanel(
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             StatusRow("Wi-Fi", network.wifiConnected, if (network.wifiConnected) "connected" else "unavailable")
             StatusRow("Server", backend.isConnected, if (backend.isConnected) "online" else "offline")
-            StatusRow("Gateway", network.gatewayOnline, if (network.gatewayOnline) "online" else "not detected")
             StatusRow("Real-time events", eventsConnected, if (eventsConnected) "connected" else "reconnecting / idle")
         }
     }
