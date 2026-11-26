@@ -256,8 +256,8 @@ class BitVoidLocalApi {
 
     private fun parseMessage(item: JSONObject, conversationId: String): LocalMessage? {
         val content = item.string("content", "text", "body") ?: return null
-        val id = item.string("id", "messageId", "clientMessageId")
-            ?: "server-${conversationId}-${content.hashCode()}-${item.timestamp("createdAt", "timestamp", "createdAtMs")}" 
+        val id = item.string("clientMessageId", "id", "messageId")
+            ?: "server-${conversationId}-${content.hashCode()}-${item.timestamp("createdAt", "timestamp", "createdAtMs")}"
         val senderObject = item.optJSONObject("sender")
         return LocalMessage(
             id = id,

@@ -42,7 +42,9 @@ class BitVoidLocalViewModel(application: Application) : AndroidViewModel(applica
     val pairing: StateFlow<LocalPairingUiState> = _pairing.asStateFlow()
 
     private val _profile = MutableStateFlow(
-        credentials.username()?.let { LocalProfile(it, it, it) }
+        credentials.deviceToken()?.let {
+            credentials.username()?.let { username -> LocalProfile(username, username, username) }
+        }
     )
     val profile: StateFlow<LocalProfile?> = _profile.asStateFlow()
 
@@ -214,15 +216,22 @@ class BitVoidLocalViewModel(application: Application) : AndroidViewModel(applica
     }
 
     private suspend fun onServerConnected(baseUrl: String) {
+        val normalizedUrl = baseUrl.trimEnd('/')
+        if (serverSessionUrl != null && serverSessionUrl != normalizedUrl) {
+            eventsSocket?.cancel()
+            eventsSocket = null
+            _eventsConnected.value = false
+        }
+        serverSessionUrl = normalizedUrl
         val token = credentials.deviceToken()
-            ?.takeIf { credentials.authorizedServerUrl() == baseUrl.trimEnd('/') }
-        api.configure(baseUrl, token)
-        serverSessionUrl = baseUrl
+            ?.takeIf { credentials.authorizedServerUrl() == normalizedUrl }
+        api.configure(normalizedUrl, token)
         if (token == null) {
+            _profile.value = null
             _pairing.value = _pairing.value.copy(status = "not_paired")
             return
         }
-        runCatching { api.loadProfile() }
+        runCatching { loadOrRegisterProfile() }
             .onSuccess { profile ->
                 credentials.saveUsername(profile.username)
                 _profile.value = profile
@@ -246,9 +255,9 @@ class BitVoidLocalViewModel(application: Application) : AndroidViewModel(applica
 
     private suspend fun finishPairing(baseUrl: String, token: String, username: String) {
         credentials.saveDeviceToken(token, baseUrl)
+        credentials.saveUsername(username)
         api.configure(baseUrl, token)
-        runCatching { api.loadProfile() }
-            .recoverCatching { api.registerUser(username, credentials.deviceId()) }
+        runCatching { loadOrRegisterProfile() }
             .onSuccess { profile ->
                 credentials.saveUsername(profile.username)
                 _profile.value = profile
@@ -263,6 +272,19 @@ class BitVoidLocalViewModel(application: Application) : AndroidViewModel(applica
                     error = failure.message ?: "Paired, but local profile registration failed."
                 )
             }
+    }
+
+    private suspend fun loadOrRegisterProfile(): LocalProfile {
+        return try {
+            api.loadProfile()
+        } catch (failure: LocalApiException) {
+            val username = credentials.username()
+            if (failure.statusCode == 404 && !username.isNullOrBlank()) {
+                api.registerUser(username, credentials.deviceId())
+            } else {
+                throw failure
+            }
+        }
     }
 
     private suspend fun refreshServerData() {
@@ -300,7 +322,12 @@ class BitVoidLocalViewModel(application: Application) : AndroidViewModel(applica
             api.sendMessage(message.conversationId, message.content, message.id)
         }.onSuccess { delivered ->
             store.deleteMessage(message.id)
-            store.saveMessage(delivered.copy(deliveryState = LocalDeliveryState.DELIVERED))
+            store.saveMessage(
+                delivered.copy(
+                    id = message.id,
+                    deliveryState = LocalDeliveryState.DELIVERED
+                )
+            )
             if (_activeConversation.value?.id == message.conversationId) {
                 publishMessages(message.conversationId)
             }
