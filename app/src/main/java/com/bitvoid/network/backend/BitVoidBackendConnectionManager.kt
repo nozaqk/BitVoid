@@ -61,7 +61,9 @@ object BitVoidBackendPrefs {
         val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val saved = prefs.getString(KEY_LOCAL_URL, null)
             ?: prefs.getString(LEGACY_LOCAL_URL, null)
-        val local = saved?.let { normalizeConfiguredUrl(it, allowCleartext = true) }
+        val local = saved
+            ?.let { normalizeConfiguredUrl(it, allowCleartext = true) }
+            ?.takeIf(::isAllowedLocalServer)
             ?: DEFAULT_LOCAL_URL
         prefs.edit()
             .putString(KEY_LOCAL_URL, local)

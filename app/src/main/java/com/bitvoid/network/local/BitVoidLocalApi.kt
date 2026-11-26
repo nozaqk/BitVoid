@@ -173,8 +173,8 @@ class BitVoidLocalApi {
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) =
                 onState(false, reason.takeIf { it.isNotBlank() })
 
-            override fun onFailure(webSocket: WebSocket, error: Throwable, response: Response?) =
-                onState(false, error.message)
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) =
+                onState(false, t.message)
         })
     }
 
@@ -256,8 +256,8 @@ class BitVoidLocalApi {
 
     private fun parseMessage(item: JSONObject, conversationId: String): LocalMessage? {
         val content = item.string("content", "text", "body") ?: return null
-        val id = item.string("id", "messageId", "clientMessageId")
-            ?: "server-${conversationId}-${content.hashCode()}-${item.timestamp("createdAt", "timestamp", "createdAtMs")}" 
+        val id = item.string("clientMessageId", "id", "messageId")
+            ?: "server-${conversationId}-${content.hashCode()}-${item.timestamp("createdAt", "timestamp", "createdAtMs")}"
         val senderObject = item.optJSONObject("sender")
         return LocalMessage(
             id = id,
