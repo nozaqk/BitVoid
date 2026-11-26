@@ -112,11 +112,10 @@ class BitVoidBackendConnectionManagerTest {
     }
 
     @Test
-    fun `retry backoff is exponential and capped`() {
-        assertEquals(2_000L, BitVoidBackendConnectionManager.retryDelayMs(1))
-        assertEquals(4_000L, BitVoidBackendConnectionManager.retryDelayMs(2))
-        assertEquals(32_000L, BitVoidBackendConnectionManager.retryDelayMs(5))
-        assertEquals(60_000L, BitVoidBackendConnectionManager.retryDelayMs(20))
+    fun `automatic discovery uses a consistent short retry interval`() {
+        assertEquals(2_500L, BitVoidBackendConnectionManager.retryDelayMs(1))
+        assertEquals(2_500L, BitVoidBackendConnectionManager.retryDelayMs(2))
+        assertEquals(2_500L, BitVoidBackendConnectionManager.retryDelayMs(20))
     }
 
     @Test
