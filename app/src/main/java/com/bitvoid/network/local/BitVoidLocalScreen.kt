@@ -40,6 +40,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,6 +59,7 @@ import com.bitvoid.network.backend.BitVoidBackendState
 import com.bitvoid.network.backend.BitVoidLocalNetworkState
 import java.text.DateFormat
 import java.util.Date
+import kotlinx.coroutines.delay
 
 @Composable
 fun BitVoidLocalApp(viewModel: BitVoidLocalViewModel) {
@@ -76,9 +78,19 @@ fun BitVoidLocalApp(viewModel: BitVoidLocalViewModel) {
     val localNetworkReady = network.wifiConnected &&
         network.gatewayOnline &&
         backend.isConnected
+    var accessTransitionReady by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(localNetworkReady) {
+        if (localNetworkReady) {
+            delay(700)
+            accessTransitionReady = true
+        } else {
+            accessTransitionReady = false
+        }
+    }
 
     when {
-        profile == null && !localNetworkReady -> LocalConnectionScreen(
+        profile == null && !accessTransitionReady -> LocalConnectionScreen(
             backend = backend,
             network = network,
             eventsConnected = eventsConnected,
