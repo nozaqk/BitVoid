@@ -177,6 +177,12 @@ class BitVoidAccountAuth(private val context: Context) {
         val editor = prefs.edit()
             .putString("username_enc", encrypt(username))
             .putString("token_enc", encrypt(token))
+            // Optional credentials must never survive from an earlier session if the new
+            // authentication response does not issue them.
+            .remove("refresh_token_enc")
+            .remove("device_id_enc")
+            .remove("expires_at")
+            .remove("refresh_expires_at")
         if (previousUsername != null && !previousUsername.equals(username, ignoreCase = true)) {
             // Never carry one account's recovery secret into another account's local session.
             editor.remove("master_enc")
