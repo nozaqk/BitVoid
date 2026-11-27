@@ -25,6 +25,10 @@ data class BitVoidLocalNetworkState(
     val internetAvailable: Boolean = false,
     val pcServerOnline: Boolean = false,
     val pcServerUrl: String? = null,
+    val serverId: String? = null,
+    val serverName: String? = null,
+    val serverVersion: String? = null,
+    val tlsFingerprint256: String? = null,
     val status: String = "Waiting for local Wi-Fi"
 )
 
@@ -56,17 +60,39 @@ class BitVoidLocalDiscovery(context: Context) {
         candidates += BitVoidBackendPrefs.DEFAULT_LOCAL_URL
         resolveMdns(network)?.let(candidates::add)
 
-        var selected = candidates.firstOrNull { candidate ->
-            probeHealth(network, candidate, SERVER_HEALTH_PATHS)
+        var selected: String? = null
+        var identity: ServerIdentity? = null
+        for (candidate in candidates) {
+            if (!BitVoidBackendPrefs.isAllowedLocalServer(candidate)) continue
+            if (!probeHealth(network, candidate, SERVER_HEALTH_PATHS)) continue
+            val verified = fetchServerIdentity(network, candidate) ?: continue
+            selected = candidate
+            identity = verified
+            break
         }
         if (selected == null) {
-            discoverNsd()?.let { nsdUrl ->
-                if (BitVoidBackendPrefs.isAllowedLocalServer(nsdUrl) &&
-                    probeHealth(network, nsdUrl, SERVER_HEALTH_PATHS)
-                ) {
-                    selected = nsdUrl
+            discoverNsd(NSD_PRIMARY_SERVICE_TYPE)
+                ?.takeIf(BitVoidBackendPrefs::isAllowedLocalServer)
+                ?.let { nsdUrl ->
+                    if (probeHealth(network, nsdUrl, SERVER_HEALTH_PATHS)) {
+                        fetchServerIdentity(network, nsdUrl)?.let { verified ->
+                            selected = nsdUrl
+                            identity = verified
+                        }
+                    }
                 }
-            }
+        }
+        if (selected == null) {
+            discoverNsd(NSD_COMPAT_SERVICE_TYPE)
+                ?.takeIf(BitVoidBackendPrefs::isAllowedLocalServer)
+                ?.let { nsdUrl ->
+                    if (probeHealth(network, nsdUrl, SERVER_HEALTH_PATHS)) {
+                        fetchServerIdentity(network, nsdUrl)?.let { verified ->
+                            selected = nsdUrl
+                            identity = verified
+                        }
+                    }
+                }
         }
 
         if (selected != null) {
@@ -79,9 +105,13 @@ class BitVoidLocalDiscovery(context: Context) {
             internetAvailable = internet,
             pcServerOnline = selected != null,
             pcServerUrl = selected,
+            serverId = identity?.serverId,
+            serverName = identity?.displayName,
+            serverVersion = identity?.serverVersion,
+            tlsFingerprint256 = identity?.tlsFingerprint256,
             status = when {
-                selected != null -> "Local server online"
-                else -> "Wi-Fi connected · waiting for local Server"
+                selected != null -> "Verified BitVoid Server online"
+                else -> "Wi-Fi connected · no compatible BitVoid Server found"
             }
         )
         selected
@@ -110,6 +140,52 @@ class BitVoidLocalDiscovery(context: Context) {
         "http://${address.hostAddress}:$PC_SERVER_PORT"
     }.getOrNull()
 
+    private data class ServerIdentity(
+        val serverId: String,
+        val displayName: String?,
+        val serverVersion: String?,
+        val tlsFingerprint256: String?
+    )
+
+    /**
+     * Discovery records are untrusted hints. Accept an endpoint only after its public identity
+     * endpoint returns a stable Server ID and a compatible v1 API declaration.
+     */
+    private fun fetchServerIdentity(network: Network, baseUrl: String): ServerIdentity? {
+        var connection: HttpURLConnection? = null
+        return try {
+            connection = network.openConnection(
+                URL(baseUrl.trimEnd('/') + "/api/v1/server/info")
+            ) as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.instanceFollowRedirects = false
+            connection.connectTimeout = PROBE_CONNECT_TIMEOUT_MS
+            connection.readTimeout = PROBE_READ_TIMEOUT_MS
+            connection.setRequestProperty("Accept", "application/json")
+            if (connection.responseCode !in 200..299) return null
+            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            val data = root.optJSONObject("data") ?: return null
+            val serverId = data.optString("serverId").takeIf {
+                it.matches(Regex("[A-Za-z0-9_-]{8,128}"))
+            } ?: return null
+            val apiVersion = data.optString("apiVersion")
+            if (!apiVersion.startsWith("1.")) return null
+            val tls = data.optJSONObject("tls")
+            val fingerprint = tls?.optString("fingerprint256")
+                ?.takeIf { it.matches(Regex("(?i)[0-9a-f]{64}")) }
+            ServerIdentity(
+                serverId = serverId,
+                displayName = data.optString("displayName").takeIf { it.isNotBlank() },
+                serverVersion = data.optString("serverVersion").takeIf { it.isNotBlank() },
+                tlsFingerprint256 = fingerprint
+            )
+        } catch (_: Exception) {
+            null
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
     private fun probeHealth(network: Network, baseUrl: String, paths: List<String>): Boolean {
         return paths.any { path ->
             var connection: HttpURLConnection? = null
@@ -137,7 +213,7 @@ class BitVoidLocalDiscovery(context: Context) {
     }
 
     @Suppress("DEPRECATION")
-    private suspend fun discoverNsd(): String? = withTimeoutOrNull(NSD_TIMEOUT_MS) {
+    private suspend fun discoverNsd(serviceType: String): String? = withTimeoutOrNull(NSD_TIMEOUT_MS) {
         suspendCancellableCoroutine { continuation ->
             val finished = AtomicBoolean(false)
             val resolving = AtomicBoolean(false)
@@ -185,15 +261,16 @@ class BitVoidLocalDiscovery(context: Context) {
             }
             continuation.invokeOnCancellation { if (finished.compareAndSet(false, true)) stop() }
             runCatching {
-                nsdManager.discoverServices(NSD_SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
+                nsdManager.discoverServices(serviceType, NsdManager.PROTOCOL_DNS_SD, listener)
             }.onFailure { finish(null) }
         }
     }
 
     companion object {
-        const val PC_MDNS_HOST = "bitvoid.local"
+        const val PC_MDNS_HOST = "bitvoid-server.local"
         const val PC_SERVER_PORT = 8787
-        private const val NSD_SERVICE_TYPE = "_http._tcp."
+        private const val NSD_PRIMARY_SERVICE_TYPE = "_bitvoid-server._tcp."
+        private const val NSD_COMPAT_SERVICE_TYPE = "_http._tcp."
         private const val NSD_TIMEOUT_MS = 2_500L
         private const val PROBE_CONNECT_TIMEOUT_MS = 1_200
         private const val PROBE_READ_TIMEOUT_MS = 1_500
