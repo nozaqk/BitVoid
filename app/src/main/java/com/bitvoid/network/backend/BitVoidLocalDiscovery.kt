@@ -174,8 +174,12 @@ class BitVoidLocalDiscovery(context: Context) {
             val apiVersion = data.optString("apiVersion")
             if (!apiVersion.startsWith("1.")) return null
             val tls = data.optJSONObject("tls")
+            // Node's X509Certificate.fingerprint256 is colon-delimited (AA:BB:...).
+            // Normalize it to 64 hex characters for stable storage and later pin comparison.
             val fingerprint = tls?.optString("fingerprint256")
+                ?.replace(":", "")
                 ?.takeIf { it.matches(Regex("(?i)[0-9a-f]{64}")) }
+                ?.lowercase()
             ServerIdentity(
                 serverId = serverId,
                 displayName = data.optString("displayName").takeIf { it.isNotBlank() },
