@@ -1,4 +1,3 @@
-
  # BitVoid
 
 BitVoid is a **native Android communication application**. The Android app is the only user interface. The project does not ship a browser client, WebView portal, public website, or hardware-specific dashboard.
