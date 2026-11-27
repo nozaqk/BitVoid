@@ -99,6 +99,8 @@ class BitVoidLocalDiscovery(context: Context) {
             // A local-only Wi-Fi may not be Android's default network. Pin app sockets to Wi-Fi so
             // REST and WebSocket traffic cannot silently escape through mobile data.
             connectivityManager.bindProcessToNetwork(network)
+        } else {
+            connectivityManager.bindProcessToNetwork(null)
         }
         _state.value = BitVoidLocalNetworkState(
             wifiConnected = true,
@@ -110,7 +112,7 @@ class BitVoidLocalDiscovery(context: Context) {
             serverVersion = identity?.serverVersion,
             tlsFingerprint256 = identity?.tlsFingerprint256,
             status = when {
-                selected != null -> "Verified BitVoid Server online"
+                selected != null -> "BitVoid Server found · API identity available"
                 else -> "Wi-Fi connected · no compatible BitVoid Server found"
             }
         )
