@@ -216,18 +216,30 @@ class BitVoidServerClient(
     /** Sends a protocol frame such as a subscription or ping to the Server. */
     fun sendEventFrame(json: String): Boolean = eventSocket?.send(json) == true
 
+    /**
+     * Subscribes using the Server v1 wire contract: one membership-checked topic per frame.
+     * The previous array-shaped frame was not accepted by the Server and silently left clients
+     * without realtime events.
+     */
     fun subscribe(
         conversationIds: List<String> = emptyList(),
         channelIds: List<String> = emptyList(),
         liveClassIds: List<String> = emptyList()
     ): Boolean {
-        val frame = JSONObject().apply {
-            put("type", "subscribe")
-            put("conversationIds", org.json.JSONArray(conversationIds))
-            put("channelIds", org.json.JSONArray(channelIds))
-            put("liveClassIds", org.json.JSONArray(liveClassIds))
+        val topics = buildList {
+            conversationIds.filter(String::isNotBlank).forEach { add("conversation:$it") }
+            channelIds.filter(String::isNotBlank).forEach { add("channel:$it") }
+            liveClassIds.filter(String::isNotBlank).forEach { add("live-class:$it") }
+        }.distinct()
+        if (topics.isEmpty()) return true
+        return topics.all { topic ->
+            sendEventFrame(
+                JSONObject()
+                    .put("type", "subscribe")
+                    .put("topic", topic)
+                    .toString()
+            )
         }
-        return sendEventFrame(frame.toString())
     }
 
     fun disconnectEvents() {
