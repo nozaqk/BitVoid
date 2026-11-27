@@ -149,7 +149,8 @@ class BitVoidLocalDiscovery(context: Context) {
 
     /**
      * Discovery records are untrusted hints. Accept an endpoint only after its public identity
-     * endpoint returns a stable Server ID and a compatible v1 API declaration.
+     * endpoint returns a stable Server ID and a compatible v1 API declaration. This is API
+     * compatibility validation, not cryptographic trust or TLS certificate pinning.
      */
     private fun fetchServerIdentity(network: Network, baseUrl: String): ServerIdentity? {
         var connection: HttpURLConnection? = null
