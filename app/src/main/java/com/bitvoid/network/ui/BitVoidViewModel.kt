@@ -251,6 +251,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
 
     private var customClientUrlPinned = false
     private var lastAutomaticBackendUrl: String? = null
+    private var lastSessionRefreshBackendUrl: String? = null
 
     init {
         BitVoidNodeStateHolder.appendNodeConnectionLog(
@@ -510,6 +511,18 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         }
 
         val normalized = baseUrl.trimEnd('/')
+        if (normalized != lastSessionRefreshBackendUrl) {
+            // Refresh once per backend selection/session lifecycle. A transient refresh failure
+            // must not erase locally stored credentials; normal API calls can still use an
+            // unexpired access token and surface authoritative authorization failures.
+            val refreshed = runCatching {
+                withContext(Dispatchers.IO) { accountAuth.refreshSavedSession(normalized) }
+            }.getOrNull()
+            if (refreshed != null) {
+                clientRepository.setAccountAuthorizationToken(refreshed.token)
+            }
+            lastSessionRefreshBackendUrl = normalized
+        }
         if (type == BitVoidBackendType.CLOUD) {
             clientManager.releaseNetworkBindingForCloud()
             clientRepository.configureCloudBaseUrl(backendConfig.value.cloudServerUrl)
@@ -1112,8 +1125,16 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         callManager.leaveSession()
         clientRepository.leaveChannel()
         clientRepository.leaveDirectChat()
+        val serverUrl = backendState.value.baseUrl
+        val accessToken = accountAuth.savedToken()
+        if (!serverUrl.isNullOrBlank() && !accessToken.isNullOrBlank()) {
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching { accountAuth.revokeSession(serverUrl, accessToken) }
+            }
+        }
         clientRepository.setAccountAuthorizationToken(null)
         accountAuth.clearSession()
+        lastSessionRefreshBackendUrl = null
         BitVoidUserPrefs.setAccountAccessComplete(appContext, false)
         _masterPassphrase.value = null
         _accountAccessError.value = null
