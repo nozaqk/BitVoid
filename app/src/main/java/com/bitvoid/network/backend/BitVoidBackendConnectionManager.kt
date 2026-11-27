@@ -55,7 +55,7 @@ object BitVoidBackendPrefs {
     private const val LEGACY_LOCAL_URL = "campus_server_url"
     private const val LEGACY_CLOUD_URL = "cloud_server_url"
 
-    const val DEFAULT_LOCAL_URL = "http://bitvoid.local:8787"
+    const val DEFAULT_LOCAL_URL = "http://bitvoid-server.local:8787"
 
     fun load(context: Context): BitVoidBackendConfig {
         val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -118,7 +118,7 @@ object BitVoidBackendPrefs {
         if (uri.userInfo != null || uri.query != null || uri.fragment != null) return false
         if (uri.port != 8787 || uri.path.orEmpty() !in setOf("", "/")) return false
         val host = uri.host?.lowercase().orEmpty()
-        if (host == "bitvoid.local" || host == "localhost" || host == "127.0.0.1") return true
+        if (host == "bitvoid-server.local" || host == "bitvoid.local" || host == "localhost" || host == "127.0.0.1") return true
         val parts = host.split('.').mapNotNull(String::toIntOrNull)
         if (parts.size != 4 || parts.any { it !in 0..255 }) return false
         return parts[0] == 10 ||
