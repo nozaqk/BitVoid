@@ -20,6 +20,7 @@ import com.bitvoid.network.backend.BitVoidBackendConnectionManager
 import com.bitvoid.network.backend.BitVoidBackendPhase
 import com.bitvoid.network.backend.BitVoidBackendState
 import com.bitvoid.network.backend.BitVoidBackendType
+import com.bitvoid.network.backend.BitVoidLocalDiscovery
 import com.bitvoid.network.channel.BitVoidChannel
 import com.bitvoid.network.channel.BitVoidChannelManager
 import com.bitvoid.network.channel.BitVoidSpaceRole
@@ -71,6 +72,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     private val clientManager = BitVoidClientManager(appContext)
     private val clientRepository = BitVoidClientRepositoryProvider.repository
     private val backendConnectionManager = BitVoidBackendConnectionManager(appContext)
+    private val localServerDiscovery = BitVoidLocalDiscovery(appContext)
     private val callManager = BitVoidCallManager(appContext)
     private val accountAuth = BitVoidAccountAuth(appContext)
     private val _masterPassphrase = MutableStateFlow(accountAuth.savedMasterPassphrase())
@@ -251,6 +253,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
 
     private var customClientUrlPinned = false
     private var lastAutomaticBackendUrl: String? = null
+    private var lastSessionRefreshBackendUrl: String? = null
 
     init {
         BitVoidNodeStateHolder.appendNodeConnectionLog(
@@ -278,9 +281,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                         it.copy(targetPortalUrl = configuredLocalUrl)
                     }
                 }
-                val campus = clientManager.discoverAndLinkSilently()
-                if (campus == null) clientManager.releaseNetworkBindingForCloud()
-                campus
+                localServerDiscovery.discover(configuredLocalUrl)
             },
             onBackendSelected = { type, baseUrl ->
                 handleAutomaticBackendSelection(type, baseUrl)
@@ -510,6 +511,18 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         }
 
         val normalized = baseUrl.trimEnd('/')
+        if (normalized != lastSessionRefreshBackendUrl) {
+            // Refresh once per backend selection/session lifecycle. A transient refresh failure
+            // must not erase locally stored credentials; normal API calls can still use an
+            // unexpired access token and surface authoritative authorization failures.
+            val refreshed = runCatching {
+                withContext(Dispatchers.IO) { accountAuth.refreshSavedSession(normalized) }
+            }.getOrNull()
+            if (refreshed != null) {
+                clientRepository.setAccountAuthorizationToken(refreshed.token)
+            }
+            lastSessionRefreshBackendUrl = normalized
+        }
         if (type == BitVoidBackendType.CLOUD) {
             clientManager.releaseNetworkBindingForCloud()
             clientRepository.configureCloudBaseUrl(backendConfig.value.cloudServerUrl)
@@ -1071,7 +1084,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                         BitVoidAccessMode.RECOVER -> accountAuth.recover(backendUrl, masterPassphrase, newPassword)
                     }
                 }
-                accountAuth.saveSession(result.username, result.token, result.masterPassphrase)
+                accountAuth.saveSession(result)
                 clientRepository.setAccountAuthorizationToken(result.token)
                 result.masterPassphrase?.let { _masterPassphrase.value = it }
                 BitVoidUserPrefs.saveUsername(appContext, result.username)
@@ -1112,8 +1125,16 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
         callManager.leaveSession()
         clientRepository.leaveChannel()
         clientRepository.leaveDirectChat()
+        val serverUrl = backendState.value.baseUrl
+        val accessToken = accountAuth.savedToken()
+        if (!serverUrl.isNullOrBlank() && !accessToken.isNullOrBlank()) {
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching { accountAuth.revokeSession(serverUrl, accessToken) }
+            }
+        }
         clientRepository.setAccountAuthorizationToken(null)
         accountAuth.clearSession()
+        lastSessionRefreshBackendUrl = null
         BitVoidUserPrefs.setAccountAccessComplete(appContext, false)
         _masterPassphrase.value = null
         _accountAccessError.value = null
@@ -1559,6 +1580,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
 
     override fun onCleared() {
         backendConnectionManager.close()
+        localServerDiscovery.release()
         callManager.release()
         // The process-wide repository is owned by the foreground service while a conversation is
         // joined, so dismissing the Activity must not close its WebSockets or release the Wi-Fi

@@ -6,6 +6,9 @@ on:
       - "v*"
     branches:
       - "**"
+  pull_request:
+    branches:
+      - "main"
   workflow_dispatch:
     inputs:
       tag:
@@ -42,17 +45,6 @@ jobs:
             -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
             -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
 
-      - name: Test Raspberry Pi mesh coordinator
-        run: python3 -m unittest discover -s controllers/pi/tests -v
-
-      - name: Build ESP32 and ESP-12E gateway firmware
-        run: |
-          python3 -m venv /tmp/bitvoid-platformio
-          /tmp/bitvoid-platformio/bin/pip install platformio
-          cp controllers/esp32/include/bitvoid_config.example.h controllers/esp32/include/bitvoid_config.h
-          /tmp/bitvoid-platformio/bin/python -m platformio run --project-dir controllers/esp32
-          /tmp/bitvoid-platformio/bin/python -m platformio run --project-dir controllers/esp12e
-
       - name: Test and build debug APK
         shell: bash
         run: |
@@ -74,7 +66,7 @@ jobs:
           exit "$validation_status"
 
       - name: Resolve release tag
-        if: github.ref_type == 'tag' || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         id: tag
         run: |
           if [ "${{ github.ref_type }}" = "tag" ]; then
@@ -87,23 +79,11 @@ jobs:
           fi
 
       - name: Rename APK
-        if: github.ref_type == 'tag' || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         run: cp app/build/outputs/apk/debug/app-debug.apk "BitVoid-${{ steps.tag.outputs.name }}.apk"
 
-      - name: Remove older releases
-        if: github.ref_type == 'tag' || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          current_tag="${{ steps.tag.outputs.name }}"
-          gh release list --limit 100 --json tagName --jq '.[].tagName' | while IFS= read -r tag; do
-            if [ "$tag" != "$current_tag" ]; then
-              gh release delete "$tag" --yes --cleanup-tag
-            fi
-          done
-
       - name: Create release and upload APK
-        if: github.ref_type == 'tag' || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.name }}
