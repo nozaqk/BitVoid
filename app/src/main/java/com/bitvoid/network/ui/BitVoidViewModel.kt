@@ -1071,7 +1071,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                         BitVoidAccessMode.RECOVER -> accountAuth.recover(backendUrl, masterPassphrase, newPassword)
                     }
                 }
-                accountAuth.saveSession(result.username, result.token, result.masterPassphrase)
+                accountAuth.saveSession(result)
                 clientRepository.setAccountAuthorizationToken(result.token)
                 result.masterPassphrase?.let { _masterPassphrase.value = it }
                 BitVoidUserPrefs.saveUsername(appContext, result.username)
