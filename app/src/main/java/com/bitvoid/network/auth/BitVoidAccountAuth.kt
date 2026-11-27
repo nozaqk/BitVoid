@@ -93,6 +93,19 @@ class BitVoidAccountAuth(private val context: Context) {
         return refresh(baseUrl, refresh).also(::saveSession)
     }
 
+    /** Revoke the current Server session before local credentials are discarded on logout. */
+    fun revokeSession(baseUrl: String, accessToken: String): Boolean {
+        val request = Request.Builder()
+            .url(baseUrl.trimEnd('/') + "/api/v1/auth/revoke")
+            .post("{}".toRequestBody(jsonType))
+            .header("Accept", "application/json")
+            .header("Authorization", "Bearer $accessToken")
+            .build()
+        client.newCall(request).execute().use { response ->
+            return response.isSuccessful
+        }
+    }
+
     private fun accountPayload(username: String, password: String): JSONObject =
         JSONObject()
             .put("username", username)
@@ -155,7 +168,9 @@ class BitVoidAccountAuth(private val context: Context) {
         token: String,
         master: String?,
         refreshToken: String? = null,
-        deviceId: String? = null
+        deviceId: String? = null,
+        expiresAt: String? = null,
+        refreshExpiresAt: String? = null
     ) {
         val prefs = context.getSharedPreferences("bitvoid_secure_account", Context.MODE_PRIVATE)
         val previousUsername = savedUsername()
@@ -169,6 +184,8 @@ class BitVoidAccountAuth(private val context: Context) {
         if (!master.isNullOrBlank()) editor.putString("master_enc", encrypt(master))
         if (!refreshToken.isNullOrBlank()) editor.putString("refresh_token_enc", encrypt(refreshToken))
         if (!deviceId.isNullOrBlank()) editor.putString("device_id_enc", encrypt(deviceId))
+        if (!expiresAt.isNullOrBlank()) editor.putString("expires_at", expiresAt)
+        if (!refreshExpiresAt.isNullOrBlank()) editor.putString("refresh_expires_at", refreshExpiresAt)
         editor.apply()
     }
 
@@ -177,7 +194,9 @@ class BitVoidAccountAuth(private val context: Context) {
         token = result.token,
         master = result.masterPassphrase,
         refreshToken = result.refreshToken,
-        deviceId = result.deviceId
+        deviceId = result.deviceId,
+        expiresAt = result.expiresAt,
+        refreshExpiresAt = result.refreshExpiresAt
     )
 
     fun savedUsername(): String? =
@@ -191,6 +210,12 @@ class BitVoidAccountAuth(private val context: Context) {
 
     fun savedDeviceId(): String? =
         decrypt(context.getSharedPreferences("bitvoid_secure_account", 0).getString("device_id_enc", null))
+
+    fun savedAccessTokenExpiresAt(): String? =
+        context.getSharedPreferences("bitvoid_secure_account", 0).getString("expires_at", null)
+
+    fun savedRefreshTokenExpiresAt(): String? =
+        context.getSharedPreferences("bitvoid_secure_account", 0).getString("refresh_expires_at", null)
 
     fun savedMasterPassphrase(): String? =
         decrypt(context.getSharedPreferences("bitvoid_secure_account", 0).getString("master_enc", null))
