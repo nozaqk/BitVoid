@@ -158,9 +158,14 @@ class BitVoidAccountAuth(private val context: Context) {
         deviceId: String? = null
     ) {
         val prefs = context.getSharedPreferences("bitvoid_secure_account", Context.MODE_PRIVATE)
+        val previousUsername = savedUsername()
         val editor = prefs.edit()
             .putString("username_enc", encrypt(username))
             .putString("token_enc", encrypt(token))
+        if (previousUsername != null && !previousUsername.equals(username, ignoreCase = true)) {
+            // Never carry one account's recovery secret into another account's local session.
+            editor.remove("master_enc")
+        }
         if (!master.isNullOrBlank()) editor.putString("master_enc", encrypt(master))
         if (!refreshToken.isNullOrBlank()) editor.putString("refresh_token_enc", encrypt(refreshToken))
         if (!deviceId.isNullOrBlank()) editor.putString("device_id_enc", encrypt(deviceId))
