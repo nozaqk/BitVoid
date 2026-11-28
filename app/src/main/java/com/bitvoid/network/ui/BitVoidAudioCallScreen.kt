@@ -73,7 +73,7 @@ fun BitVoidAudioCallScreen(
     }
 
     val statusText = when {
-        incoming -> "Incoming BitVoid audio call"
+        incoming -> "Incoming AirMesh audio call"
         outgoing -> "Ringing…"
         callUiState.callState == BitVoidCallState.JOINING -> "Connecting secure audio…"
         active -> formatCallDuration(elapsedSeconds)

@@ -258,7 +258,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
     init {
         BitVoidNodeStateHolder.appendNodeConnectionLog(
             NodeConnectionEventType.APP,
-            "BitVoid mesh monitor started",
+            "AirMesh mesh monitor started",
             "Automatic same-LAN identity discovery is active."
         )
         BitVoidChannelManager.ensureDefaultChannel()
@@ -533,7 +533,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                     connectedSsid = null,
                     linkedNodeUrls = listOf(normalized),
                     targetPortalUrl = normalized,
-                    statusMessage = "Connected automatically to BitVoid cloud",
+                    statusMessage = "Connected automatically to AirMesh cloud",
                     errorMessage = null
                 )
             }
@@ -1098,7 +1098,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                 clientRepository.fetchKnownUsers(backendUrl)
                 clientRepository.fetchLiveClasses(result.username, backendUrl)
             } catch (error: Exception) {
-                _accountAccessError.value = error.message ?: "Unable to authenticate with BitVoid."
+                _accountAccessError.value = error.message ?: "Unable to authenticate with AirMesh."
             } finally {
                 _isCompletingAccountAccess.value = false
             }
@@ -1107,14 +1107,14 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
 
     fun exportMasterPassphrase() {
         val secret = _masterPassphrase.value ?: return
-        val text = "BitVoid account recovery master passphrase\n\nUser ID: @${_myUsername.value}\nMaster passphrase: $secret\n\nKeep this file private. Anyone with this passphrase can reset your account password.\n"
+        val text = "AirMesh account recovery master passphrase\n\nUser ID: @${_myUsername.value}\nMaster passphrase: $secret\n\nKeep this file private. Anyone with this passphrase can reset your account password.\n"
         val send = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, "BitVoid account recovery key")
+            putExtra(Intent.EXTRA_SUBJECT, "AirMesh account recovery key")
             putExtra(Intent.EXTRA_TEXT, text)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        appContext.startActivity(Intent.createChooser(send, "Save your BitVoid recovery key").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        appContext.startActivity(Intent.createChooser(send, "Save your AirMesh recovery key").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
     fun clearAccountAccessError() {
@@ -1318,7 +1318,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                 ensureLocalGatewayReadyIfNeeded()
                 syncGatewayToLocalIfAvailable()
                 if (!isGatewayOnLocalWifiNode()) {
-                    _extraCallError.value = "Connect to a local BitVoid Wi-Fi node before starting a Live Class."
+                    _extraCallError.value = "Connect to a local AirMesh Wi-Fi node before starting a Live Class."
                     return@launch
                 }
                 val res = clientRepository.startLiveClassSession(
@@ -1353,7 +1353,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
             ensureLocalGatewayReadyIfNeeded()
             syncGatewayToLocalIfAvailable()
             if (!isGatewayOnLocalWifiNode()) {
-                _extraCallError.value = "Join must be on the same BitVoid Wi-Fi node."
+                _extraCallError.value = "Join must be on the same AirMesh Wi-Fi node."
                 return@launch
             }
             val isCreator = liveClass.creatorUsername.equals(_myUsername.value, ignoreCase = true)
@@ -1392,7 +1392,7 @@ class BitVoidViewModel(application: Application) : AndroidViewModel(application)
                 ensureLocalGatewayReadyIfNeeded()
                 syncGatewayToLocalIfAvailable()
                 if (!isGatewayOnLocalWifiNode()) {
-                    _extraCallError.value = "Access allowed only on the same BitVoid Wi-Fi node."
+                    _extraCallError.value = "Access allowed only on the same AirMesh Wi-Fi node."
                     return@launch
                 }
                 val res = clientRepository.joinLiveClassByCode(

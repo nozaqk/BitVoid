@@ -21,7 +21,7 @@ data class BitVoidGatewayInfo(
     companion object {
         fun parse(json: JSONObject): BitVoidGatewayInfo {
             require(json.optString("service") == "bitvoid") {
-                "The endpoint is not a BitVoid gateway."
+                "The endpoint is not a AirMesh gateway."
             }
             val protocol = json.optJSONObject("protocol")
                 ?: throw IllegalArgumentException("Gateway protocol metadata is missing.")
@@ -30,7 +30,7 @@ data class BitVoidGatewayInfo(
             }
             val major = protocol.optInt("major", -1)
             require(major == 1) {
-                "Unsupported BitVoid Gateway API major version: $major"
+                "Unsupported AirMesh Gateway API major version: $major"
             }
             val gatewayId = json.optString("gatewayId").trim()
             require(gatewayId.matches(Regex("[A-Za-z0-9._:-]{1,128}"))) {
@@ -47,7 +47,7 @@ data class BitVoidGatewayInfo(
             val limits = json.optJSONObject("limits")
             return BitVoidGatewayInfo(
                 gatewayId = gatewayId,
-                displayName = json.optString("displayName", "BitVoid Gateway"),
+                displayName = json.optString("displayName", "AirMesh Gateway"),
                 hardwareFamily = hardware.optString("family", "unknown"),
                 hardwareModel = hardware.optString("model", "unknown"),
                 protocolMajor = major,

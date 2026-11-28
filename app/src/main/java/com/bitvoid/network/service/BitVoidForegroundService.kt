@@ -193,7 +193,7 @@ class BitVoidForegroundService : Service() {
                 // Active WebSocket subscriptions still need to be rehydrated by the repository.
                 isMessageMonitoringActive = true
                 isNodeForegroundActive = true
-                if (!promoteToForeground("Connecting BitVoid to the current local Wi-Fi...")) {
+                if (!promoteToForeground("Connecting AirMesh to the current local Wi-Fi...")) {
                     isNodeForegroundActive = false
                     stopSelf()
                     return START_NOT_STICKY
@@ -310,7 +310,7 @@ class BitVoidForegroundService : Service() {
         }
         startUptimeTicker()
         probeAssignedGatewayIp()
-        updateNotification("BitVoid local API online: ${preferredPortalUrl(resolvedIp, friendlyPort)}")
+        updateNotification("AirMesh local API online: ${preferredPortalUrl(resolvedIp, friendlyPort)}")
     }
 
     private fun ensureHttpServerRunning(): Boolean {
@@ -489,7 +489,7 @@ class BitVoidForegroundService : Service() {
                         )
                     }
                     updateNotification(
-                        "BitVoid local API · ${preferredPortalUrl(resolved, friendlyPort)}"
+                        "AirMesh local API · ${preferredPortalUrl(resolved, friendlyPort)}"
                     )
                 }
             }
@@ -662,7 +662,7 @@ class BitVoidForegroundService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_bitvoid_notify)
             .setContentTitle(
-                if (isNodeForegroundActive) "BitVoid Gateway Active" else "BitVoid Messages Active"
+                if (isNodeForegroundActive) "AirMesh Gateway Active" else "AirMesh Messages Active"
             )
             .setContentText(contentText)
             .setStyle(NotificationCompat.BigTextStyle().bigText(contentText))

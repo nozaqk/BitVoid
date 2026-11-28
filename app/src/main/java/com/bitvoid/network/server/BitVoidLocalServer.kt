@@ -2376,7 +2376,7 @@ class BitVoidLocalServer(
 
     private fun applyAnonymizationHeaders(response: Response, ephemeralToken: String) {
         response.setGzipEncoding(false)
-        response.addHeader("Server", "BitVoid")
+        response.addHeader("Server", "AirMesh")
         response.addHeader("Cache-Control", "no-store, no-cache, must-revalidate, private")
         response.addHeader("Pragma", "no-cache")
         response.addHeader("Expires", "0")

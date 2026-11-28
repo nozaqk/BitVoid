@@ -112,8 +112,8 @@ class BitVoidLocalDiscovery(context: Context) {
             serverVersion = identity?.serverVersion,
             tlsFingerprint256 = identity?.tlsFingerprint256,
             status = when {
-                selected != null -> "BitVoid Server found · API identity available"
-                else -> "Wi-Fi connected · no compatible BitVoid Server found"
+                selected != null -> "AirMesh Server found · API identity available"
+                else -> "Wi-Fi connected · no compatible AirMesh Server found"
             }
         )
         selected

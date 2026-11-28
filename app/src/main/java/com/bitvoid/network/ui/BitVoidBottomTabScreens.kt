@@ -219,7 +219,7 @@ fun SettingsUserIdentityCard(
     if (confirmLogout) {
         AlertDialog(
             onDismissRequest = { confirmLogout = false },
-            title = { Text("Log out of BitVoid?") },
+            title = { Text("Log out of AirMesh?") },
             text = {
                 Text(
                     "This removes the saved session and recovery passphrase from this device. " +

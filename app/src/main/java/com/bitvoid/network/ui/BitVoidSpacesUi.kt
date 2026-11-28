@@ -588,7 +588,7 @@ fun BitVoidSpaceInfoScreen(
                                                 type = "text/plain"
                                                 putExtra(
                                                     Intent.EXTRA_TEXT,
-                                                    "Join ${space?.name ?: session.name} on BitVoid: ${invite.inviteLink}\nCode: ${invite.code}"
+                                                    "Join ${space?.name ?: session.name} on AirMesh: ${invite.inviteLink}\nCode: ${invite.code}"
                                                 )
                                             }
                                             context.startActivity(Intent.createChooser(send, "Share channel invitation"))

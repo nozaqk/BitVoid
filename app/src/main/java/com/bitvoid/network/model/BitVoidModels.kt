@@ -163,6 +163,6 @@ data class ClientState(
     val coordinatorUrls: List<String> = emptyList(),
     val meshNodeCount: Int = 0,
     val targetPortalUrl: String = "http://${BitVoidNetworkConfig.LOCAL_GATEWAY_HOSTNAME}",
-    val statusMessage: String = "Standby — ready to scan or connect to a BitVoid node",
+    val statusMessage: String = "Standby — ready to scan or connect to a AirMesh node",
     val errorMessage: String? = null,
 )

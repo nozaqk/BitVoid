@@ -372,7 +372,7 @@ class BitVoidNodeClient(
         ensureReady()
         if (path.startsWith("http://") || path.startsWith("https://")) {
             val uri = URI(path)
-            require(isAllowedNodeHost(uri.host.orEmpty())) { "Only local BitVoid node URLs are allowed" }
+            require(isAllowedNodeHost(uri.host.orEmpty())) { "Only local AirMesh node URLs are allowed" }
             return path
         }
         val cleanPath = if (path.startsWith('/')) path else "/$path"
@@ -381,13 +381,13 @@ class BitVoidNodeClient(
 
     private fun httpBaseUrl(): String {
         val endpoint = connectionManager.state.value.endpoint
-            ?: throw IllegalStateException("BitVoid ESP node is not connected")
+            ?: throw IllegalStateException("AirMesh ESP node is not connected")
         return endpoint.portalUrl
     }
 
     private fun webSocketBaseUrl(): String {
         val endpoint = connectionManager.state.value.endpoint
-            ?: throw IllegalStateException("BitVoid ESP node is not connected")
+            ?: throw IllegalStateException("AirMesh ESP node is not connected")
         return endpoint.webSocketBaseUrl
     }
 
@@ -435,7 +435,7 @@ class BitVoidNodeClient(
         private val manager: BitVoidConnectionManager
     ) : SocketFactory() {
         private fun delegate(): SocketFactory = manager.currentNetwork()?.socketFactory
-            ?: throw IOException("No bound BitVoid ESP Wi-Fi network")
+            ?: throw IOException("No bound AirMesh ESP Wi-Fi network")
 
         override fun createSocket(): Socket = delegate().createSocket()
         override fun createSocket(host: String, port: Int): Socket = delegate().createSocket(host, port)

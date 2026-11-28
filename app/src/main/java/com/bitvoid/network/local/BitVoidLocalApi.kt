@@ -48,7 +48,7 @@ class BitVoidLocalApi {
             ?.removeSuffix("/api/v1")
             ?.trimEnd('/')
             ?.takeIf(BitVoidBackendPrefs::isAllowedLocalServer)
-            ?: throw IllegalArgumentException("Only a private local BitVoid server is allowed.")
+            ?: throw IllegalArgumentException("Only a private local AirMesh server is allowed.")
         baseUrl = normalized
         deviceToken = token.orEmpty()
     }
