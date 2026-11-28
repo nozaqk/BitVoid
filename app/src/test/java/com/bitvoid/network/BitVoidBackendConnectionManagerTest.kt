@@ -80,7 +80,7 @@ class BitVoidBackendConnectionManagerTest {
 
         val config = BitVoidBackendPrefs.load(context)
 
-        assertEquals("http://bitvoid.local:8787", config.localServerUrl)
+        assertEquals("http://bitvoid-server.local:8787", config.localServerUrl)
         assertEquals("", config.cloudServerUrl)
         assertFalse(prefs.contains("campus_server_url"))
         assertFalse(prefs.contains("cloud_server_url"))
