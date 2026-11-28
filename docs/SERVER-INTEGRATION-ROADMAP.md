@@ -1,15 +1,15 @@
-# BitVoid Android — Phase 1 Server Integration Roadmap
+# AirMesh Android — Phase 1 Server Integration Roadmap
 
 **Audit date:** 2026-11-27  
 **Audited Android main commit:** [`7f2aa122166991bef1d4ae69be4456cb9abc0ced`](https://github.com/nozaqk/BitVoid/commit/7f2aa122166991bef1d4ae69be4456cb9abc0ced)  
 **Change type:** Documentation only. No Android application source or workflow was changed.
 
-The full cross-repository architecture and Server roadmap is maintained in [BitVoid Server — Phase 1 Architecture Audit](https://github.com/nozaqk/Bitvoid-Server/blob/docs/phase1-architecture-audit/docs/PHASE-1-ARCHITECTURE-AUDIT.md).
+The full cross-repository architecture and Server roadmap is maintained in [AirMesh Server — Phase 1 Architecture Audit](https://github.com/nozaqk/Bitvoid-Server/blob/docs/phase1-architecture-audit/docs/PHASE-1-ARCHITECTURE-AUDIT.md).
 
 ## 1. Approved client boundary
 
 - Android is the native end-user communication app.
-- The installed BitVoid Server desktop application owns the background Server service and all server-wide administration.
+- The installed AirMesh Server desktop application owns the background Server service and all server-wide administration.
 - Android must not administer Nodes, service lifecycle, Server settings, backups, network interfaces, or Server updates.
 - The app connects to a self-hosted Server over a local hotspot/router LAN, or to a centrally hosted Server over an explicitly trusted VPN/private link.
 - Local communication must not require Internet access.

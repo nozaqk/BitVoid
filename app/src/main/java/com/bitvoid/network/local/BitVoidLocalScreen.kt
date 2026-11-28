@@ -150,7 +150,7 @@ private fun LocalConnectionScreen(
             eventsConnected = eventsConnected
         )
         Text(
-            "When Wi-Fi and the BitVoid Server are connected, the app automatically continues to local access authorization. Real-time events connect after the Server approves this device.",
+            "When Wi-Fi and the AirMesh Server are connected, the app automatically continues to local access authorization. Real-time events connect after the Server approves this device.",
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall,
@@ -280,7 +280,7 @@ private fun LocalMessagingScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text("BitVoid", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text("AirMesh", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     Text("@${profile.username} · local Wi-Fi", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 IconButton(onClick = onRefresh) {

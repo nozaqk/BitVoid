@@ -287,7 +287,7 @@ fun BitVoidPrivateChatScreen(
                         peerUsername = peer,
                         subtitle = conversation?.lastMessagePreview
                             ?.let { "Online · ${conversation.messageCount} msgs · $it" }
-                            ?: "Online on this BitVoid node · Tap to chat or call",
+                            ?: "Online on this AirMesh node · Tap to chat or call",
                         onClick = { onOpenDirectChat(peer) },
                         testTag = "pchat_visible_user_$peer"
                     )
@@ -1816,7 +1816,7 @@ private fun WhatsAppDirectChatSpace(
         } else {
             android.widget.Toast.makeText(
                 context,
-                "Microphone access is required for BitVoid audio calls. Allow it in Android app permissions, then try again.",
+                "Microphone access is required for AirMesh audio calls. Allow it in Android app permissions, then try again.",
                 android.widget.Toast.LENGTH_LONG
             ).show()
         }
@@ -2862,7 +2862,7 @@ private fun downloadAttachment(
     try {
         val request = DownloadManager.Request(Uri.parse(url)).apply {
             setTitle(safeName)
-            setDescription("Downloading BitVoid attachment")
+            setDescription("Downloading AirMesh attachment")
             setMimeType(mimeType.ifBlank { "application/octet-stream" })
             setNotificationVisibility(
                 DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED

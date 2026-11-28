@@ -312,10 +312,10 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
                 host.equals(configuredCloudHost, ignoreCase = true) &&
                 original.url.isHttps
             if (!BitVoidClientManager.isPrivateLocalHost(host) && !allowedRemote) {
-                throw IOException("Blocked unconfigured backend host '$host' by BitVoid firewall.")
+                throw IOException("Blocked unconfigured backend host '$host' by AirMesh firewall.")
             }
             val sanitizedBuilder = original.newBuilder()
-                .header("User-Agent", "BitVoid/1.0 (Isolated)")
+                .header("User-Agent", "AirMesh/1.0 (Isolated)")
                 .header("Cache-Control", "no-store")
                 .removeHeader("Referer")
                 .removeHeader("Cookie")
@@ -819,7 +819,7 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
                 )
                 _channelMessages.value = cached
                 _wsStatus.value = ClientWsStatus.DISCONNECTED
-                _channelJoinError.value = "Offline · messages are queued until BitVoid reconnects."
+                _channelJoinError.value = "Offline · messages are queued until AirMesh reconnects."
             } else {
                 _channelJoinError.value = err.message ?: "Failed to unlock channel"
             }
@@ -1637,12 +1637,12 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
                     if (!resp.isSuccessful) {
                         val detail = runCatching { JSONObject(responseBody).optString("detail") }.getOrNull()
                         throw IllegalStateException(detail?.takeIf { it.isNotBlank() }
-                            ?: "Unable to access this BitVoid server (${resp.code}).")
+                            ?: "Unable to access this AirMesh server (${resp.code}).")
                     }
                     val json = JSONObject(responseBody)
                     val issuedIdentityToken = json.optString("identityToken")
                     if (issuedIdentityToken.isBlank()) {
-                        throw IllegalStateException("The BitVoid server did not issue an identity session.")
+                        throw IllegalStateException("The AirMesh server did not issue an identity session.")
                     }
                     identityToken = issuedIdentityToken
                     identityUsername = json.optString("username", clean).trim().removePrefix("@")
@@ -1800,7 +1800,7 @@ class BitVoidClientRepository(private val appContext: Context? = null) {
                 )
                 _directMessages.value = cached
                 _directWsStatus.value = ClientWsStatus.DISCONNECTED
-                _directChatError.value = "Offline · messages are queued until BitVoid reconnects."
+                _directChatError.value = "Offline · messages are queued until AirMesh reconnects."
             } else {
                 _directChatError.value = err.message ?: "Unable to start direct chat"
             }

@@ -211,7 +211,7 @@ object BitVoidDirectChatManager {
         val activeTarget = registeredUsers[targetKey]
             ?: return Result.failure(
                 IllegalStateException(
-                    "User @$targetClean is not available on this BitVoid node or local Wi-Fi."
+                    "User @$targetClean is not available on this AirMesh node or local Wi-Fi."
                 )
             )
 

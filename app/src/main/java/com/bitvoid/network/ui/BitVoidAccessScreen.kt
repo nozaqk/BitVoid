@@ -113,9 +113,9 @@ fun BitVoidConnectionGateScreen(
             Spacer(Modifier.height(8.dp))
             Text(
                 text = if (reconnecting) {
-                    "Checking for a BitVoid server on the connected local Wi-Fi, then trying the cloud backend."
+                    "Checking for a AirMesh server on the connected local Wi-Fi, then trying the cloud backend."
                 } else {
-                    "Connect to the local BitVoid Wi-Fi or restore internet access. The app will retry automatically."
+                    "Connect to the local AirMesh Wi-Fi or restore internet access. The app will retry automatically."
                 },
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -187,7 +187,7 @@ fun BitVoidAccountAccessScreen(
                         contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(17.dp)
                     )
                     Text(
-                        if (backendState.type == BitVoidBackendType.CAMPUS) "Connected through local Wi-Fi" else "Connected to BitVoid Cloud",
+                        if (backendState.type == BitVoidBackendType.CAMPUS) "Connected through local Wi-Fi" else "Connected to AirMesh Cloud",
                         style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary
                     )
                 }
@@ -204,8 +204,8 @@ fun BitVoidAccountAccessScreen(
                 }
                 Text(
                     when (mode) {
-                        BitVoidAccessMode.LOGIN -> "Log in using your BitVoid username and password."
-                        BitVoidAccessMode.CREATE_ACCOUNT -> "Create your BitVoid account. A recovery master passphrase will be generated once."
+                        BitVoidAccessMode.LOGIN -> "Log in using your AirMesh username and password."
+                        BitVoidAccessMode.CREATE_ACCOUNT -> "Create your AirMesh account. A recovery master passphrase will be generated once."
                         BitVoidAccessMode.RECOVER -> "Enter your 44-character hexadecimal master passphrase to recover your account and choose a new password. Your username is not required."
                     },
                     style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center
@@ -267,7 +267,7 @@ fun BitVoidAccountAccessScreen(
                         Text("BACK TO LOGIN")
                     }
                 }
-                Text("Keep your master passphrase private. BitVoid cannot display it again after account creation.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+                Text("Keep your master passphrase private. AirMesh cannot display it again after account creation.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
             }
         }
     }

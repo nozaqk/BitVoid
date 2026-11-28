@@ -39,7 +39,7 @@ data class BitVoidBackendState(
     val type: BitVoidBackendType = BitVoidBackendType.OFFLINE,
     val phase: BitVoidBackendPhase = BitVoidBackendPhase.DISCOVERING,
     val baseUrl: String? = null,
-    val statusLabel: String = "Finding the local BitVoid Server…",
+    val statusLabel: String = "Finding the local AirMesh Server…",
     val retryAttempt: Int = 0,
     val lastCheckedAtMs: Long = 0L
 ) {
@@ -161,7 +161,7 @@ class BitVoidBackendConnectionManager(context: Context) {
                 _state.value = _state.value.copy(
                     phase = if (firstPass) BitVoidBackendPhase.DISCOVERING
                     else BitVoidBackendPhase.RECONNECTING,
-                    statusLabel = if (firstPass) "Discovering the local BitVoid Server…"
+                    statusLabel = if (firstPass) "Discovering the local AirMesh Server…"
                     else "Reconnecting to the local Server…",
                     retryAttempt = attempt
                 )

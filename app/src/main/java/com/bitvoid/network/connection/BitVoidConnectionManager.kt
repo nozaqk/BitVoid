@@ -311,7 +311,7 @@ class BitVoidConnectionManager(
             wifiSsid = ssid ?: NODE_WIFI_SSID,
             isExpectedNodeWifi = true,
             gatewayAddress = gateway?.hostAddress ?: NODE_GATEWAY,
-            statusMessage = "Binding all BitVoid traffic to the isolated ESP Wi-Fi…"
+            statusMessage = "Binding all AirMesh traffic to the isolated ESP Wi-Fi…"
         )
 
         val bound = connectivityManager.bindProcessToNetwork(network)
@@ -371,9 +371,9 @@ class BitVoidConnectionManager(
             _state.value.copy(
                 phase = BitVoidConnectionPhase.ERROR,
                 endpoint = null,
-                statusMessage = "$NODE_WIFI_SSID is connected, but no verified BitVoid identity answered.",
+                statusMessage = "$NODE_WIFI_SSID is connected, but no verified AirMesh identity answered.",
                 errorMessage = if (endpoint == null) {
-                    "No mDNS A record, DNS-SD HTTP service, or BitVoid gateway API response was received."
+                    "No mDNS A record, DNS-SD HTTP service, or AirMesh gateway API response was received."
                 } else {
                     "The discovered endpoint did not provide a compatible X-BitVoid-Node identity."
                 }

@@ -264,7 +264,7 @@ class BitVoidServerClient(
 
     private fun resolveUrl(path: String): String {
         require(!path.startsWith("http://") && !path.startsWith("https://")) {
-            "Only relative BitVoid Server API paths are accepted"
+            "Only relative AirMesh Server API paths are accepted"
         }
         val normalized = if (path.startsWith('/')) path else "/$path"
         require(normalized.startsWith("/api/v1/")) {

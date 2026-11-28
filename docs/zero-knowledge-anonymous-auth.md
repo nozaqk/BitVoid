@@ -2,11 +2,11 @@
 
 ## Status
 
-This document defines the proposed BitVoid anonymous-account authentication design. It is an architecture and security specification, not a claim that the current Android client or cloud service already implements the protocol.
+This document defines the proposed AirMesh anonymous-account authentication design. It is an architecture and security specification, not a claim that the current Android client or cloud service already implements the protocol.
 
-The design collects no email address, phone number, legal name, or other real-world identity attribute. A user is represented by a unique BitVoid username and one or more cryptographic public keys.
+The design collects no email address, phone number, legal name, or other real-world identity attribute. A user is represented by a unique AirMesh username and one or more cryptographic public keys.
 
-> **Terminology note:** the challenge-response flow below keeps the master passphrase off the server and proves possession of a private key. That is not, by itself, a formal zero-knowledge proof protocol. BitVoid should describe it as password-private, anonymous public-key authentication unless a reviewed PAKE or zero-knowledge proof system is added.
+> **Terminology note:** the challenge-response flow below keeps the master passphrase off the server and proves possession of a private key. That is not, by itself, a formal zero-knowledge proof protocol. AirMesh should describe it as password-private, anonymous public-key authentication unless a reviewed PAKE or zero-knowledge proof system is added.
 
 ## Security goals
 
@@ -48,7 +48,7 @@ The user chooses:
 1. A unique username.
 2. A strong master passphrase.
 
-BitVoid does not request an email address, phone number, legal name, or social-login identity.
+AirMesh does not request an email address, phone number, legal name, or social-login identity.
 
 The username is normalized before registration. The server enforces uniqueness, but a username must not be treated as proof of a real-world identity.
 
@@ -91,7 +91,7 @@ The server does **not** store the master passphrase, account seed, private key, 
 
 ### 1.4 Password-hash clarification
 
-A conceptual version of this design may derive a salted password hash locally and send it with the public key. The normative BitVoid profile should not do that when public-key challenge authentication is sufficient. A server-side password verifier creates an additional offline-guessing target after a database breach and is unnecessary for proof of private-key possession.
+A conceptual version of this design may derive a salted password hash locally and send it with the public key. The normative AirMesh profile should not do that when public-key challenge authentication is sufficient. A server-side password verifier creates an additional offline-guessing target after a database breach and is unnecessary for proof of private-key possession.
 
 If a local quick-check verifier is used to reject an incorrect passphrase before decrypting the account seed, it remains on the device and is domain-separated from every encryption or signing key.
 
@@ -105,7 +105,7 @@ The app displays the phrase once and requires the user to confirm selected words
 
 ### 2.2 Self-custody rules
 
-The user is responsible for storing the recovery phrase offline. BitVoid support and server operators cannot:
+The user is responsible for storing the recovery phrase offline. AirMesh support and server operators cannot:
 
 - reveal the phrase;
 - reset the master passphrase;
@@ -240,6 +240,6 @@ Username availability, IP address, request timing, session metadata, and public-
 
 ## 8. Implementation and migration status
 
-The current BitVoid Android app uses gateway-issued username identity tokens for local servers, while the deployed cloud service currently exposes a separate email/password authentication API. Neither path implements this document yet.
+The current AirMesh Android app uses gateway-issued username identity tokens for local servers, while the deployed cloud service currently exposes a separate email/password authentication API. Neither path implements this document yet.
 
 Adopting this protocol requires coordinated Android and cloud changes, including challenge endpoints, public-key account records, encrypted local seed storage, recovery UI, session-token handling, migration rules, and independent cryptographic review. Existing accounts must not be silently converted or have credentials discarded.

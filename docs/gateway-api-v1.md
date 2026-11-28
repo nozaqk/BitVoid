@@ -1,6 +1,6 @@
-# BitVoid Universal Gateway API v1
+# AirMesh Universal Gateway API v1
 
-This document is the hardware boundary for every BitVoid gateway. Android talks only to this
+This document is the hardware boundary for every AirMesh gateway. Android talks only to this
 versioned HTTP/WebSocket contract. ESP-12E, ESP32, Raspberry Pi, and future boards may use
 different internal implementations, but they must expose the same routes and JSON semantics.
 
@@ -25,7 +25,7 @@ different internal implementations, but they must expose the same routes and JSO
 {
   "service": "bitvoid",
   "gatewayId": "bv-unique-device-id",
-  "displayName": "BitVoid Gateway",
+  "displayName": "AirMesh Gateway",
   "hardware": { "family": "esp8266", "model": "esp-12e" },
   "protocol": { "name": "bitvoid-gateway", "major": 1, "minor": 0 },
   "identity": { "mode": "local-identity-v1", "verified": true },
@@ -79,7 +79,7 @@ treated as a development/discovery gateway, not a trusted production server.
 Optional WebSocket endpoint: `/api/v1/events`. Messages are JSON envelopes with
 `type`, `eventId`, `timestamp`, and `data`. Feature routes are capability-gated. Do not
 advertise media, storage, messaging, rooms, or WebRTC unless the board implements the corresponding
-BitVoid service end-to-end.
+AirMesh service end-to-end.
 
 ## Hardware portability guarantee
 

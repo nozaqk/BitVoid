@@ -511,7 +511,7 @@ private fun EmptyConversationState(
         Spacer(Modifier.height(6.dp))
         Text(
             text = if (isOffline) {
-                "BitVoid is available offline. Pull down to reconnect when campus or internet access returns."
+                "AirMesh is available offline. Pull down to reconnect when campus or internet access returns."
             } else {
                 "Tap the new-message button to start chatting. Server discovery runs automatically."
             },

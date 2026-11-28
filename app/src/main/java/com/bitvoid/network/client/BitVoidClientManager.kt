@@ -196,7 +196,7 @@ class BitVoidClientManager(private val context: Context) {
                         caps.contains("WPA") -> "WPA"
                         else -> "OPEN"
                     },
-                    isBitVoidCandidate = ssid.contains("BitVoid", ignoreCase = true)
+                    isBitVoidCandidate = (ssid.contains("AirMesh", ignoreCase = true) || ssid.contains("BitVoid", ignoreCase = true))
                 )
             }
             .sortedWith(
@@ -216,7 +216,7 @@ class BitVoidClientManager(private val context: Context) {
                     signalDbm = currentLink.signalDbm,
                     frequencyMhz = currentLink.frequencyMhz,
                     securityLabel = "CONNECTED",
-                    isBitVoidCandidate = currentSsid.contains("BitVoid", ignoreCase = true)
+                    isBitVoidCandidate = (currentSsid.contains("AirMesh", ignoreCase = true) || currentSsid.contains("BitVoid", ignoreCase = true))
                 )
             )
         }
@@ -278,7 +278,7 @@ class BitVoidClientManager(private val context: Context) {
                     linkedNodeUrls = emptyList(),
                     coordinatorUrls = emptyList(),
                     meshNodeCount = 0,
-                    errorMessage = "Connect the phone to Wi-Fi first. BitVoid shares the connection Android already joined."
+                    errorMessage = "Connect the phone to Wi-Fi first. AirMesh shares the connection Android already joined."
                 )
             }
             return ClientNodeConnectResult.NO_WIFI
@@ -312,7 +312,7 @@ class BitVoidClientManager(private val context: Context) {
         log(
             NodeConnectionEventType.DISCOVERY,
             "Mesh discovery started",
-            "Scanning $activeSsid (${link.localIpv4}) for BitVoid identities."
+            "Scanning $activeSsid (${link.localIpv4}) for AirMesh identities."
         )
         BitVoidNodeStateHolder.updateClientState {
             it.copy(
@@ -322,7 +322,7 @@ class BitVoidClientManager(private val context: Context) {
                 linkedNodeUrls = emptyList(),
                 coordinatorUrls = emptyList(),
                 meshNodeCount = 0,
-                statusMessage = "Finding every BitVoid node on $activeSsid…",
+                statusMessage = "Finding every AirMesh node on $activeSsid…",
                 errorMessage = null
             )
         }
@@ -346,9 +346,9 @@ class BitVoidClientManager(private val context: Context) {
                     linkedNodeUrls = emptyList(),
                     coordinatorUrls = discovery.coordinatorUrls,
                     meshNodeCount = discovery.nodeCount,
-                    statusMessage = "Preparing a shared BitVoid gateway on $activeSsid…",
+                    statusMessage = "Preparing a shared AirMesh gateway on $activeSsid…",
                     errorMessage = if (reportMissingNode) {
-                        "Unable to start or find a BitVoid app gateway on $activeSsid."
+                        "Unable to start or find a AirMesh app gateway on $activeSsid."
                     } else {
                         null
                     }
@@ -402,7 +402,7 @@ class BitVoidClientManager(private val context: Context) {
                     linkedNodeUrls = emptyList(),
                     coordinatorUrls = discovery.coordinatorUrls,
                     meshNodeCount = discovery.nodeCount,
-                    errorMessage = "No BitVoid gateway answered at $normalized on the current Wi-Fi."
+                    errorMessage = "No AirMesh gateway answered at $normalized on the current Wi-Fi."
                 )
             }
             return false
@@ -479,7 +479,7 @@ class BitVoidClientManager(private val context: Context) {
                 log(
                     NodeConnectionEventType.RETRY,
                     "Shared gateway unavailable",
-                    "No BitVoid app gateway currently answers on ${link.ssid ?: "the current Wi-Fi"}; automatic recovery is active."
+                    "No AirMesh app gateway currently answers on ${link.ssid ?: "the current Wi-Fi"}; automatic recovery is active."
                 )
             }
             // Keep all BitVoid probes pinned to Wi-Fi so Android cannot leak local node traffic to
@@ -494,7 +494,7 @@ class BitVoidClientManager(private val context: Context) {
                     coordinatorUrls = discovery.coordinatorUrls,
                     meshNodeCount = discovery.nodeCount,
                     statusMessage = if (discovery.coordinatorUrls.isEmpty()) {
-                        "No BitVoid server found on ${link.ssid ?: "the current Wi-Fi"}. Cloud fallback will be checked."
+                        "No AirMesh server found on ${link.ssid ?: "the current Wi-Fi"}. Cloud fallback will be checked."
                     } else {
                         "${discovery.coordinatorUrls.size} coordinator(s) found; waiting for an app gateway."
                     },
@@ -522,7 +522,7 @@ class BitVoidClientManager(private val context: Context) {
         if (meshChanged) {
             log(
                 NodeConnectionEventType.IDENTITY,
-                "BitVoid mesh identities verified",
+                "AirMesh mesh identities verified",
                 "${discovery.nodeCount} node(s) · ${discovery.coordinatorUrls.size} coordinator(s) · ${orderedUrls.size} app gateway(s)."
             )
             lastMeshSignature = signature
@@ -553,7 +553,7 @@ class BitVoidClientManager(private val context: Context) {
                 meshNodeCount = discovery.nodeCount,
                 targetPortalUrl = sharedGatewayUrl,
                 statusMessage = if (silent) {
-                    "${discovery.nodeCount} BitVoid mesh node(s) sharing $activeSsid."
+                    "${discovery.nodeCount} AirMesh mesh node(s) sharing $activeSsid."
                 } else {
                     "${discovery.nodeCount} node(s) linked through $activeSsid · shared gateway $sharedGatewayUrl"
                 },
@@ -793,7 +793,7 @@ class BitVoidClientManager(private val context: Context) {
         log(
             NodeConnectionEventType.DISCONNECTED,
             "Mesh link cleared",
-            "BitVoid routing was released; Android remains in control of Wi-Fi."
+            "AirMesh routing was released; Android remains in control of Wi-Fi."
         )
         connectivityManager.bindProcessToNetwork(null)
         BitVoidNodeStateHolder.updateClientState {
@@ -884,7 +884,7 @@ class BitVoidClientManager(private val context: Context) {
     }
 
     companion object {
-        private const val SANITIZED_USER_AGENT = "BitVoid/1.0 (Isolated)"
+        private const val SANITIZED_USER_AGENT = "AirMesh/1.0 (Isolated)"
         private const val DISCOVERY_BATCH_SIZE = 48
         private const val DISCOVERY_CONNECT_TIMEOUT_MS = 350
         private const val DISCOVERY_READ_TIMEOUT_MS = 450
